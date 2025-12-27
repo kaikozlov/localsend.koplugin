@@ -3,10 +3,12 @@ package session
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -64,6 +66,30 @@ func (sess *RecvSession) Start() {
 	sess.started.Store(true)
 }
 
+// findUniquePath returns a unique file path by appending a counter if the file already exists.
+// For example: "file.txt" -> "file (1).txt" -> "file (2).txt"
+func findUniquePath(dir, filename string) string {
+	path := filepath.Join(dir, filename)
+
+	// If file doesn't exist, use the original name
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return path
+	}
+
+	// Split filename into name and extension
+	ext := filepath.Ext(filename)
+	name := strings.TrimSuffix(filename, ext)
+
+	// Try incrementing counter until we find a unique name
+	for i := 1; ; i++ {
+		newFilename := fmt.Sprintf("%s (%d)%s", name, i, ext)
+		path = filepath.Join(dir, newFilename)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return path
+		}
+	}
+}
+
 func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string, fileData io.Reader) error {
 	if sess.id == "" || fileId == "" || token == "" {
 		return lserrors.ErrInvalidBody
@@ -85,7 +111,7 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 	}
 
 	// write the file data to disk while calculating checksum simultaneously
-	saveAs := filepath.Join(saveToDir, expectedMeta.Filename)
+	saveAs := findUniquePath(saveToDir, expectedMeta.Filename)
 	hasher := sha256.New()
 	file, err := os.Create(saveAs)
 	if err != nil {
@@ -108,7 +134,7 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 		}
 	}
 
-	slog.Info("Recv file", "file", expectedMeta.Filename, "session", sess.id)
+	slog.Info("Recv file", "file", saveAs, "session", sess.id)
 
 	// remove finished file
 	atomic.AddInt64(&sess.filesCount, -1)
