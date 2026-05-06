@@ -337,10 +337,18 @@ function M.mock_settings()
         isTrue = function(self, key) return M.state.settings[key] == true end,
         nilOrTrue = function(self, key) return M.state.settings[key] ~= false end,
         flipNilOrTrue = function(self, key)
-            M.state.settings[key] = not self:nilOrTrue(key)
+            if M.state.settings[key] == false then
+                M.state.settings[key] = nil
+            else
+                M.state.settings[key] = false
+            end
         end,
         flipNilOrFalse = function(self, key)
-            M.state.settings[key] = not self:isTrue(key)
+            if M.state.settings[key] == true then
+                M.state.settings[key] = nil
+            else
+                M.state.settings[key] = true
+            end
         end,
         _settings = M.state.settings,
         _reset = function()
