@@ -318,7 +318,9 @@ local function simple_json_encode(t)
     return "{" .. table.concat(parts, ",") .. "}"
 end
 
--- Mock json
+-- Mock json (opt-in only)
+-- By default, the real json module from KOReader (LuaJSON) is used.
+-- Call mock_json() only when you need custom encode/decode behavior.
 function M.mock_json(opts)
     opts = opts or {}
     package.loaded["json"] = {
@@ -510,7 +512,11 @@ function M.setup_complete(opts)
     M.mock_logger(opts.capture_logs)
     M.mock_util(opts.util)
     M.mock_gettext()
-    M.mock_json(opts.json)
+    -- Load real json module (LuaJSON) — specs can override package.loaded["json"] if needed
+    if not package.loaded["json"] then
+        package.loaded["json"] = require("json")
+    end
+    if opts.json then M.mock_json(opts.json) end
     M.mock_settings()
     M.mock_dofile(opts.version)
     M.mock_pluginshare()
