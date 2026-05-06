@@ -61,7 +61,7 @@ if [ -n "$DEBUG_PRINTS" ]; then
     echo "$DEBUG_PRINTS"
 fi
 
-TODOS=$(git diff --cached | grep -E '^\+.*\b(TODO|FIXME|XXX)\b' || true)
+TODOS=$(git diff --cached -- '*.go' '*.lua' | grep -E '^\+.*\b(TODO|FIXME|XXX)\b' || true)
 if [ -n "$TODOS" ]; then
     echo -e "${YELLOW}⚠ New TODO/FIXME comments found:${NC}"
     echo "$TODOS"
