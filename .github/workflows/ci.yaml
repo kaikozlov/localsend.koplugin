@@ -31,14 +31,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Lua and Busted
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y lua5.3 liblua5.3-dev luarocks
-          sudo luarocks install busted
+      - name: Pull koplugin-dev image
+        run: docker pull ghcr.io/kaikozlov/koplugin-dev:v2026.03_2
 
       - name: Run Lua tests
-        working-directory: lua
         run: |
-          export LUA_PATH="./?.lua;./?/init.lua;$LUA_PATH"
-          busted spec/
+          docker run --rm \
+            -v "$PWD":/opt/plugin \
+            -e PLUGIN_NAME=localsend \
+            ghcr.io/kaikozlov/koplugin-dev:v2026.03_2 \
+            busted-koreader --verbose \
+              --helper=/opt/koplugin-dev/commonrequire.lua \
+              /opt/plugin/lua/spec/

@@ -10,13 +10,16 @@
 #   make shell     # drop into the container
 
 PLUGIN_NAME := localsend
-KOPLUGIN_DEV_VERSION := v2026.03_1
+KOPLUGIN_DEV_VERSION := v2026.03_2
 IMAGE := ghcr.io/kaikozlov/koplugin-dev:$(KOPLUGIN_DEV_VERSION)
+
+# SDL dummy driver for headless KOReader (real device/UIManager support)
+SDL_ENV := -e SDL_VIDEODRIVER=dummy
 
 # Mount current repo as /opt/plugin
 MOUNT := -v "$(PWD)":/opt/plugin -e PLUGIN_NAME=$(PLUGIN_NAME)
-RUN := docker run --rm $(MOUNT) $(IMAGE)
-RUN_IT := docker run --rm -it $(MOUNT) $(IMAGE)
+RUN := docker run --rm $(SDL_ENV) $(MOUNT) $(IMAGE)
+RUN_IT := docker run --rm -it $(SDL_ENV) $(MOUNT) $(IMAGE)
 
 # =============================================================================
 # Setup
