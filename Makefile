@@ -23,8 +23,10 @@ RUN_IT := docker run --rm -it $(MOUNT) $(IMAGE)
 # =============================================================================
 
 .PHONY: setup
-setup: ## Pull the koplugin-dev image
+setup: ## Pull the koplugin-dev image and install git hooks
 	docker pull $(IMAGE)
+	cp scripts/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+	@echo "✓ Git pre-commit hook installed"
 
 # =============================================================================
 # Testing
