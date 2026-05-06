@@ -11,12 +11,12 @@ jobs:
     name: Build KOReader Plugin
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.23"
           cache: true
@@ -62,13 +62,13 @@ jobs:
           (cd "$BUILD_DIR" && zip -r "localsend-koplugin-arm64.zip" "$PLUGIN_NAME")
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: koplugin-packages
           path: build/*.zip
 
       - name: Upload to Release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: build/*.zip
