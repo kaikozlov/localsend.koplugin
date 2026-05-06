@@ -33,10 +33,8 @@ Based on the official implementations:
 - [6. HTTP API v3](#6-http-api-v3)
   - [6.1 Nonce Exchange](#61-nonce-exchange)
   - [6.2 Register](#62-register)
-  - [6.3 Prepare Upload](#63-prepare-upload)
-  - [6.4 Upload File](#64-upload-file)
-  - [6.5 Cancel](#65-cancel)
-  - [6.6 Error Handling](#66-error-handling)
+  - [6.3 Prepare Upload, Upload, Cancel](#63-prepare-upload-upload-cancel-v3--client-only-not-routed-by-any-server)
+  - [6.4 Error Handling](#64-error-handling)
 - [7. WebRTC Signaling Protocol](#7-webrtc-signaling-protocol)
   - [7.1 Connection](#71-connection)
   - [7.2 Server Messages](#72-server-messages)
@@ -68,12 +66,13 @@ LocalSend v3 introduces WebRTC support for faster, more reliable file transfers 
 
 | Feature | v2.1 | v3 |
 |---------|------|-----|
-| HTTP API | `/api/localsend/v2/*` | `/api/localsend/v3/*` |
-| Nonce Exchange | Not required | Required before prepare-upload |
+| HTTP API | `/api/localsend/v2/*` | `/api/localsend/v3/*` (discovery only — nonce + register) |
+| File Transfer (HTTP) | Full support via v2 endpoints | **Not implemented** — falls back to v2 HTTP for LAN |
+| File Transfer (WebRTC) | N/A | Full support via data channels |
+| Nonce Exchange | Not required | Required before WebRTC session setup |
 | Register Response | - | Adds `hasWebInterface` field |
 | Certificate Verification | Optional | Verify signature + public key match |
 | Token in Discovery | `fingerprint` | `token` (used for peer merging) |
-| WebRTC | N/A | Full support via signaling server |
 
 ---
 
@@ -286,10 +285,13 @@ def verify_token_timestamp(public_key, token):
 
 ### 4.6 Supported Signature Algorithms
 
-| Algorithm | Identifier | Key Format |
-|-----------|------------|------------|
-| Ed25519 | `ed25519` | PKCS#8 PEM |
-| RSA-PSS with SHA-256 | `rsa-pss` | PKCS#8 PEM |
+| Algorithm | Identifier | Key Format | Generation | Verification |
+|-----------|------------|------------|------------|--------------|
+| Ed25519 | `ed25519` | PKCS#8 PEM | ✅ Yes | ✅ Yes |
+| RSA-PSS with SHA-256 | `rsa-pss` | PKCS#8 PEM | ❌ No | ✅ Yes (legacy interop) |
+
+> [!NOTE]
+> Current implementations generate tokens exclusively with Ed25519 (`SigningTokenKey` wraps `ed25519_dalek::SigningKey`). RSA-PSS support exists for **verification only** — implementations must be able to verify RSA-PSS tokens received from older clients, but will never generate them. The `generate_token_nonce` and `generate_token_timestamp` functions hardcode `sign_method = "ed25519"`.
 
 **Ed25519 Example Public Key:**
 ```
@@ -342,6 +344,16 @@ def verify_certificate(cert_der, expected_public_key=None):
 ---
 
 ## 6. HTTP API v3
+
+The v3 HTTP API is limited to **discovery and session setup**. File transfer over HTTP uses v2 endpoints exclusively (see §2). The v3 additions are:
+
+- **Nonce exchange** (`/nonce`) — cryptographic handshake for WebRTC session setup
+- **Register** (`/register`) — enhanced device discovery with `hasWebInterface` field
+
+The v3 Rust client library includes `prepare_upload`, `upload`, and `cancel` methods targeting `/api/localsend/v3/*` paths, but **no server implementation routes these endpoints** — neither the Rust HTTP server nor the Flutter app's HTTP server. In practice, v3 file transfers use WebRTC data channels (§8), and LAN-only transfers fall back to v2 HTTP.
+
+> [!NOTE]
+> The v2 HTTP endpoints (`/api/localsend/v2/prepare-upload`, `/api/localsend/v2/upload`, `/api/localsend/v2/cancel`) remain the only HTTP-based file transfer mechanism. See the [v2.1 protocol spec](https://github.com/localsend/protocol) for details.
 
 ### 6.1 Nonce Exchange
 
@@ -397,72 +409,19 @@ Same as v2 register but with additional field.
 }
 ```
 
-### 6.3 Prepare Upload
+### 6.3 Prepare Upload, Upload, Cancel (v3 — client-only, not routed by any server)
 
-Sends file metadata to the receiver for approval.
+The Rust core's v3 HTTP client (`core/src/http/client/v3.rs`) includes `prepare_upload()`, `upload()`, and `cancel()` methods that target `/api/localsend/v3/prepare-upload`, `/api/localsend/v3/upload`, and `/api/localsend/v3/cancel` respectively. However, **no server implementation handles these routes**:
 
-`POST /api/localsend/v3/prepare-upload`
+- The Rust HTTP server (`core/src/http/server/mod.rs`) only routes `/api/localsend/v3/nonce` and `/api/localsend/v3/register`
+- The Flutter app's HTTP server (`receive_controller.dart`) only registers v1 and v2 routes via `ApiRoute.*.v2` (the `ApiRoute` enum in `api_route_builder.dart` generates only v1 and v2 paths)
 
-**Request:**
-```json5
-{
-  "info": {
-    "alias": "Nice Orange",
-    "version": "2.0",
-    "deviceModel": "Samsung",
-    "deviceType": "MOBILE",
-    "token": "unique-token",
-    "port": 53317,
-    "protocol": "HTTPS",
-    "hasWebInterface": false
-  },
-  "files": {
-    "file-uuid-1": {
-      "id": "file-uuid-1",
-      "fileName": "photo.png",
-      "size": 12345,
-      "fileType": "image/png",
-      "sha256": "...",      // optional
-      "preview": "...",     // optional, base64
-      "metadata": {         // optional
-        "modified": "2024-01-01T12:00:00Z",
-        "accessed": "2024-01-01T12:00:00Z"
-      }
-    }
-  }
-}
-```
+These v3 client methods appear to be scaffolding for future use or are used internally by the WebRTC sender during session setup. The actual request/response formats are identical to v2 (see [v2.1 spec §4](https://github.com/localsend/protocol#4-file-transfer-http-aka-upload-api)). In practice, v3 file transfers use WebRTC data channels (§8).
 
-**Response:**
-```json5
-{
-  "sessionId": "session-uuid",
-  "files": {
-    "file-uuid-1": "file-token-1",
-    "file-uuid-2": "file-token-2"
-  }
-}
-```
+> [!WARNING]
+> Do not implement v3 `/prepare-upload`, `/upload`, or `/cancel` server endpoints expecting interoperability with the official LocalSend app. Use v2 HTTP endpoints for LAN file transfers.
 
-### 6.4 Upload File
-
-Transfer file binary data. Called once per file.
-
-`POST /api/localsend/v3/upload?sessionId={sessionId}&fileId={fileId}&token={token}`
-
-**Request Body:** Raw binary file data (streamed)
-
-**Response:** 200 OK with empty body
-
-### 6.5 Cancel
-
-Cancel an ongoing transfer session.
-
-`POST /api/localsend/v3/cancel?sessionId={sessionId}`
-
-**Response:** 200 OK with empty body
-
-### 6.6 Error Handling
+### 6.4 Error Handling
 
 **Error Response Format:**
 ```json5
@@ -754,13 +713,29 @@ sequenceDiagram
     rect rgb(240, 255, 240)
     Note over S,R: Phase 3: PIN Handling (Optional)
     alt Receiver requires PIN
-        Note right of R: status="PIN_REQUIRED" in token response
-        S->>R: RTCPinMessage {pin: "123456"}
+        Note right of R: Receiver sends PIN_REQUIRED challenge
+        loop Until correct PIN or max attempts
+            S->>R: RTCPinMessage {pin: "123456"}
+            alt Wrong PIN
+                R->>S: RTCPinReceivingResponse {status: "PIN_REQUIRED"}
+            else Max attempts exceeded
+                R->>S: RTCPinReceivingResponse {status: "TOO_MANY_ATTEMPTS"}
+                Note over S,R: Session terminated
+            end
+        end
         R->>S: RTCPinReceivingResponse {status: "OK"}
     end
     alt Sender requires PIN
         S->>R: RTCPinSendingResponse {status: "PIN_REQUIRED"}
-        R->>S: RTCPinMessage {pin: "123456"}
+        loop Until correct PIN or max attempts
+            R->>S: RTCPinMessage {pin: "123456"}
+            alt Wrong PIN
+                S->>R: RTCPinSendingResponse {status: "PIN_REQUIRED"}
+            else Max attempts exceeded
+                S->>R: RTCPinSendingResponse {status: "TOO_MANY_ATTEMPTS"}
+                Note over S,R: Session terminated
+            end
+        end
         S->>R: RTCPinSendingResponse {status: "OK", files: [...]}
     end
     end
@@ -1178,7 +1153,7 @@ These JSON examples are taken directly from the Rust unit tests and can be used 
     "alias": "Cute Apple",
     "version": "2.3",
     "deviceModel": "Dell",
-    "deviceType": "desktop",
+    "deviceType": "DESKTOP",
     "token": "123"
   },
   "peers": []
@@ -1193,7 +1168,7 @@ These JSON examples are taken directly from the Rust unit tests and can be used 
     "id": "00000000-0000-0000-0000-000000000000",
     "alias": "Cute Apple",
     "version": "2.3",
-    "deviceType": "desktop",
+    "deviceType": "DESKTOP",
     "token": "123"
   },
   "sessionId": "456",
@@ -1211,7 +1186,7 @@ Note: `deviceModel` is omitted when null (not present).
     "alias": "Cute Apple",
     "version": "2.3",
     "deviceModel": "Dell",
-    "deviceType": "desktop",
+    "deviceType": "DESKTOP",
     "token": "123"
   }
 }
@@ -1526,12 +1501,12 @@ The web client automatically declines pairing requests. This is intentional—br
 
 ### C.5 Crypto Algorithm Selection
 
-Both implementations support Ed25519 and RSA-PSS, but with different defaults:
+Both implementations support Ed25519 and RSA-PSS, but with different capabilities:
 
-| Implementation | Default | Fallback |
-|----------------|---------|----------|
-| Rust Core | Ed25519 | N/A (fails if unsupported) |
-| Web Client | RSA-PSS | Ed25519 (if browser supports) |
+| Implementation | Token Generation | Token Verification |
+|----------------|-----------------|-------------------|
+| Rust Core | Ed25519 only | Ed25519 + RSA-PSS |
+| Web Client | Ed25519 (preferred) or RSA-PSS | Ed25519 + RSA-PSS |
 
 The web client defaults to RSA-PSS because older Chrome versions don't support Ed25519 in WebCrypto. It attempts to upgrade to Ed25519 on startup:
 
@@ -1557,7 +1532,7 @@ Both implementations use `"2.3"` as the version string in client info:
     "alias": "Device Name",
     "version": "2.3",
     "deviceModel": "...",
-    "deviceType": "desktop",
+    "deviceType": "DESKTOP",
     "token": "..."
 }
 ```
@@ -1597,6 +1572,10 @@ This document refers to the protocol as "v3" because:
 
 | Date | Changes |
 |------|---------|
+| 2026-05-06 | **§2, §6**: Corrected major inaccuracy — v3 HTTP endpoints for file transfer (`/prepare-upload`, `/upload`, `/cancel`) do not exist on any server. LAN transfers use v2 HTTP exclusively. v3 adds only `/nonce` and `/register` for WebRTC session setup. |
+| 2026-05-06 | **§4.6**: Clarified RSA-PSS is verification-only; token generation is Ed25519-only. |
+| 2026-05-06 | **§8.3**: Expanded PIN handling flow to show the retry loop with `PIN_REQUIRED`/`TOO_MANY_ATTEMPTS` responses and final `OK`. |
+| 2026-05-06 | **Appendix A.1**: Fixed `deviceType` casing from `"desktop"` to `"DESKTOP"` (SCREAMING_SNAKE_CASE) in all 4 test vectors. |
 | 2025-12-30 | Added Appendix C: Implementation Differences (Rust vs Web) |
 | 2025-12-30 | Added Section 7.4: Keep-Alive mechanism (ping, token refresh) |
 | 2025-12-30 | Added Sections 10.6-10.8: ICE gathering, token generation, JS config |
