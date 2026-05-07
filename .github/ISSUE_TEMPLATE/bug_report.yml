@@ -1,0 +1,98 @@
+name: Bug Report
+description: File a bug report for the LocalSend KOReader plugin
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the sections below.
+        Incomplete reports (missing device info, no crash.log, no reproduction steps) are hard to investigate and may be closed.
+
+  - type: dropdown
+    id: device
+    attributes:
+      label: Device
+      description: What e-reader device are you using?
+      options:
+        - Kindle (Amazon)
+        - Kobo
+        - reMarkable
+        - PocketBook
+        - Boox (Onyx)
+        - Tolino
+        - Other (specify below)
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Device firmware version
+      description: "e.g., Kindle: 5.16.2, Kobo: 4.38.21917"
+      placeholder: "5.16.2"
+    validations:
+      required: true
+
+  - type: input
+    id: koreader-version
+    attributes:
+      label: KOReader version
+      description: "Found in KOReader → Help → About. e.g., 2026.03"
+      placeholder: "2026.03"
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: LocalSend plugin version
+      description: "Found in the plugin menu or check the update screen. e.g., v2.1.0"
+      placeholder: "v2.1.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the issue. What did you expect to happen? What actually happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: "Tell us exactly how to trigger the bug."
+      placeholder: |
+        1. Open LocalSend plugin on KOReader
+        2. Start receiver
+        3. From phone/PC, send a .zip file using LocalSend app
+        4. See error: [RhttpStatusCodeException] Status code: 400
+    validations:
+      required: true
+
+  - type: textarea
+    id: crash-log
+    attributes:
+      label: crash.log
+      description: |
+        **Required.** Attach the contents of your `crash.log` file.
+        On most devices: `/mnt/us/koreader/crash.log` (Kindle) or `.adds/koreader/crash.log` (Kobo).
+        If the file is long, paste the **last 100 lines** (the part around the error).
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: sender-app
+    attributes:
+      label: Sender app and version
+      description: "What app/device are you sending FROM? e.g., LocalSend Android v1.16.0, LocalSend Windows v1.15.0"
+      placeholder: "LocalSend Android v1.16.0"
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: "Screenshots, network setup details (same WiFi? VLAN?), anything else that might help."
