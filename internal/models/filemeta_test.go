@@ -146,7 +146,7 @@ func TestGenFileMeta_SetsCorrectSize(t *testing.T) {
 		t.Fatalf("GenFileMeta failed: %v", err)
 	}
 
-	expectedSize := int64(len(content))
+	expectedSize := FlexInt(len(content))
 	if meta.Size != expectedSize {
 		t.Errorf("Size = %d; want %d", meta.Size, expectedSize)
 	}

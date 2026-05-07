@@ -656,7 +656,7 @@ func TestForwardSender_SendFile_RejectsOversizedFiles(t *testing.T) {
 	sender.files[oversizedFileID] = models.FileMeta{
 		Id:       oversizedFileID,
 		Filename: "huge_file.bin",
-		Size:     int64(1<<31) + 1, // 2GB + 1 byte
+		Size:     models.FlexInt(1<<31) + 1, // 2GB + 1 byte
 		FullPath: testFile,
 	}
 
@@ -959,7 +959,7 @@ func TestReverseSender_DownloadHandler(t *testing.T) {
 		sender.files["file1"] = models.FileMeta{
 			Id:       "file1",
 			Filename: "download.txt",
-			Size:     int64(len(testContent)),
+			Size:     models.FlexInt(len(testContent)),
 			FullPath: testFile,
 		}
 

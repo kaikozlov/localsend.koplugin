@@ -19,7 +19,7 @@ type FileMetadata struct {
 type FileMeta struct {
 	Id       string        `json:"id"`
 	Filename string        `json:"fileName"`
-	Size     int64         `json:"size"`
+	Size     FlexInt       `json:"size"`
 	FileMIME string        `json:"fileType"`
 	Checksum string        `json:"sha256,omitempty"`
 	Preview  string        `json:"preview,omitempty"`
@@ -46,7 +46,7 @@ func GenFileMeta(fpath string) (FileMeta, error) {
 	return FileMeta{
 		Id:       uuid.NewString(),
 		Filename: fd.Name(),
-		Size:     fd.Size(),
+		Size:     FlexInt(fd.Size()),
 		FileMIME: fileType,
 		Checksum: checksum,
 		Metadata: &FileMetadata{
@@ -91,7 +91,7 @@ func GenFileMetaWithBase(fpath string, baseDir string) (FileMeta, error) {
 	return FileMeta{
 		Id:       uuid.NewString(),
 		Filename: relPath, // Relative path instead of fd.Name()
-		Size:     fd.Size(),
+		Size:     FlexInt(fd.Size()),
 		FileMIME: fileType,
 		Checksum: checksum,
 		Metadata: &FileMetadata{

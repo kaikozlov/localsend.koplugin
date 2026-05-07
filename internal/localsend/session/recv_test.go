@@ -567,7 +567,7 @@ func TestSaveFileSuccess(t *testing.T) {
 	fileMeta := models.FileMeta{
 		Id:       "file1",
 		Filename: "test.txt",
-		Size:     int64(len(content)),
+		Size:     models.FlexInt(len(content)),
 		Checksum: checksum,
 	}
 	_ = sess.AcceptFile("file1", fileMeta)
@@ -638,7 +638,7 @@ func TestSaveFileCreatesUniqueNames(t *testing.T) {
 	fileMeta := models.FileMeta{
 		Id:       "file1",
 		Filename: "test.txt", // Same name as existing file
-		Size:     int64(len(content)),
+		Size:     models.FlexInt(len(content)),
 	}
 	_ = sess.AcceptFile("file1", fileMeta)
 	sess.Start()
@@ -892,7 +892,7 @@ func TestSaveFileDirectoryTraversalPrevention(t *testing.T) {
 			fileMeta := models.FileMeta{
 				Id:       "file1",
 				Filename: tc.maliciousName,
-				Size:     int64(len(content)),
+				Size:     models.FlexInt(len(content)),
 			}
 			_ = sess.AcceptFile("file1", fileMeta)
 			sess.Start()
@@ -979,7 +979,7 @@ func TestSaveFileWithSubdirectory(t *testing.T) {
 			fileMeta := models.FileMeta{
 				Id:       "file1",
 				Filename: tc.filename,
-				Size:     int64(len(content)),
+				Size:     models.FlexInt(len(content)),
 			}
 			_ = sess.AcceptFile("file1", fileMeta)
 			sess.Start()
@@ -1217,12 +1217,12 @@ func TestSaveFileWithFolderRemap(t *testing.T) {
 	fileMeta1 := models.FileMeta{
 		Id:       "file1",
 		Filename: "Photos/beach.jpg",
-		Size:     int64(len(file1Content)),
+		Size:     models.FlexInt(len(file1Content)),
 	}
 	fileMeta2 := models.FileMeta{
 		Id:       "file2",
 		Filename: "Photos/sunset.jpg",
-		Size:     int64(len(file2Content)),
+		Size:     models.FlexInt(len(file2Content)),
 	}
 
 	_ = sess.AcceptFile("file1", fileMeta1)
@@ -1279,7 +1279,7 @@ func TestSaveFileWithNestedFolderRemap(t *testing.T) {
 	fileMeta := models.FileMeta{
 		Id:       "file1",
 		Filename: "Photos/Summer/vacation.jpg",
-		Size:     int64(len(content)),
+		Size:     models.FlexInt(len(content)),
 	}
 	_ = sess.AcceptFile("file1", fileMeta)
 	sess.Start()
@@ -1318,7 +1318,7 @@ func TestSaveFileFolderRemapOnlyAffectsSubdirs(t *testing.T) {
 	fileMeta := models.FileMeta{
 		Id:       "file1",
 		Filename: "photo.jpg", // Flat file, no subdirectory
-		Size:     int64(len(content)),
+		Size:     models.FlexInt(len(content)),
 	}
 	_ = sess.AcceptFile("file1", fileMeta)
 	sess.Start()

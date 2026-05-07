@@ -177,7 +177,7 @@ func (fr *FileReceiver) uploadHandler(c *fiber.Ctx) error {
 	}
 
 	// Log the successful transfer with the actual saved filename (may differ from original if renamed)
-	fr.LogTransfer(savedFilename, fileMeta.Size, c.IP())
+	fr.LogTransfer(savedFilename, fileMeta.Size.Int64(), c.IP())
 
 	return c.SendStatus(200)
 }
