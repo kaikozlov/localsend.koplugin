@@ -472,6 +472,100 @@ function LocalSend:_onNetworkConnected()
     end
 end
 
+-- Called by PluginLoader when user deletes the plugin via KOReader's plugin management.
+-- Cleans up all persistent state: G_reader_settings keys, file-based state (certs,
+-- ext_routing.json, reinstall marker, tmp files), and resets in-memory ServerState.
+-- Must be safe to call multiple times (idempotent) and must not throw errors.
+function LocalSend:deletePluginSettings()
+    logger.info("[LocalSend] deletePluginSettings: removing all plugin data")
+
+    -- 1. Remove all G_reader_settings keys
+    local settings_keys = {
+        "LocalSend_port",
+        "LocalSend_save_dir",
+        "LocalSend_device_name",
+        "LocalSend_use_https",
+        "LocalSend_autostart",
+        "LocalSend_pin",
+        "LocalSend_accept_ext",
+        "LocalSend_use_webrtc",
+        "LocalSend_ext_dirs",
+        "LocalSend_routing_accept_all",
+        "LocalSend_routing_enabled",
+        "LocalSend_auto_update_check",
+        "LocalSend_update_check_interval_hours",
+        "LocalSend_last_update_check",
+        "LocalSend_update_available_tag",
+    }
+    for _, key in ipairs(settings_keys) do
+        G_reader_settings:delSetting(key)
+    end
+
+    -- 2. Remove file-based state in plugin directory
+    local files_to_remove = {
+        plugin_path .. "/ext_routing.json",
+        plugin_path .. "/" .. lsupdate.REINSTALL_MARKER_FILE,
+    }
+    for _, filepath in ipairs(files_to_remove) do
+        if util.pathExists(filepath) then
+            local ok, err = os.remove(filepath)
+            if not ok then
+                logger.warn("[LocalSend] deletePluginSettings: failed to remove", filepath, err)
+            end
+        end
+    end
+
+    -- 3. Remove TLS certs directory
+    if util.pathExists(certs_path) then
+        local ok, err = ffiutil.purgeDir(certs_path)
+        if not ok then
+            logger.warn("[LocalSend] deletePluginSettings: failed to remove certs dir:", err)
+        end
+    end
+
+    -- 4. Remove temporary runtime files (PID, logs, etc.)
+    local tmp_files = {
+        constants.PID_FILE,
+        constants.TRANSFER_LOG_FILE,
+        constants.TRANSFER_NOTIFY_FILE,
+        constants.SIGNALING_ID_FILE,
+        constants.SEND_PID_FILE,
+        constants.SEND_OUTPUT_FILE,
+        constants.SCAN_OUTPUT_FILE,
+    }
+    for _, filepath in ipairs(tmp_files) do
+        if util.pathExists(filepath) then
+            local ok, err = os.remove(filepath)
+            if not ok then
+                logger.warn("[LocalSend] deletePluginSettings: failed to remove", filepath, err)
+            end
+        end
+    end
+
+    -- 5. Reset in-memory session state
+    if ServerState then
+        ServerState.user_stopped = false
+        ServerState.was_running_before_suspend = false
+        ServerState.was_running_before_disconnect = false
+        ServerState.last_log_position = 0
+        ServerState.transfer_count = 0
+        ServerState.last_sentinel_value = nil
+        ServerState.telemetry_cleaned = false
+        ServerState.discovered_devices = {}
+        ServerState.scan_in_progress = false
+        ServerState.send_in_progress = false
+        ServerState.scan_cancelled = false
+        ServerState.send_cancelled = false
+        ServerState.server_op_id = 0
+        ServerState.stop_in_progress = false
+    end
+
+    -- 6. Reset cross-plugin visibility
+    if PluginShare then
+        PluginShare.localsend_running = nil
+    end
+end
+
 -- Lifecycle: flush settings before shutdown
 function LocalSend:onFlushSettings()
     -- Settings are saved immediately on change via G_reader_settings,

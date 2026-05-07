@@ -350,6 +350,9 @@ function M.mock_settings()
                 M.state.settings[key] = true
             end
         end,
+        delSetting = function(self, key)
+            M.state.settings[key] = nil
+        end,
         _settings = M.state.settings,
         _reset = function()
             for k in pairs(M.state.settings) do M.state.settings[k] = nil end
