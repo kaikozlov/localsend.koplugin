@@ -2,6 +2,8 @@ package transfer
 
 import (
 	"encoding/json"
+
+	"localsend-cli/internal/models"
 )
 
 // Data channel message types matching official LocalSend protocol.
@@ -43,12 +45,12 @@ type DCFilesMessage struct {
 
 // DCFile represents file metadata.
 type DCFile struct {
-	ID       string `json:"id"`
-	FileName string `json:"fileName"`
-	Size     int64  `json:"size"`
-	FileType string `json:"fileType"`
-	SHA256   string `json:"sha256,omitempty"`
-	Preview  string `json:"preview,omitempty"`
+	ID       string         `json:"id"`
+	FileName string         `json:"fileName"`
+	Size     models.FlexInt `json:"size"`
+	FileType string         `json:"fileType"`
+	SHA256   string         `json:"sha256,omitempty"`
+	Preview  string         `json:"preview,omitempty"`
 }
 
 // DCAcceptMessage is sent by receiver to accept selected files.

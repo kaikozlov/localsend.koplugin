@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"localsend-cli/internal/crypto"
+	"localsend-cli/internal/models"
 	"localsend-cli/internal/storage"
 	"localsend-cli/internal/webrtc/signaling"
 )
@@ -475,7 +476,7 @@ func (s *RTCSender) sendFileList() {
 		files[i] = RTCFileDto{
 			ID:       f.ID,
 			FileName: f.FileName,
-			Size:     f.Size,
+			Size:     models.FlexInt(f.Size),
 			FileType: f.FileType,
 			Metadata: RTCFileMetadata{
 				Modified: f.Modified.Format(time.RFC3339Nano),

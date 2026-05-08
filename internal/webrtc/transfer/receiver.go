@@ -1017,7 +1017,7 @@ func (r *RTCReceiver) finishCurrentFile() {
 			for _, f := range r.files {
 				if f.ID == fileID {
 					expectedChecksum = f.SHA256
-					size = f.Size
+					size = f.Size.Int64()
 					break
 				}
 			}
