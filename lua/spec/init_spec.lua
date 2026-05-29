@@ -304,6 +304,78 @@ describe("onDispatcherRegisterActions", function()
 
             assert.is_true(registered_actions["toggle_localsend_server"].general)
         end)
+
+        it("should not put a separator between LocalSend actions", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+
+            assert.is_nil(registered_actions["toggle_localsend_server"].separator)
+            assert.is_nil(registered_actions["send_file_localsend"].separator)
+        end)
+
+        it("should register send_file_localsend action", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+
+            assert.is_not_nil(registered_actions["send_file_localsend"])
+            assert.equal("none", registered_actions["send_file_localsend"].category)
+            assert.equal("ShowLocalSendFileSendFlow", registered_actions["send_file_localsend"].event)
+            assert.is_true(registered_actions["send_file_localsend"].general)
+            assert.truthy(registered_actions["send_file_localsend"].title:match("LocalSend"))
+            assert.truthy(registered_actions["send_file_localsend"].title:match("send file"))
+        end)
+
+        it("should register send_current_book_localsend action", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+
+            assert.is_not_nil(registered_actions["send_current_book_localsend"])
+            assert.equal("none", registered_actions["send_current_book_localsend"].category)
+            assert.equal("SendCurrentBookWithLocalSend", registered_actions["send_current_book_localsend"].event)
+            assert.is_true(registered_actions["send_current_book_localsend"].general)
+            assert.is_true(registered_actions["send_current_book_localsend"].reader)
+            assert.is_true(registered_actions["send_current_book_localsend"].separator)
+            assert.truthy(registered_actions["send_current_book_localsend"].title:match("LocalSend"))
+            assert.truthy(registered_actions["send_current_book_localsend"].title:match("current book"))
+        end)
+    end)
+
+    describe("dispatcher event handlers", function()
+        it("should make send_file_localsend event resolve to showFileSendFlow", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+            local called = false
+
+            instance.showFileSendFlow = function()
+                called = true
+            end
+
+            local action = registered_actions["send_file_localsend"]
+            local handler_name = "on" .. action.event -- Matches KOReader Event:new() handler naming
+            assert.is_function(instance[handler_name])
+
+            instance[handler_name](instance)
+
+            assert.is_true(called)
+        end)
+
+        it("should make send_current_book_localsend event resolve to sendCurrentBook", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+            local called = false
+
+            instance.sendCurrentBook = function()
+                called = true
+            end
+
+            local action = registered_actions["send_current_book_localsend"]
+            local handler_name = "on" .. action.event -- Matches KOReader Event:new() handler naming
+            assert.is_function(instance[handler_name])
+
+            instance[handler_name](instance)
+
+            assert.is_true(called)
+        end)
     end)
 
     describe("dispatcher integration", function()

@@ -888,6 +888,15 @@ function LocalSend:sendCurrentBook()
     lssender.showFileSendFlow(self, doc_path)
 end
 
+-- Dispatcher event handlers for quick-menu/gesture actions.
+function LocalSend:onShowLocalSendFileSendFlow()
+    self:showFileSendFlow()
+end
+
+function LocalSend:onSendCurrentBookWithLocalSend()
+    self:sendCurrentBook()
+end
+
 function LocalSend:rotateCertificates()
     local ConfirmBox = require("ui/widget/confirmbox")
     UIManager:show(ConfirmBox:new{
@@ -1330,7 +1339,11 @@ end
 
 function LocalSend:onDispatcherRegisterActions()
     Dispatcher:registerAction("toggle_localsend_server",
-        { category = "none", event = "ToggleLocalSend", title = _("Toggle LocalSend server"), general = true, separator = true })
+        { category = "none", event = "ToggleLocalSend", title = _("Toggle LocalSend server"), general = true })
+    Dispatcher:registerAction("send_file_localsend",
+        { category = "none", event = "ShowLocalSendFileSendFlow", title = _("LocalSend: send file"), general = true })
+    Dispatcher:registerAction("send_current_book_localsend",
+        { category = "none", event = "SendCurrentBookWithLocalSend", title = _("LocalSend: send current book"), general = true, reader = true, separator = true })
 end
 
 -- Expose ServerState for testing purposes
