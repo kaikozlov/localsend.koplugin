@@ -555,23 +555,35 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path)
         -- Update available
 
         local release_notes = release.body or deps._("No release notes available.")
-        -- Truncate if too long
-        if #release_notes > 300 then
-            release_notes = release_notes:sub(1, 300) .. "..."
-        end
 
         if download_url then
-            -- Can auto-update
-            local ConfirmBox = require("ui/widget/confirmbox")
-            deps.UIManager:show(ConfirmBox:new{
-                text = deps.T(deps._("Update available!\n\nCurrent: %1\nLatest: %2\n\n%3\n\nInstall update now?"),
+            -- Can auto-update. Use TextViewer so long release notes remain readable.
+            local TextViewer = require("ui/widget/textviewer")
+            local viewer
+            viewer = TextViewer:new{
+                title = deps._("Update available!"),
+                text = deps.T(deps._("Current: %1\nLatest: %2\n\n%3"),
                     plugin_version, release.tag_name, release_notes),
-                ok_text = deps._("Install"),
-                cancel_text = deps._("Later"),
-                ok_callback = function()
-                    M.performUpdate(instance, download_url, asset_name, release.tag_name, plugin_path)
-                end,
-            })
+                buttons_table = {
+                    {
+                        {
+                            text = deps._("Later"),
+                            callback = function()
+                                deps.UIManager:close(viewer)
+                            end,
+                        },
+                        {
+                            text = deps._("Install"),
+                            callback = function()
+                                deps.UIManager:close(viewer)
+                                M.performUpdate(instance, download_url, asset_name, release.tag_name, plugin_path)
+                            end,
+                        },
+                    },
+                },
+                add_default_buttons = false,
+            }
+            deps.UIManager:show(viewer)
         else
             -- Can't auto-update (unknown arch or no matching asset)
             local reason

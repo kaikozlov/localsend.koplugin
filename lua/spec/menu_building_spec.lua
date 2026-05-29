@@ -263,6 +263,7 @@ describe("Menu Building", function()
             local found_save_dir = false
             local found_settings = false
             local found_updates = false
+            local found_about = false
 
             for _, item in ipairs(sub_items) do
                 if item.text_func then
@@ -273,12 +274,14 @@ describe("Menu Building", function()
                         found_transfers = true
                     elseif text:match("Save directory") then
                         found_save_dir = true
-                    elseif text:match("Check for updates") then
-                        found_updates = true
                     end
                 elseif item.text then
                     if item.text == "Settings" then
                         found_settings = true
+                    elseif item.text == "Updates" then
+                        found_updates = true
+                    elseif item.text == "About LocalSend" then
+                        found_about = true
                     end
                 end
             end
@@ -287,7 +290,42 @@ describe("Menu Building", function()
             assert.is_true(found_transfers, "Should have recent transfers")
             assert.is_true(found_save_dir, "Should have save directory")
             assert.is_true(found_settings, "Should have settings submenu")
-            assert.is_true(found_updates, "Should have check for updates")
+            assert.is_true(found_updates, "Should have updates submenu")
+            assert.is_true(found_about, "Should have about menu item")
+        end)
+
+        it("builds updates submenu with version, manual check, and auto-check", function()
+            local instance = helper.create_instance()
+
+            local updates_menu = instance:_buildUpdatesMenu()
+
+            assert.is_table(updates_menu)
+            assert.truthy(updates_menu[1].text_func():match("Installed version"))
+            assert.equals("Check for updates", updates_menu[2].text)
+            assert.truthy(updates_menu[3].text_func():match("Auto%-check for updates"))
+        end)
+
+        it("shows cached update version in updates submenu", function()
+            helper.state.settings["LocalSend_update_available_tag"] = "v2.0.0"
+            local instance = helper.create_instance()
+
+            local updates_menu = instance:_buildUpdatesMenu()
+            local text = updates_menu[1].text_func()
+
+            assert.truthy(text:match("Update available"))
+            assert.truthy(text:match("v2%.0%.0"))
+        end)
+
+        it("shows about dialog", function()
+            local instance = helper.create_instance()
+
+            instance:showAbout()
+
+            local dialog = helper.find_dialog("ConfirmBox")
+            assert.is_not_nil(dialog)
+            assert.truthy(dialog.text:match("LocalSend for KOReader"))
+            assert.truthy(dialog.text:match("Version"))
+            assert.truthy(dialog.text:match("github%.com/kaikozlov/localsend%.koplugin"))
         end)
 
         it("disables settings when server is running", function()

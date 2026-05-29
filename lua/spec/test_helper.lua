@@ -134,6 +134,13 @@ function M.mock_ui_widgets()
             return o
         end,
     }
+    package.loaded["ui/widget/textviewer"] = {
+        new = function(self, o)
+            o._type = "TextViewer"
+            table.insert(M.state.dialogs_shown, o)
+            return o
+        end,
+    }
 end
 
 -- Mock UIManager

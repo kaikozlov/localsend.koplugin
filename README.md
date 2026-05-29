@@ -48,6 +48,16 @@ A KOReader plugin that enables sending and receiving files between devices using
 | Use WebRTC | Enable v3 protocol for latest LocalSend apps |
 | Start with KOReader | Auto-start server on launch |
 
+### Updates
+
+Open **Menu → Network → LocalSend → Updates** to keep the plugin current:
+
+- **Installed version / Update available** — shows the installed version, or the cached latest version when an update has been found. Tap to check GitHub releases and review release notes.
+- **Check for updates** — manually checks the latest GitHub release. If a matching package exists for your device architecture, you can install it directly from KOReader.
+- **Auto-check for updates** — optional periodic background checks. When a newer release is found, LocalSend shows an update badge in the menu; updates are only installed after you confirm.
+
+If you are already up to date, the updater can reinstall the current release. This is useful for recovering a damaged plugin install. Restart KOReader after installing or reinstalling an update.
+
 ### Compatibility
 
 > **Kindle users:** Works best with firmware 5.16.3+. Older versions may also work as of v1.0.7.

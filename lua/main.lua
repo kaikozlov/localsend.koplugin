@@ -81,6 +81,8 @@ else
     plugin_meta = { version = "unknown", name = "LocalSend" }
 end
 local PLUGIN_VERSION = plugin_meta.version or "unknown"
+local GITHUB_URL = "https://github.com/kaikozlov/localsend.koplugin"
+local GITHUB_URL_DISPLAY = "github.com/kaikozlov/localsend.koplugin"
 local binary_path = plugin_path .. "/localsend"
 local certs_path = plugin_path .. "/certs"  -- Certs folder next to binary (managed by Go)
 
@@ -976,6 +978,50 @@ function LocalSend:checkForUpdates()
     lsupdate.checkForUpdates(self, PLUGIN_VERSION, plugin_path)
 end
 
+function LocalSend:_openProjectPage()
+    if Device.openLink then
+        local ok, opened = pcall(function()
+            return Device:openLink(GITHUB_URL)
+        end)
+        if ok and opened then
+            return
+        end
+    end
+
+    if Device.input and Device.input.setClipboardText then
+        pcall(function()
+            Device.input.setClipboardText(GITHUB_URL)
+        end)
+        UIManager:show(Notification:new{
+            text = _("GitHub link copied to clipboard"),
+            timeout = 3,
+        })
+        return
+    end
+
+    UIManager:show(InfoMessage:new{
+        text = T(_("Project page:\n%1"), GITHUB_URL),
+        timeout = 5,
+    })
+end
+
+function LocalSend:showAbout()
+    local ConfirmBox = require("ui/widget/confirmbox")
+    local description = plugin_meta.description or _("Send and receive files using LocalSend protocol.")
+    local arch = self:getDeviceArch() or _("unknown")
+    local text = T(_("LocalSend for KOReader\n\nVersion: %1\nArchitecture: %2\n\n%3\n\n%4"),
+        PLUGIN_VERSION, arch, description, GITHUB_URL_DISPLAY)
+
+    UIManager:show(ConfirmBox:new{
+        text = text,
+        ok_text = _("GitHub"),
+        cancel_text = _("Close"),
+        ok_callback = function()
+            self:_openProjectPage()
+        end,
+    })
+end
+
 function LocalSend:addToMainMenu(menu_items)
     -- Recovery mode: show minimal menu with only reinstall option
     if RECOVERY_MODE then
@@ -1260,8 +1306,27 @@ function LocalSend:_buildMainMenu()
         })
     end
 
-    -- Auto-check for updates
+    -- Updates
     table.insert(menu, {
+        text = _("Updates"),
+        sub_item_table_func = function()
+            return self:_buildUpdatesMenu()
+        end,
+    })
+
+    -- About
+    table.insert(menu, {
+        text = _("About LocalSend"),
+        callback = function()
+            self:showAbout()
+        end,
+    })
+
+    return menu
+end
+
+function LocalSend:_buildAutoUpdateMenuItem()
+    return {
         text_func = function()
             if self.auto_update_check then
                 local intervals = { [12] = "12h", [24] = "24h", [72] = "3 days", [168] = "Weekly" }
@@ -1321,20 +1386,33 @@ function LocalSend:_buildMainMenu()
             end
             return submenu
         end,
-    })
+    }
+end
 
-    -- Check for updates
-    table.insert(menu, {
-        text_func = function()
-            return T(_("Check for updates (%1)"), PLUGIN_VERSION)
-        end,
-        keep_menu_open = true,
-        callback = function()
-            self:checkForUpdates()
-        end,
-    })
-
-    return menu
+function LocalSend:_buildUpdatesMenu()
+    return {
+        {
+            text_func = function()
+                if self.update_available_tag ~= "" then
+                    return T(_("Update available: %1 → %2"), PLUGIN_VERSION, self.update_available_tag)
+                end
+                return T(_("Installed version: %1"), PLUGIN_VERSION)
+            end,
+            keep_menu_open = true,
+            callback = function()
+                self:checkForUpdates()
+            end,
+        },
+        {
+            text = _("Check for updates"),
+            keep_menu_open = true,
+            callback = function()
+                self:checkForUpdates()
+            end,
+            separator = true,
+        },
+        self:_buildAutoUpdateMenuItem(),
+    }
 end
 
 function LocalSend:onDispatcherRegisterActions()

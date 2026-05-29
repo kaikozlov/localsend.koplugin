@@ -153,11 +153,13 @@ describe("Self-Update", function()
                 ]}
             ]]
 
-            local confirm_shown = false
-            package.loaded["ui/widget/confirmbox"] = {
+            local viewer_shown = false
+            package.loaded["ui/widget/textviewer"] = {
                 new = function(self, o)
-                    confirm_shown = true
+                    viewer_shown = true
+                    assert.equals("Update available!", o.title)
                     assert.truthy(o.text:match("v2%.0%.0") or o.text:match("Update") or o.text:match("%%1"))
+                    assert.truthy(o.text:match("New features"))
                     return o
                 end,
             }
@@ -165,7 +167,30 @@ describe("Self-Update", function()
             local instance = helper.create_instance()
             instance:checkForUpdates()
 
-            assert.is_true(confirm_shown, "Should show confirmation dialog")
+            assert.is_true(viewer_shown, "Should show release notes viewer")
+        end)
+
+        it("shows full release notes without truncating", function()
+            local long_notes = string.rep("0123456789", 40) .. "END"
+            file_contents["/tmp/koreader/cache/localsend/update_check.json"] = string.format([[
+                {"tag_name":"v2.0.0","body":"%s","assets":[
+                    {"name":"localsend-koplugin-armv7.zip","browser_download_url":"https://example.com/armv7.zip"}
+                ]}
+            ]], long_notes)
+
+            local shown_text
+            package.loaded["ui/widget/textviewer"] = {
+                new = function(self, o)
+                    shown_text = o.text
+                    return o
+                end,
+            }
+
+            local instance = helper.create_instance()
+            instance:checkForUpdates()
+
+            assert.truthy(shown_text:match("END"), "Release notes should not be truncated")
+            assert.is_nil(shown_text:match("%.%.%.$"), "Release notes should not have truncation ellipsis")
         end)
 
         it("shows info when no matching asset for architecture", function()
@@ -537,15 +562,15 @@ describe("Self-Update", function()
                 ]}
             ]]
 
-            local confirm_shown = false
-            package.loaded["ui/widget/confirmbox"] = {
-                new = function(self, o) confirm_shown = true; return o end,
+            local viewer_shown = false
+            package.loaded["ui/widget/textviewer"] = {
+                new = function(self, o) viewer_shown = true; return o end,
             }
 
             local instance = helper.create_instance()
             instance:checkForUpdates()
 
-            assert.is_true(confirm_shown, "Should offer update from 1.0.0 to 1.1.0")
+            assert.is_true(viewer_shown, "Should offer update from 1.0.0 to 1.1.0")
         end)
     end)
 
