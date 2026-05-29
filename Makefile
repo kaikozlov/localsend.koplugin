@@ -10,7 +10,7 @@
 #   make shell     # drop into the container
 
 PLUGIN_NAME := localsend
-KOPLUGIN_DEV_VERSION := v2026.03_2
+KOPLUGIN_DEV_VERSION := v2026.03_3
 IMAGE := ghcr.io/kaikozlov/koplugin-dev:$(KOPLUGIN_DEV_VERSION)
 
 # SDL dummy driver for headless KOReader (real device/UIManager support)
@@ -18,8 +18,16 @@ SDL_ENV := -e SDL_VIDEODRIVER=dummy
 
 # Mount current repo as /opt/plugin
 MOUNT := -v "$(PWD)":/opt/plugin -e PLUGIN_NAME=$(PLUGIN_NAME)
-RUN := docker run --rm $(SDL_ENV) $(MOUNT) $(IMAGE)
-RUN_IT := docker run --rm -it $(SDL_ENV) $(MOUNT) $(IMAGE)
+
+# Persist Go module/build caches across ephemeral docker run --rm containers.
+# Without these volumes, every test run redownloads modules into /root/go/pkg/mod
+# and rebuilds packages into /root/.cache/go-build from scratch.
+GO_CACHE := \
+	-v $(PLUGIN_NAME)-go-mod:/root/go/pkg/mod \
+	-v $(PLUGIN_NAME)-go-build:/root/.cache/go-build
+
+RUN := docker run --rm $(SDL_ENV) $(MOUNT) $(GO_CACHE) $(IMAGE)
+RUN_IT := docker run --rm -it $(SDL_ENV) $(MOUNT) $(GO_CACHE) $(IMAGE)
 
 # =============================================================================
 # Setup
@@ -140,6 +148,10 @@ lua: ## Start KOReader's LuaJIT REPL
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf build/ *.zip $(PLUGIN_NAME) $(PLUGIN_NAME)-arm*
+
+.PHONY: clean-go-cache
+clean-go-cache: ## Remove Docker volumes used for Go module/build caches
+	docker volume rm $(PLUGIN_NAME)-go-mod $(PLUGIN_NAME)-go-build 2>/dev/null || true
 
 .PHONY: help
 help: ## Show this help
