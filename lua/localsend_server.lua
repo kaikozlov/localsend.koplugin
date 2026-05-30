@@ -340,8 +340,11 @@ function M.start(instance, silent)
     -- Open firewall before starting
     instance:openFirewall()
 
-    -- Build final command: run in background and save PID
-    local cmd = string.format("(%s) & echo $! > %s", deps.util.shell_escape(args), deps.util.shell_escape({constants.PID_FILE}))
+    -- Build final command: capture backend logs, run in background, and save PID
+    local cmd = string.format("(%s > %s 2>&1) & echo $! > %s",
+        deps.util.shell_escape(args),
+        deps.util.shell_escape({constants.SERVER_OUTPUT_FILE}),
+        deps.util.shell_escape({constants.PID_FILE}))
 
     deps.logger.dbg("[LocalSend] Starting server: ", cmd)
 

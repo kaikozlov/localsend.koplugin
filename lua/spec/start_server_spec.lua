@@ -141,6 +141,28 @@ describe("start() function", function()
             assert.is_true(found_cmd, "Should execute localsend recv command")
         end)
 
+        it("should redirect backend output to diagnostics log", function()
+            setup_successful_start()
+
+            local instance = helper.create_instance()
+            instance.save_dir = "/mnt/us/documents"
+            instance.clearTransferLog = function() end
+            instance.openFirewall = function() end
+            instance.exportExtRouting = function() return nil end
+
+            local check_count = 0
+            instance.isRunning = function(self)
+                check_count = check_count + 1
+                return check_count > 1
+            end
+
+            instance:start()
+
+            local cmd = helper.find_execute_call("/tmp/localsend_server%.out")
+            assert.is_truthy(cmd, "Should redirect stdout/stderr to backend diagnostics log")
+            assert.truthy(cmd:match("2>&1"), "Should capture stderr with stdout")
+        end)
+
         it("should include device name when set", function()
             setup_successful_start()
 

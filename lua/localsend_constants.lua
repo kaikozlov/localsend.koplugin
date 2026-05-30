@@ -9,6 +9,7 @@ M.PID_FILE = "/tmp/localsend_koreader.pid"
 M.TRANSFER_LOG_FILE = "/tmp/localsend_transfers.log"
 M.TRANSFER_NOTIFY_FILE = "/tmp/localsend_notify"
 M.SIGNALING_ID_FILE = "/tmp/localsend_signaling.id"  -- WebRTC signaling ID for self-filtering
+M.SERVER_OUTPUT_FILE = "/tmp/localsend_server.out"  -- Combined stdout/stderr from receiver process
 
 -- Send-related file paths
 M.SEND_PID_FILE = "/tmp/localsend_send.pid"

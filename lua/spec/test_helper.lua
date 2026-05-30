@@ -75,6 +75,9 @@ function M.mock_device(opts)
         retrieveNetworkInfo = function()
             return opts.network_info or "WiFi: 192.168.1.100"
         end,
+        info = function()
+            return opts.info or "Test Device"
+        end,
     }
 end
 
@@ -496,6 +499,11 @@ function M.load_localsend_sender()
     package.loaded["localsend_sender"] = require("localsend_sender")
 end
 
+-- Load localsend_diagnostics (real module, not mocked)
+function M.load_localsend_diagnostics()
+    package.loaded["localsend_diagnostics"] = require("localsend_diagnostics")
+end
+
 -- Clear cached main module to get fresh instance
 function M.reset_main()
     package.loaded["main"] = nil
@@ -508,6 +516,7 @@ function M.reset_main()
     package.loaded["localsend_server"] = nil  -- Also reset server module
     package.loaded["localsend_discovery"] = nil  -- Also reset discovery module
     package.loaded["localsend_sender"] = nil  -- Also reset sender module
+    package.loaded["localsend_diagnostics"] = nil  -- Also reset diagnostics module
 end
 
 -- Complete setup - call all standard mocks
@@ -549,6 +558,7 @@ function M.setup_complete(opts)
     M.load_localsend_server()
     M.load_localsend_discovery()
     M.load_localsend_sender()
+    M.load_localsend_diagnostics()
 end
 
 -- Standard before_each that resets state

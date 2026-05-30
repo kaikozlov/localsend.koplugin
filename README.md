@@ -58,6 +58,26 @@ Open **Menu → Network → LocalSend → Updates** to keep the plugin current:
 
 If you are already up to date, the updater can reinstall the current release. This is useful for recovering a damaged plugin install. Restart KOReader after installing or reinstalling an update.
 
+### Troubleshooting
+
+Open **Menu → Network → LocalSend → Troubleshooting** for in-plugin diagnostics:
+
+- **Run diagnostics** — shows plugin version, device architecture, network state, server process state, local API probe result, firewall status on Kindle, settings, and recent LocalSend logs.
+- **Show network info** — displays KOReader's current network information, including IP addresses when available.
+- **Show server status** — checks the LocalSend PID file, process state, and local API endpoint.
+- **Show recent LocalSend log** — displays the receiver backend log captured at `/tmp/localsend_server.out`.
+- **Prepare bug report** — formats the diagnostics details with a checklist of information to include in GitHub issues.
+
+When reporting a bug, include the diagnostics report plus KOReader's `crash.log` (`/mnt/us/koreader/crash.log` on Kindle, `.adds/koreader/crash.log` on Kobo).
+
+Common symptoms:
+
+- **Connection refused** — the device is reachable, but the LocalSend receiver is not listening. Check **Show server status**, then restart the server. On older Kindles, verify that you installed the `arm-legacy` package.
+- **Device not discovered** — make sure both devices are on the same LAN, Wi-Fi isolation is disabled on the router, and Kindle firewall rules are open. Diagnostics reports the relevant firewall status on Kindle.
+- **HTTP 400/403 during receive** — check PIN, allowed extensions, and file type routing. Archives such as `.zip`, `.rar`, and `.7z` are received as files; the plugin does not extract them.
+- **HTTPS connection problems** — temporarily disable **Use HTTPS** from **Settings** or **Troubleshooting → Common fixes**, then try again.
+- **WebRTC/signaling problems** — WebRTC requires Internet access; LAN send/receive only requires local connectivity. Temporarily disable **Enable WebRTC Support** if startup or discovery is unreliable.
+
 ### Compatibility
 
 > **Kindle users:** Works best with firmware 5.16.3+. Older versions may also work as of v1.0.7.

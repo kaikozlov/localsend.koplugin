@@ -43,6 +43,7 @@ local lsdialogs = tryRequire("localsend_dialogs")
 local lsfirewall = tryRequire("localsend_firewall")
 local lsserver = tryRequire("localsend_server")
 local lssender = tryRequire("localsend_sender")
+local lsdiagnostics = tryRequire("localsend_diagnostics")
 
 -- Check if any critical optional modules failed
 if not state or not lsserver then
@@ -259,6 +260,25 @@ function LocalSend:init()
             _ = _,
         }, {
             binary_path = binary_path,
+        })
+    end
+
+    if lsdiagnostics then
+        lsdiagnostics.init({
+            UIManager = UIManager,
+            InfoMessage = InfoMessage,
+            Notification = Notification,
+            Device = Device,
+            NetworkMgr = NetworkMgr,
+            util = util,
+            logger = logger,
+            T = T,
+            _ = _,
+        }, {
+            binary_path = binary_path,
+            plugin_path = plugin_path,
+            plugin_version = PLUGIN_VERSION,
+            data_dir = data_dir,
         })
     end
 
@@ -534,6 +554,7 @@ function LocalSend:deletePluginSettings()
         constants.SEND_PID_FILE,
         constants.SEND_OUTPUT_FILE,
         constants.SCAN_OUTPUT_FILE,
+        constants.SERVER_OUTPUT_FILE,
     }
     for _, filepath in ipairs(tmp_files) do
         if util.pathExists(filepath) then
@@ -1005,6 +1026,36 @@ function LocalSend:_openProjectPage()
     })
 end
 
+function LocalSend:showDiagnostics()
+    if lsdiagnostics then
+        lsdiagnostics.showDiagnostics(self)
+    end
+end
+
+function LocalSend:showNetworkInfo()
+    if lsdiagnostics then
+        lsdiagnostics.showNetworkInfo()
+    end
+end
+
+function LocalSend:showServerStatus()
+    if lsdiagnostics then
+        lsdiagnostics.showServerStatus(self)
+    end
+end
+
+function LocalSend:showRecentBackendLog()
+    if lsdiagnostics then
+        lsdiagnostics.showRecentBackendLog()
+    end
+end
+
+function LocalSend:showBugReportInfo()
+    if lsdiagnostics then
+        lsdiagnostics.showBugReport(self)
+    end
+end
+
 function LocalSend:showAbout()
     local ConfirmBox = require("ui/widget/confirmbox")
     local description = plugin_meta.description or _("Send and receive files using LocalSend protocol.")
@@ -1306,6 +1357,16 @@ function LocalSend:_buildMainMenu()
         })
     end
 
+    -- Troubleshooting
+    if lsdiagnostics then
+        table.insert(menu, {
+            text = _("Troubleshooting"),
+            sub_item_table_func = function()
+                return self:_buildTroubleshootingMenu()
+            end,
+        })
+    end
+
     -- Updates
     table.insert(menu, {
         text = _("Updates"),
@@ -1322,6 +1383,87 @@ function LocalSend:_buildMainMenu()
         end,
     })
 
+    return menu
+end
+
+function LocalSend:_buildTroubleshootingMenu()
+    local menu = {
+        {
+            text = _("Run diagnostics"),
+            callback = function()
+                self:showDiagnostics()
+            end,
+            help_text = _("Collect LocalSend plugin, network, server, and recent log information " ..
+                "without changing Wi-Fi state."),
+        },
+        {
+            text = _("Show network info"),
+            callback = function()
+                self:showNetworkInfo()
+            end,
+        },
+        {
+            text = _("Show server status"),
+            callback = function()
+                self:showServerStatus()
+            end,
+        },
+        {
+            text = _("Show recent LocalSend log"),
+            callback = function()
+                self:showRecentBackendLog()
+            end,
+        },
+        {
+            text = _("Prepare bug report"),
+            callback = function()
+                self:showBugReportInfo()
+            end,
+            separator = true,
+        },
+        {
+            text = _("Common fixes"),
+            sub_item_table = {
+                {
+                    text = _("Restart LocalSend server"),
+                    callback = function()
+                        self:restart()
+                    end,
+                },
+                {
+                    text = _("Rotate certificates"),
+                    callback = function()
+                        self:rotateCertificates()
+                    end,
+                },
+                {
+                    text = _("Use HTTPS"),
+                    checked_func = function() return self.use_https end,
+                    callback = function()
+                        self.use_https = not self.use_https
+                        _G.G_reader_settings:flipNilOrTrue("LocalSend_use_https")
+                    end,
+                    help_text = _("Disable temporarily if another LocalSend app cannot connect over HTTPS."),
+                },
+                {
+                    text = _("Enable WebRTC Support (Experimental)"),
+                    checked_func = function() return self.use_webrtc end,
+                    callback = function()
+                        self.use_webrtc = not self.use_webrtc
+                        _G.G_reader_settings:flipNilOrFalse("LocalSend_use_webrtc")
+                    end,
+                    help_text = _("Disable temporarily if startup or discovery fails while WebRTC signaling " ..
+                        "is enabled."),
+                },
+                {
+                    text = _("Check for updates / reinstall"),
+                    callback = function()
+                        self:checkForUpdates()
+                    end,
+                },
+            },
+        },
+    }
     return menu
 end
 

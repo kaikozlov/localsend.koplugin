@@ -44,6 +44,7 @@ local TMP_FILES = {
     "/tmp/localsend_send.pid",
     "/tmp/localsend_send.out",
     "/tmp/localsend_scan.json",
+    "/tmp/localsend_server.out",
 }
 
 describe("deletePluginSettings", function()

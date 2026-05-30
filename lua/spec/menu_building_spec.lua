@@ -262,6 +262,7 @@ describe("Menu Building", function()
             local found_transfers = false
             local found_save_dir = false
             local found_settings = false
+            local found_troubleshooting = false
             local found_updates = false
             local found_about = false
 
@@ -278,6 +279,8 @@ describe("Menu Building", function()
                 elseif item.text then
                     if item.text == "Settings" then
                         found_settings = true
+                    elseif item.text == "Troubleshooting" then
+                        found_troubleshooting = true
                     elseif item.text == "Updates" then
                         found_updates = true
                     elseif item.text == "About LocalSend" then
@@ -290,8 +293,24 @@ describe("Menu Building", function()
             assert.is_true(found_transfers, "Should have recent transfers")
             assert.is_true(found_save_dir, "Should have save directory")
             assert.is_true(found_settings, "Should have settings submenu")
+            assert.is_true(found_troubleshooting, "Should have troubleshooting submenu")
             assert.is_true(found_updates, "Should have updates submenu")
             assert.is_true(found_about, "Should have about menu item")
+        end)
+
+        it("builds troubleshooting submenu with diagnostics and common fixes", function()
+            local instance = helper.create_instance()
+
+            local troubleshooting_menu = instance:_buildTroubleshootingMenu()
+
+            assert.is_table(troubleshooting_menu)
+            assert.equals("Run diagnostics", troubleshooting_menu[1].text)
+            assert.equals("Show network info", troubleshooting_menu[2].text)
+            assert.equals("Show server status", troubleshooting_menu[3].text)
+            assert.equals("Show recent LocalSend log", troubleshooting_menu[4].text)
+            assert.equals("Prepare bug report", troubleshooting_menu[5].text)
+            assert.equals("Common fixes", troubleshooting_menu[6].text)
+            assert.is_table(troubleshooting_menu[6].sub_item_table)
         end)
 
         it("builds updates submenu with version, manual check, and auto-check", function()
