@@ -312,7 +312,8 @@ function M.buildExtensionRoutingMenu(instance)
                 deps.G_reader_settings:flipNilOrFalse("LocalSend_routing_accept_all")
             end,
             help_text = deps._(
-                "When enabled, files without a specific route are saved to the main " .. "save directory. When disabled, only routed file types are accepted."
+                "When enabled, files without a specific route are saved to the main "
+                    .. "save directory. When disabled, only routed file types are accepted."
             ),
         })
     end

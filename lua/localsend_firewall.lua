@@ -241,7 +241,12 @@ function M.selfTestFirewall(port, use_webrtc)
     local close_result = M.closeFirewall(port)
 
     local ok = open_result.ok and check_result.ok and close_result.ok
-    local detail = "open: " .. tostring(open_result.detail) .. "; verify: " .. tostring(check_result.detail) .. "; close: " .. tostring(close_result.detail)
+    local detail = "open: "
+        .. tostring(open_result.detail)
+        .. "; verify: "
+        .. tostring(check_result.detail)
+        .. "; close: "
+        .. tostring(close_result.detail)
     return {
         managed = true,
         ok = ok,

@@ -160,7 +160,8 @@ function LocalSend:init()
 
     -- Auto update check settings
     self.auto_update_check = G_reader_settings:nilOrTrue("LocalSend_auto_update_check")
-    self.update_check_interval_hours = G_reader_settings:readSetting("LocalSend_update_check_interval_hours") or constants.DEFAULT_UPDATE_CHECK_INTERVAL_HOURS
+    self.update_check_interval_hours = G_reader_settings:readSetting("LocalSend_update_check_interval_hours")
+        or constants.DEFAULT_UPDATE_CHECK_INTERVAL_HOURS
     self.last_update_check = G_reader_settings:readSetting("LocalSend_last_update_check") or 0
     self.update_available_tag = G_reader_settings:readSetting("LocalSend_update_available_tag") or ""
 
@@ -1627,7 +1628,12 @@ function LocalSend:_buildUpdatesMenu()
 end
 
 function LocalSend:onDispatcherRegisterActions()
-    Dispatcher:registerAction("toggle_localsend_server", { category = "none", event = "ToggleLocalSend", title = _("Toggle LocalSend server"), general = true })
+    Dispatcher:registerAction("toggle_localsend_server", {
+        category = "none",
+        event = "ToggleLocalSend",
+        title = _("Toggle LocalSend server"),
+        general = true,
+    })
     Dispatcher:registerAction(
         "send_file_localsend",
         { category = "none", event = "ShowLocalSendFileSendFlow", title = _("LocalSend: send file"), general = true }

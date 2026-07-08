@@ -185,8 +185,20 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     local tmp_extract = update_cache .. "/extract"
 
     -- Download the zip
-    local cmd =
-        deps.util.shell_escape({ "curl", "-L", "-s", "-o", tmp_zip, "-w", "%{http_code}", "--connect-timeout", "30", "--max-time", "120", download_url })
+    local cmd = deps.util.shell_escape({
+        "curl",
+        "-L",
+        "-s",
+        "-o",
+        tmp_zip,
+        "-w",
+        "%{http_code}",
+        "--connect-timeout",
+        "30",
+        "--max-time",
+        "120",
+        download_url,
+    })
 
     local handle = io.popen(cmd)
     if not handle then
