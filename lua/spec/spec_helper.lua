@@ -252,6 +252,17 @@ end
 local plugin_prepared = false
 function M.prepare_plugin()
     if plugin_prepared then
+        -- A prior spec may have removed the shim binary (e.g. binary_check_spec
+        -- exercises the missing-binary path). main.lua refuses to load without
+        -- it, so re-materialise whenever it's gone rather than assuming the
+        -- one-shot install survived the whole suite.
+        local bin = M.runtime_plugin_dir() .. "/localsend"
+        local f = io.open(bin, "r")
+        if f then
+            f:close()
+        else
+            M.prepare_runtime_plugin()
+        end
         return
     end
     M.prepare_runtime_plugin()
@@ -297,6 +308,14 @@ function M.reset_localsend_state()
     s.send_cancelled = false
     s.server_op_id = 0
     s.stop_in_progress = false
+    -- Fields the reset above missed. telemetry_cleaned gates a once-per-session
+    -- init in main.lua; without clearing it the first spec to flip it sticks it
+    -- on for the rest of the suite. last_send / scan_start_time are set at
+    -- runtime and also leak across specs. (polling_generation is intentionally
+    -- not touched — it is deprecated and caching_spec asserts it stays nil.)
+    s.telemetry_cleaned = false
+    s.last_send = nil
+    s.scan_start_time = nil
 end
 
 local SETTING_PREFIX = "LocalSend_"
@@ -429,9 +448,22 @@ end
 function M.install_capture_logger()
     local cap = new_capture_logger()
     cap.setLevel = function() end
+    -- Save the real logger so restore_capture_logger can put it back. Leaked
+    -- capture loggers stick in package.loaded (busted is single-process) and
+    -- silently swallow log output from every later spec file.
+    if not M._saved_real_logger then
+        M._saved_real_logger = package.loaded["logger"]
+    end
     package.loaded["logger"] = cap
     M.capture_logger = cap
     return cap
+end
+
+function M.restore_capture_logger()
+    if M._saved_real_logger then
+        package.loaded["logger"] = M._saved_real_logger
+        M.capture_logger = nil
+    end
 end
 
 -- =============================================================================

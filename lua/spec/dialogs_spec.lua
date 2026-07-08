@@ -10,22 +10,48 @@ local ffiUtil = require("ffi/util")
 
 describe("Dialog Functions", function()
     local DOCS, NEWDIR
+    -- lock_home_folder / home_dir are KOReader globals (not LocalSend_*) read by
+    -- localsend_dialogs.lua. getPickerStartPath tests write them through the
+    -- settings proxy into the real G_reader_settings, and before_each only clears
+    -- LocalSend_* keys — so save/restore them ourselves to avoid leaking into
+    -- later specs (e.g. filepicker behaviour elsewhere).
+    local orig_lock_home_folder, orig_home_dir
+
+    local function _restore_home_settings()
+        if orig_lock_home_folder == nil then
+            G_reader_settings:delSetting("lock_home_folder")
+        else
+            G_reader_settings:saveSetting("lock_home_folder", orig_lock_home_folder)
+        end
+        if orig_home_dir == nil then
+            G_reader_settings:delSetting("home_dir")
+        else
+            G_reader_settings:saveSetting("home_dir", orig_home_dir)
+        end
+    end
 
     setup(function()
         helper.setup_complete()
         DOCS = get_test_data_dir() .. "/docs"
         NEWDIR = get_test_data_dir() .. "/newdir"
         util.makePath(DOCS)
+        orig_lock_home_folder = G_reader_settings:readSetting("lock_home_folder")
+        orig_home_dir = G_reader_settings:readSetting("home_dir")
     end)
 
     teardown(function()
         pcall(ffiUtil.purgeDir, DOCS)
         pcall(ffiUtil.purgeDir, NEWDIR)
+        _restore_home_settings()
     end)
 
     before_each(function()
         helper.before_each()
         pcall(ffiUtil.purgeDir, NEWDIR)
+    end)
+
+    after_each(function()
+        _restore_home_settings()
     end)
 
     describe("showSaveDirPicker", function()

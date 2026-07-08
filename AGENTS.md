@@ -61,7 +61,7 @@ lua/
 ├── main.lua                # Entry, menu, lifecycle
 ├── localsend_state.lua     # ServerState (session-level state)
 ├── localsend_server.lua    # Process management
-├── localsend_firewall.lua  # Kindle iptables (no-op on other devices)
+├── localsend_firewall.lua  # iptables rules when binary available, else no-op
 ├── localsend_update.lua    # OTA updates
 └── spec/                   # Tests (busted)
 ```
@@ -137,14 +137,17 @@ type RecvSession struct {
 
 ## Kindle-Specific
 
-- **Firewall**: `localsend_firewall.lua` manages iptables (no-op elsewhere)
+- **Firewall**: `localsend_firewall.lua` manages iptables rules whenever the `iptables` binary is available (gated on `command -v iptables`, not device type) — otherwise it no-ops
 - **Telemetry**: `fm-out-*` files fill 64MB tmpfs; cleared via `clearTmpTelemetryFiles()`
 
 ## Testing
 
 Lua tests run inside the koplugin-dev Docker container against a **real, headless
-KOReader** — no KOReader module is mocked. Specs `require()` the real `UIManager`,
-`Device`, `util`, `NetworkMgr`, widgets, `G_reader_settings`, etc. directly.
+KOReader**. No whole KOReader module is stubbed — specs `require()` the real
+`UIManager`, `Device`, `util`, `NetworkMgr`, widgets, `G_reader_settings`, etc.
+directly. Where a boundary can't be reproduced on the real filesystem (offline
+network, a broken binary, a malformed transfer log), specs wrap the specific
+function with save/restore rather than stubbing a whole module.
 
 `lua/spec/spec_helper.lua` is the single shared helper. It provides:
 - `setup_complete()` / `before_each()` — materialises the installed plugin layout
@@ -156,10 +159,7 @@ KOReader** — no KOReader module is mocked. Specs `require()` the real `UIManag
 - `state.*` capture tables and `find_notification` / `find_dialog` / `find_execute_call`.
 
 `os.execute` is the only spy that does **not** call through (it is captured, not run,
-so tests never launch the receiver or touch iptables). For boundary conditions a spec
-can't reproduce on the real filesystem (offline network, a broken binary, a malformed
-transfer log), wrap the specific function with save/restore — never stub a whole
-KOReader module.
+so tests never launch the receiver or touch iptables).
 
 Available globals from `commonrequire.lua` (container environment):
 ```lua

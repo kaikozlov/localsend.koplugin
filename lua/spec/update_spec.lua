@@ -12,6 +12,7 @@ describe("Self-Update", function()
     local orig_pathExists, orig_readFromFile, orig_json_decode, orig_io_open, orig_io_popen
     local NetworkMgr = require("ui/network/manager")
     local orig_isOnline, orig_isConnected, orig_runWhenOnline
+    local orig_textviewer
 
     setup(function()
         helper.setup_complete()
@@ -25,6 +26,11 @@ describe("Self-Update", function()
         orig_isOnline = NetworkMgr.isOnline
         orig_isConnected = NetworkMgr.isConnected
         orig_runWhenOnline = NetworkMgr.runWhenOnline
+        -- package.loaded["ui/widget/textviewer"] is replaced in several it blocks
+        -- below to fake the release-notes viewer. Capture the real module so we can
+        -- restore it both after every test (after_each) and at file teardown —
+        -- busted is single-process, so a leak here poisons diagnostics_spec.
+        orig_textviewer = package.loaded["ui/widget/textviewer"]
     end)
 
     teardown(function()
@@ -36,6 +42,14 @@ describe("Self-Update", function()
         NetworkMgr.isOnline = orig_isOnline
         NetworkMgr.isConnected = orig_isConnected
         NetworkMgr.runWhenOnline = orig_runWhenOnline
+        package.loaded["ui/widget/textviewer"] = orig_textviewer
+        helper.restore_capture_logger()
+    end)
+
+    after_each(function()
+        -- Each it block that fakes the viewer must not leave the fake behind for
+        -- the next test; restore the real TextViewer unconditionally.
+        package.loaded["ui/widget/textviewer"] = orig_textviewer
     end)
 
     before_each(function()
