@@ -16,8 +16,9 @@ IMAGE := ghcr.io/kaikozlov/koplugin-dev:$(KOPLUGIN_DEV_VERSION)
 # SDL dummy driver for headless KOReader (real device/UIManager support)
 SDL_ENV := -e SDL_VIDEODRIVER=dummy
 
-# Mount current repo as /opt/plugin
-MOUNT := -v "$(PWD)":/opt/plugin -e PLUGIN_NAME=$(PLUGIN_NAME)
+# Mount current repo as /opt/plugin. Lua plugin source lives in /opt/plugin/lua;
+# expose that as PLUGIN_PATH so native PluginLoader tests exercise the real plugin.
+MOUNT := -v "$(PWD)":/opt/plugin -e PLUGIN_NAME=$(PLUGIN_NAME) -e PLUGIN_PATH=/opt/plugin/lua
 
 # Persist Go module/build caches across ephemeral docker run --rm containers.
 # Without these volumes, every test run redownloads modules into /root/go/pkg/mod
@@ -44,7 +45,7 @@ setup: ## Pull the koplugin-dev image and install git hooks
 # =============================================================================
 
 .PHONY: test
-test: test-lua test-go ## Run all tests
+test: test-lua test-go-race test-go-integration ## Run all tests in Docker
 
 .PHONY: test-lua
 test-lua: ## Run Lua tests (excludes e2e)
@@ -66,6 +67,14 @@ test-e2e: ## Run only e2e tests
 		--filter=e2e \
 		/opt/plugin/lua/spec/
 
+.PHONY: test-lua-filter
+test-lua-filter: ## Run Lua tests matching FILTER="pattern"
+	@test -n "$(FILTER)" || (echo 'Usage: make test-lua-filter FILTER="pattern"' >&2; exit 2)
+	$(RUN) busted-koreader --verbose \
+		--helper=/opt/koplugin-dev/commonrequire.lua \
+		--filter="$(FILTER)" \
+		/opt/plugin/lua/spec/
+
 .PHONY: test-go
 test-go: ## Run Go tests
 	$(RUN) sh -c 'cd /opt/plugin && go test ./... -v -count=1'
@@ -75,8 +84,8 @@ test-go-race: ## Run Go tests with race detector
 	$(RUN) sh -c 'cd /opt/plugin && go test ./... -race -v -count=1'
 
 .PHONY: test-go-integration
-test-go-integration: ## Run Go integration tests
-	$(RUN) sh -c 'cd /opt/plugin && go test ./internal/localsend/... -tags=integration -v -count=1'
+test-go-integration: ## Run Go integration tests with race detector
+	$(RUN) sh -c 'cd /opt/plugin && go test ./internal/localsend/... -tags=integration -race -v -count=1'
 
 # =============================================================================
 # Linting

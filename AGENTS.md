@@ -20,37 +20,29 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o localsend    
 
 ## Test Commands
 
-### Docker-based (recommended, uses real KOReader runtime)
+### Docker-only (uses real KOReader runtime)
+
+All project test entry points run inside the `koplugin-dev` Docker image. Do not
+run host `go test` or host `busted`; that bypasses the KOReader runtime and lets
+machine-specific toolchains hide bugs.
 
 ```bash
 make setup              # One-time: pull koplugin-dev image
-make test               # All Lua + Go tests
+make test               # All Lua + Go tests in Docker
 make test-lua           # Lua tests via busted-koreader (real KOReader)
-make test-go            # Go tests
-make test-go-race       # Go tests with race detector
-make test-go-integration # Go integration tests
-make lint               # luacheck + golangci-lint
-make fmt                # stylua + go fmt
+make test-lua-filter FILTER="pattern"  # Focused Lua run in Docker
+make test-go            # Go tests in Docker
+make test-go-race       # Go tests with race detector in Docker
+make test-go-integration # Go integration tests in Docker
+make lint               # luacheck + golangci-lint in Docker
+make fmt                # stylua + go fmt in Docker
 make shell              # Interactive container shell
 make help               # List all targets
+./test.sh               # Docker-only wrapper for make test
 ```
 
 Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.03_4` — contains real KOReader Linux runtime.
 Bump `KOPLUGIN_DEV_VERSION` in Makefile when the image updates.
-
-### Local (no Docker required)
-
-```bash
-./test.sh                    # All tests (Go + Lua) with race detector
-./test.sh --verbose          # Show all output
-
-go test ./... -race -count=1                                    # Go unit tests
-go test ./internal/localsend/... -tags=integration -count=1    # Go integration tests
-go test ./internal/localsend/recv -run TestName -count=1       # Single test
-
-cd lua && busted spec/                  # Lua tests (requires local Lua/busted)
-cd lua && busted spec/some_spec.lua     # Single Lua test
-```
 
 ## Architecture
 

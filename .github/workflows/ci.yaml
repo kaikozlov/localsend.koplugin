@@ -7,26 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  test-go:
-    name: Go Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.26.5"
-          cache: true
-
-      - name: Run unit tests with race detector
-        run: go test ./... -race -v -count=1
-
-      - name: Run integration tests with race detector
-        run: go test ./internal/localsend/... -tags=integration -race -v -count=1
-
-  test-lua:
-    name: Lua Tests
+  test:
+    name: Docker Test Suite
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -34,12 +16,5 @@ jobs:
       - name: Pull koplugin-dev image
         run: docker pull ghcr.io/kaikozlov/koplugin-dev:v2026.03_4
 
-      - name: Run Lua tests
-        run: |
-          docker run --rm \
-            -v "$PWD":/opt/plugin \
-            -e PLUGIN_NAME=localsend \
-            ghcr.io/kaikozlov/koplugin-dev:v2026.03_4 \
-            busted-koreader --verbose \
-              --helper=/opt/koplugin-dev/commonrequire.lua \
-              /opt/plugin/lua/spec/
+      - name: Run all tests in koplugin-dev
+        run: make test
