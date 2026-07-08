@@ -174,6 +174,16 @@ describe("deletePluginSettings", function()
             ss.server_op_id = 42
             ss.discovered_devices = { "device1" }
             ss.stop_in_progress = true
+            -- Populate every runtime-added field too. A prior version of this
+            -- test skipped these, so it couldn't catch a regression that dropped
+            -- them from deletePluginSettings (they were in fact missing — see
+            -- the fix that added them). Seed them so the assertion below is
+            -- actually meaningful.
+            ss.telemetry_cleaned = true
+            ss.last_send = { success = true, message = "sent", time = 12345 }
+            ss.scan_start_time = 99
+            ss.scan_in_progress = true
+            ss.send_in_progress = true
 
             instance:deletePluginSettings()
 
@@ -191,6 +201,8 @@ describe("deletePluginSettings", function()
             assert.is_false(ss.send_cancelled)
             assert.are.equal(0, ss.server_op_id)
             assert.is_false(ss.stop_in_progress)
+            assert.is_nil(ss.last_send, "last_send should be cleared")
+            assert.is_nil(ss.scan_start_time, "scan_start_time should be cleared")
         end)
     end)
 

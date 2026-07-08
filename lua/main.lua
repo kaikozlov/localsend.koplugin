@@ -584,6 +584,11 @@ function LocalSend:deletePluginSettings()
         ServerState.send_cancelled = false
         ServerState.server_op_id = 0
         ServerState.stop_in_progress = false
+        -- Runtime-added fields: set by the sender / discovery flow during a
+        -- transfer or scan. Must be cleared too, else a user who deletes all
+        -- settings mid-send keeps stale send metadata for the rest of the session.
+        ServerState.last_send = nil
+        ServerState.scan_start_time = nil
     end
 
     -- 6. Reset cross-plugin visibility

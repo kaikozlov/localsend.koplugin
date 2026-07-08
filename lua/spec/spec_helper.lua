@@ -181,6 +181,7 @@ function M.restore_spies()
     os.remove = saved.remove
     util.removeFile = saved.removeFile
     ffiUtil.purgeDir = saved.purgeDir
+    io.popen = saved.popen
 end
 
 -- Back-compat shims that the old helper exposed.
@@ -286,6 +287,17 @@ local function reset_loaded_plugin_modules()
         "localsend_state",
     }) do
         package.loaded[name] = nil
+    end
+    -- Neutralise clearTmpTelemetryFiles so require("main") init doesn't shell out
+    -- `ls -1 /tmp/` (and really os.remove any fm-out-* files) on every spec. The
+    -- real io.popen/os.remove there are unspyed by install_spies, which is an
+    -- uncontrolled side effect we don't want in the suite. The original is kept
+    -- so a spec that wants to exercise it (update_spec's clearTmpTelemetryFiles
+    -- test) can restore it via M.real_clearTmpTelemetryFiles.
+    local ok, upd = pcall(require, "localsend_update")
+    if ok and upd then
+        M.real_clearTmpTelemetryFiles = upd.clearTmpTelemetryFiles
+        upd.clearTmpTelemetryFiles = function() end
     end
 end
 
@@ -398,7 +410,10 @@ function M.setup_complete(opts)
     M.prepare_plugin()
     M.reset_state()
     M.reset_settings()
-    M.reset_localsend_state()
+    -- reset_localsend_state() is intentionally omitted here: reset_loaded_plugin_modules()
+    -- nils package.loaded["localsend_state"], so the next require("main") builds a fresh
+    -- ServerState from the module's default table anyway. The reset is meaningful only in
+    -- load_via_filemanager(), which does NOT nil the module.
     reset_loaded_plugin_modules()
     M.install_spies(opts)
     M._execute_handler = nil
@@ -416,7 +431,8 @@ end
 function M.before_each()
     M.reset_state()
     M.reset_settings()
-    M.reset_localsend_state()
+    -- reset_localsend_state() omitted for the same reason as setup_complete:
+    -- the module nil below yields a fresh ServerState on the next require.
     reset_loaded_plugin_modules()
     M.install_spies()
     M._execute_handler = nil

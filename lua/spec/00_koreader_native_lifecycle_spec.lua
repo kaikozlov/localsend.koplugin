@@ -63,17 +63,28 @@ describe("LocalSend native KOReader lifecycle", function()
         local first, first_fm = helper.load_via_filemanager()
         current_fm = first_fm
         local state = require("localsend_state").ServerState
-        assert.is_true(state.telemetry_cleaned)
+        -- telemetry_cleaned is set during real init; confirm the first instance
+        -- actually flipped it (not just that the field exists).
+        assert.is_true(state.telemetry_cleaned,
+            "real PluginLoader init should have run clearTmpTelemetryFiles guard")
+
+        -- Mutate state the way the running plugin would, then recreate the
+        -- widget instance (as KOReader does on a view switch) WITHOUT reloading
+        -- the module. ServerState is module-level, so it must survive.
         state.transfer_count = 7
+        state.user_stopped = true
 
         helper.close_filemanager(first_fm)
         current_fm = nil
 
         local LocalSend = require("main")
         local second = LocalSend:new({ ui = { menu = { registerToMainMenu = function() end } } })
-        local same_state = require("localsend_state").ServerState
-        assert.is_true(same_state == state)
-        assert.are.equal(7, same_state.transfer_count)
+        assert.is_truthy(second, "second instance should instantiate")
+        -- Same table identity (module-level state, not per-instance).
+        assert.are.equal(state, require("localsend_state").ServerState)
+        -- And the values the first instance wrote must persist to the second.
+        assert.are.equal(7, second._ServerState.transfer_count)
+        assert.is_true(second._ServerState.user_stopped)
         second:onCloseWidget()
     end)
 end)

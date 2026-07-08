@@ -316,28 +316,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     os.execute(deps.util.shell_escape({ "chmod", "+x", plugin_path .. "/localsend" }))
 
     -- Remove orphaned lua files (files that exist locally but not in the update)
-    -- Only do this if copy succeeded to avoid leaving plugin in broken state
-    -- Never remove critical files needed for recovery and versioning
-    local protected_files = { ["main.lua"] = true, ["localsend_update.lua"] = true, ["localsend_utils.lua"] = true, ["_meta.lua"] = true }
-    -- Safety check: don't cleanup if tracking failed (new_lua_files is empty)
-    local has_tracked_files = next(new_lua_files) ~= nil
-    if not copy_failed and has_tracked_files then
-        local old_ls_handle = io.popen("ls " .. deps.util.shell_escape({ plugin_path }) .. "/*.lua 2>/dev/null")
-        if old_ls_handle then
-            for old_file in old_ls_handle:lines() do
-                local _, filename = deps.util.splitFilePathName(old_file)
-                if filename and not new_lua_files[filename] and not protected_files[filename] then
-                    local rm_ok = deps.util.removeFile(plugin_path .. "/" .. filename)
-                    if rm_ok then
-                        deps.logger.dbg("[LocalSend] Removed orphaned file:", filename)
-                    else
-                        deps.logger.warn("[LocalSend] Failed to remove orphaned file:", filename)
-                    end
-                end
-            end
-            old_ls_handle:close()
-        end
-    end
+    M.cleanupOrphanedLuaFiles(plugin_path, new_lua_files, copy_failed)
 
     -- Cleanup cache directory
     M.cleanupCache()
@@ -381,6 +360,51 @@ function M.performUpdate(instance, download_url, asset_name, new_version, plugin
     deps.UIManager:scheduleIn(0.5, function()
         M.doPerformUpdate(instance, download_url, asset_name, new_version, plugin_path)
     end)
+end
+
+-- Remove lua files from plugin_path that aren't part of the update package
+-- (orphans left behind by a prior version). Extracted from doPerformUpdate so it
+-- can be unit-tested without a real download.
+--
+-- Safety: never remove critical files needed for recovery/versioning, and skip
+-- cleanup entirely if the copy failed or we have no tracked files (avoids wiping
+-- the plugin dir on a broken update).
+--
+-- @param plugin_path string Plugin directory to clean
+-- @param new_lua_files table Set ({filename=true}) of lua files shipped in the update
+-- @param copy_failed boolean True if the update copy step failed
+-- @return table List of orphan filenames that were removed
+function M.cleanupOrphanedLuaFiles(plugin_path, new_lua_files, copy_failed)
+    local protected_files = {
+        ["main.lua"] = true,
+        ["localsend_update.lua"] = true,
+        ["localsend_utils.lua"] = true,
+        ["_meta.lua"] = true,
+    }
+    local removed = {}
+    -- Safety check: don't cleanup if tracking failed (new_lua_files is empty)
+    local has_tracked_files = next(new_lua_files) ~= nil
+    if copy_failed or not has_tracked_files then
+        return removed
+    end
+    local old_ls_handle = io.popen("ls " .. deps.util.shell_escape({ plugin_path }) .. "/*.lua 2>/dev/null")
+    if not old_ls_handle then
+        return removed
+    end
+    for old_file in old_ls_handle:lines() do
+        local _, filename = deps.util.splitFilePathName(old_file)
+        if filename and not new_lua_files[filename] and not protected_files[filename] then
+            local rm_ok = deps.util.removeFile(plugin_path .. "/" .. filename)
+            if rm_ok then
+                table.insert(removed, filename)
+                deps.logger.dbg("[LocalSend] Removed orphaned file:", filename)
+            else
+                deps.logger.warn("[LocalSend] Failed to remove orphaned file:", filename)
+            end
+        end
+    end
+    old_ls_handle:close()
+    return removed
 end
 
 -- Calculate seconds until next update check

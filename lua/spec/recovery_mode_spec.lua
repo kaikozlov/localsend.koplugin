@@ -1,5 +1,7 @@
 require("busted.runner")()
 local helper = require("spec.spec_helper")
+local util = require("util")
+local ffiUtil = require("ffi/util")
 
 -- Tests for recovery mode functionality
 
@@ -299,10 +301,18 @@ end)
 -- =======================================================================
 -- Protected files in update cleanup
 -- =======================================================================
+-- These tests drive the REAL localsend_update.cleanupOrphanedLuaFiles().
+-- We can't rely on real files because the Docker container's io.open (Lua) and
+-- io.popen("ls ...") (subprocess) see different filesystem views — files written
+-- via io.open are often invisible to the `ls` subprocess the production code
+-- shells out to. So instead we spy io.popen to feed a controlled old-file list,
+-- and assert on what util.removeFile gets called with (captured, not run, by the
+-- helper spy).
 describe("Update orphan cleanup", function()
     local lsupdate
     local deps_mock
-    local removed_files
+    local old_files_on_disk
+    local real_io_popen
 
     setup(function()
         helper.setup_complete()
@@ -310,19 +320,10 @@ describe("Update orphan cleanup", function()
 
     before_each(function()
         helper.before_each()
-        removed_files = {}
+        old_files_on_disk = {}
 
-        -- Mock os.remove to track what gets deleted
-        _G.os.remove = function(path)
-            table.insert(removed_files, path)
-            return true
-        end
-
-        -- Load the update module
         package.loaded["localsend_update"] = nil
         lsupdate = require("localsend_update")
-
-        -- Initialize with mocked dependencies
         deps_mock = {
             UIManager = require("ui/uimanager"),
             InfoMessage = require("ui/widget/infomessage"),
@@ -339,148 +340,134 @@ describe("Update orphan cleanup", function()
             G_reader_settings = G_reader_settings,
         }
         lsupdate.init(deps_mock)
+
+        -- Spy io.popen so cleanupOrphanedLuaFiles iterates a file list WE control
+        -- (the production function does `io.popen("ls <dir>/*.lua")`). Only the
+        -- `ls .../*.lua` call is faked; everything else passes through.
+        real_io_popen = io.popen
+        io.popen = function(cmd, ...)
+            if type(cmd) == "string" and cmd:match("ls .*%*%.lua") then
+                local files = {}
+                for _, f in ipairs(old_files_on_disk) do
+                    table.insert(files, "/fake/plugin/" .. f)
+                end
+                local idx = 0
+                local function iter()
+                    idx = idx + 1
+                    return files[idx]
+                end
+                -- Lua's generic for: `for v in handle:lines() do` calls lines()
+                -- once to get an iterator, then calls that iterator each pass.
+                return {
+                    lines = function()
+                        return iter
+                    end,
+                    close = function() end,
+                }
+            end
+            return real_io_popen(cmd, ...)
+        end
     end)
 
-    describe("protected files list", function()
-        it("should never delete main.lua during cleanup", function()
-            -- Simulate update where main.lua is NOT in the new package
-            -- (which shouldn't happen, but we're testing protection)
-            local plugin_path = "/tmp/test_plugin"
-            local new_lua_files = { ["other.lua"] = true }
-            local protected_files = { ["main.lua"] = true, ["localsend_update.lua"] = true, ["localsend_utils.lua"] = true }
+    after_each(function()
+        io.popen = real_io_popen
+    end)
 
-            -- Simulate cleanup logic
-            local old_files = { "main.lua", "other.lua", "orphan.lua" }
-            for _, filename in ipairs(old_files) do
-                if not new_lua_files[filename] and not protected_files[filename] then
-                    os.remove(plugin_path .. "/" .. filename)
-                end
+    -- Helper: was a given filename removed (captured by the util.removeFile spy)?
+    local function was_removed(filename)
+        for _, path in ipairs(helper.state.removed_files) do
+            if path:match("/" .. filename .. "$") then
+                return true
             end
+        end
+        return false
+    end
 
-            -- Check that main.lua was NOT removed
-            local main_removed = false
-            for _, path in ipairs(removed_files) do
-                if path:match("main%.lua") then
-                    main_removed = true
-                    break
-                end
-            end
-            assert.is_false(main_removed, "main.lua should never be deleted")
+    describe("protected files are never deleted", function()
+        it("keeps main.lua even when absent from the update package", function()
+            -- plugin has main.lua + orphan.lua on disk; update ships neither.
+            -- main.lua is protected, orphan.lua is a real orphan to remove.
+            -- (update.lua ships at least one file so tracking is non-empty.)
+            old_files_on_disk = { "main.lua", "orphan.lua", "shipped.lua" }
+            local new_lua_files = { ["shipped.lua"] = true }
+
+            lsupdate.cleanupOrphanedLuaFiles("/fake/plugin", new_lua_files, false)
+
+            assert.is_false(was_removed("main.lua"), "main.lua must never be deleted")
+            assert.is_true(was_removed("orphan.lua"), "orphan.lua should be deleted")
         end)
 
-        it("should never delete localsend_update.lua during cleanup", function()
-            local plugin_path = "/tmp/test_plugin"
-            local new_lua_files = { ["other.lua"] = true }
-            local protected_files = { ["main.lua"] = true, ["localsend_update.lua"] = true, ["localsend_utils.lua"] = true }
+        it("keeps localsend_update.lua (needed to finish the update)", function()
+            old_files_on_disk = { "localsend_update.lua", "orphan.lua", "shipped.lua" }
+            local new_lua_files = { ["shipped.lua"] = true }
 
-            local old_files = { "localsend_update.lua", "other.lua", "orphan.lua" }
-            for _, filename in ipairs(old_files) do
-                if not new_lua_files[filename] and not protected_files[filename] then
-                    os.remove(plugin_path .. "/" .. filename)
-                end
-            end
+            lsupdate.cleanupOrphanedLuaFiles("/fake/plugin", new_lua_files, false)
 
-            local update_removed = false
-            for _, path in ipairs(removed_files) do
-                if path:match("localsend_update%.lua") then
-                    update_removed = true
-                    break
-                end
-            end
-            assert.is_false(update_removed, "localsend_update.lua should never be deleted")
+            assert.is_false(was_removed("localsend_update.lua"))
+            assert.is_true(was_removed("orphan.lua"))
         end)
 
-        it("should never delete localsend_utils.lua during cleanup", function()
-            local plugin_path = "/tmp/test_plugin"
-            local new_lua_files = { ["other.lua"] = true }
-            local protected_files = { ["main.lua"] = true, ["localsend_update.lua"] = true, ["localsend_utils.lua"] = true }
+        it("keeps localsend_utils.lua", function()
+            old_files_on_disk = { "localsend_utils.lua", "orphan.lua", "shipped.lua" }
+            local new_lua_files = { ["shipped.lua"] = true }
 
-            local old_files = { "localsend_utils.lua", "other.lua", "orphan.lua" }
-            for _, filename in ipairs(old_files) do
-                if not new_lua_files[filename] and not protected_files[filename] then
-                    os.remove(plugin_path .. "/" .. filename)
-                end
-            end
+            lsupdate.cleanupOrphanedLuaFiles("/fake/plugin", new_lua_files, false)
 
-            local utils_removed = false
-            for _, path in ipairs(removed_files) do
-                if path:match("localsend_utils%.lua") then
-                    utils_removed = true
-                    break
-                end
-            end
-            assert.is_false(utils_removed, "localsend_utils.lua should never be deleted")
+            assert.is_false(was_removed("localsend_utils.lua"))
+            assert.is_true(was_removed("orphan.lua"))
         end)
 
-        it("should delete non-protected orphan files", function()
-            local plugin_path = "/tmp/test_plugin"
-            local new_lua_files = { ["new_module.lua"] = true }
-            local protected_files = { ["main.lua"] = true, ["localsend_update.lua"] = true, ["localsend_utils.lua"] = true }
+        it("keeps _meta.lua", function()
+            old_files_on_disk = { "_meta.lua", "orphan.lua", "shipped.lua" }
+            local new_lua_files = { ["shipped.lua"] = true }
 
-            local old_files = { "main.lua", "old_module.lua", "deprecated.lua" }
-            for _, filename in ipairs(old_files) do
-                if not new_lua_files[filename] and not protected_files[filename] then
-                    os.remove(plugin_path .. "/" .. filename)
-                end
-            end
+            lsupdate.cleanupOrphanedLuaFiles("/fake/plugin", new_lua_files, false)
 
-            -- Should have removed old_module.lua and deprecated.lua
-            assert.equal(2, #removed_files)
-
-            local removed_old = false
-            local removed_deprecated = false
-            for _, path in ipairs(removed_files) do
-                if path:match("old_module%.lua") then
-                    removed_old = true
-                end
-                if path:match("deprecated%.lua") then
-                    removed_deprecated = true
-                end
-            end
-            assert.is_true(removed_old, "old_module.lua should be deleted")
-            assert.is_true(removed_deprecated, "deprecated.lua should be deleted")
+            assert.is_false(was_removed("_meta.lua"))
+            assert.is_true(was_removed("orphan.lua"))
         end)
     end)
 
-    describe("cleanup timing", function()
-        it("should not delete files when copy_failed is true", function()
-            local plugin_path = "/tmp/test_plugin"
-            local new_lua_files = { ["new.lua"] = true }
-            local protected_files = { ["main.lua"] = true, ["localsend_update.lua"] = true, ["localsend_utils.lua"] = true }
-            local copy_failed = true -- Simulate failed copy
+    describe("non-protected orphans are removed", function()
+        it("deletes multiple orphan files", function()
+            old_files_on_disk = { "main.lua", "old_module.lua", "deprecated.lua", "new_module.lua" }
+            local new_lua_files = { ["main.lua"] = true, ["new_module.lua"] = true }
 
-            local old_files = { "orphan.lua" }
+            lsupdate.cleanupOrphanedLuaFiles("/fake/plugin", new_lua_files, false)
 
-            -- This is the actual logic from localsend_update.lua
-            if not copy_failed then
-                for _, filename in ipairs(old_files) do
-                    if not new_lua_files[filename] and not protected_files[filename] then
-                        os.remove(plugin_path .. "/" .. filename)
-                    end
-                end
-            end
+            assert.is_true(was_removed("old_module.lua"), "old_module.lua should be deleted")
+            assert.is_true(was_removed("deprecated.lua"), "deprecated.lua should be deleted")
+            assert.is_false(was_removed("main.lua"), "main.lua is protected")
+            assert.is_false(was_removed("new_module.lua"), "new_module.lua is in the update")
+        end)
+    end)
 
-            -- Nothing should be removed when copy failed
-            assert.equal(0, #removed_files, "Should not delete files when copy failed")
+    describe("cleanup safety", function()
+        it("does not delete anything when copy_failed is true", function()
+            old_files_on_disk = { "orphan.lua" }
+            local new_lua_files = { ["other.lua"] = true }
+
+            lsupdate.cleanupOrphanedLuaFiles("/fake/plugin", new_lua_files, true)
+
+            assert.is_false(was_removed("orphan.lua"), "must not delete on failed copy")
         end)
 
-        it("should delete orphan files when copy succeeds", function()
-            local plugin_path = "/tmp/test_plugin"
-            local new_lua_files = { ["new.lua"] = true }
-            local protected_files = { ["main.lua"] = true, ["localsend_update.lua"] = true, ["localsend_utils.lua"] = true }
-            local copy_failed = false -- Copy succeeded
+        it("does not delete anything when new_lua_files is empty (tracking failed)", function()
+            old_files_on_disk = { "orphan.lua" }
+            local new_lua_files = {}
 
-            local old_files = { "orphan.lua" }
+            lsupdate.cleanupOrphanedLuaFiles("/fake/plugin", new_lua_files, false)
 
-            if not copy_failed then
-                for _, filename in ipairs(old_files) do
-                    if not new_lua_files[filename] and not protected_files[filename] then
-                        os.remove(plugin_path .. "/" .. filename)
-                    end
-                end
-            end
+            assert.is_false(was_removed("orphan.lua"), "must not delete when no files tracked")
+        end)
 
-            assert.equal(1, #removed_files, "Should delete orphan when copy succeeds")
+        it("returns the list of removed orphans", function()
+            old_files_on_disk = { "orphan_a.lua", "orphan_b.lua", "main.lua" }
+            local new_lua_files = { ["main.lua"] = true }
+
+            local removed = lsupdate.cleanupOrphanedLuaFiles("/fake/plugin", new_lua_files, false)
+
+            assert.are.same({ "orphan_a.lua", "orphan_b.lua" }, removed)
         end)
     end)
 end)

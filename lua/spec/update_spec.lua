@@ -888,6 +888,9 @@ describe("Self-Update", function()
             end
 
             local lsupdate = require("localsend_update")
+            -- The helper stubs clearTmpTelemetryFiles to a no-op (so require("main")
+            -- init doesn't shell out during every spec); restore the real impl here.
+            lsupdate.clearTmpTelemetryFiles = helper.real_clearTmpTelemetryFiles
             lsupdate.clearTmpTelemetryFiles()
 
             -- Should have removed exactly the fm-out-* files

@@ -48,23 +48,9 @@ setup: ## Pull the koplugin-dev image and install git hooks
 test: test-lua test-go-race test-go-integration ## Run all tests in Docker
 
 .PHONY: test-lua
-test-lua: ## Run Lua tests (excludes e2e)
+test-lua: ## Run Lua tests
 	$(RUN) busted-koreader --verbose \
 		--helper=/opt/koplugin-dev/commonrequire.lua \
-		--exclude-tags=e2e \
-		/opt/plugin/lua/spec/
-
-.PHONY: test-lua-all
-test-lua-all: ## Run all Lua tests including e2e
-	$(RUN) busted-koreader --verbose \
-		--helper=/opt/koplugin-dev/commonrequire.lua \
-		/opt/plugin/lua/spec/
-
-.PHONY: test-e2e
-test-e2e: ## Run only e2e tests
-	$(RUN) busted-koreader --verbose \
-		--helper=/opt/koplugin-dev/commonrequire.lua \
-		--filter=e2e \
 		/opt/plugin/lua/spec/
 
 .PHONY: test-lua-filter
