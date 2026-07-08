@@ -10,7 +10,7 @@
 #   make shell     # drop into the container
 
 PLUGIN_NAME := localsend
-KOPLUGIN_DEV_VERSION := v2026.03_3
+KOPLUGIN_DEV_VERSION := v2026.03_4
 IMAGE := ghcr.io/kaikozlov/koplugin-dev:$(KOPLUGIN_DEV_VERSION)
 
 # SDL dummy driver for headless KOReader (real device/UIManager support)
@@ -87,11 +87,11 @@ lint: lint-lua lint-go ## Run all linters
 
 .PHONY: lint-lua
 lint-lua: ## Run luacheck
-	$(RUN) luacheck /opt/plugin/lua
+	$(RUN) sh -c 'cd /opt/plugin/lua && luacheck .'
 
 .PHONY: lint-go
 lint-go: ## Run golangci-lint
-	$(RUN) sh -c 'cd /opt/plugin && golangci-lint run'
+	$(RUN) sh -c 'cd /opt/plugin && GOTOOLCHAIN=go1.24.0 golangci-lint run'
 
 # =============================================================================
 # Formatting
