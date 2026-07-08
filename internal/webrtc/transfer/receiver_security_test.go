@@ -984,43 +984,6 @@ func TestRTCReceiver_MaxFilesPerSession_BoundaryValue(t *testing.T) {
 // PIN Verification Security Tests
 // =============================================================================
 
-// mockPeer implements a minimal mock for testing PIN verification.
-type mockPeer struct {
-	messages [][]byte
-	closed   bool
-}
-
-func (m *mockPeer) SendJSON(v interface{}) error {
-	data, _ := json.Marshal(v)
-	m.messages = append(m.messages, data)
-	return nil
-}
-
-func (m *mockPeer) SendJSONBinary(v interface{}) error {
-	return m.SendJSON(v)
-}
-
-func (m *mockPeer) SendDelimiter() error {
-	return nil
-}
-
-func (m *mockPeer) Close() error {
-	m.closed = true
-	return nil
-}
-
-// getLastResponse returns the last message sent by the peer as a parsed struct.
-func (m *mockPeer) getLastResponse() (RTCPinReceivingResponse, bool) {
-	if len(m.messages) == 0 {
-		return RTCPinReceivingResponse{}, false
-	}
-	var resp RTCPinReceivingResponse
-	if err := json.Unmarshal(m.messages[len(m.messages)-1], &resp); err != nil {
-		return RTCPinReceivingResponse{}, false
-	}
-	return resp, true
-}
-
 // TestRTCReceiver_handlePin_CorrectPIN_ReturnsOK verifies that a correct PIN
 // returns status "OK" and transitions state to stateWaitFileList.
 func TestRTCReceiver_handlePin_CorrectPIN_ReturnsOK(t *testing.T) {

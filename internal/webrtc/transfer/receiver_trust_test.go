@@ -10,6 +10,13 @@ import (
 	"localsend-cli/internal/storage"
 )
 
+func cleanupTempDir(t *testing.T, tempDir string) {
+	t.Helper()
+	if err := os.RemoveAll(tempDir); err != nil {
+		t.Errorf("Failed to remove temp dir: %v", err)
+	}
+}
+
 func TestRTCReceiver_SetTrustedStore(t *testing.T) {
 	receiver := NewRTCReceiver(nil, nil, "", "/tmp")
 
@@ -23,7 +30,7 @@ func TestRTCReceiver_SetTrustedStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer cleanupTempDir(t, tempDir)
 
 	store, err := storage.NewTrustedDeviceStore(tempDir)
 	if err != nil {
@@ -83,7 +90,7 @@ func TestRTCReceiver_TrustedStorePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer cleanupTempDir(t, tempDir)
 
 	// Create store and receiver
 	store, err := storage.NewTrustedDeviceStore(tempDir)
@@ -138,7 +145,7 @@ func TestRTCReceiver_MultipleDevicesTrust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer cleanupTempDir(t, tempDir)
 
 	store, err := storage.NewTrustedDeviceStore(tempDir)
 	if err != nil {
@@ -288,7 +295,7 @@ func TestRTCReceiver_findTrustedSender_MatchesTrustedDevice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer cleanupTempDir(t, tempDir)
 
 	// Create sender key
 	senderKey, err := crypto.GenerateKeyPair()
@@ -348,7 +355,7 @@ func TestRTCReceiver_findTrustedSender_NoMatchReturnsNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer cleanupTempDir(t, tempDir)
 
 	// Create different keys
 	senderKey, _ := crypto.GenerateKeyPair()
@@ -411,7 +418,7 @@ func TestRTCReceiver_findTrustedSender_EmptyStoreReturnsNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer cleanupTempDir(t, tempDir)
 
 	store, err := storage.NewTrustedDeviceStore(tempDir)
 	if err != nil {
@@ -439,7 +446,7 @@ func TestRTCReceiver_findTrustedSender_MalformedPEMSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer cleanupTempDir(t, tempDir)
 
 	// Create valid sender key
 	senderKey, _ := crypto.GenerateKeyPair()
@@ -520,7 +527,7 @@ func TestRTCReceiver_PairVerificationIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer cleanupTempDir(t, tempDir)
 
 	store, err := storage.NewTrustedDeviceStore(tempDir)
 	if err != nil {

@@ -2,7 +2,6 @@ package models
 
 import (
 	"encoding/json"
-	"math"
 	"strconv"
 )
 
@@ -66,5 +65,5 @@ func (f FlexInt) Int64() int64 {
 
 // Valid reports whether the FlexInt is non-negative (a valid file size).
 func (f FlexInt) Valid() bool {
-	return int64(f) >= 0 && int64(f) <= math.MaxInt64
+	return int64(f) >= 0
 }

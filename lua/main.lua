@@ -1562,8 +1562,14 @@ function LocalSend:onDispatcherRegisterActions()
         { category = "none", event = "ToggleLocalSend", title = _("Toggle LocalSend server"), general = true })
     Dispatcher:registerAction("send_file_localsend",
         { category = "none", event = "ShowLocalSendFileSendFlow", title = _("LocalSend: send file"), general = true })
-    Dispatcher:registerAction("send_current_book_localsend",
-        { category = "none", event = "SendCurrentBookWithLocalSend", title = _("LocalSend: send current book"), general = true, reader = true, separator = true })
+    Dispatcher:registerAction("send_current_book_localsend", {
+        category = "none",
+        event = "SendCurrentBookWithLocalSend",
+        title = _("LocalSend: send current book"),
+        general = true,
+        reader = true,
+        separator = true,
+    })
 end
 
 -- Expose ServerState for testing purposes

@@ -17,18 +17,11 @@ func TestVerifyChecksum_EmptyExpected(t *testing.T) {
 
 func TestVerifyChecksum_Matching(t *testing.T) {
 	data := []byte("test data")
-	hasher := sha256.New()
-	hasher.Write(data)
-
-	expected := ComputeChecksum(sha256.New())
-	hasherForVerify := sha256.New()
-	// Reset by creating new hasher
-	hasherForVerify.Write(data)
 
 	// Compute expected checksum
 	expectedHasher := sha256.New()
 	expectedHasher.Write(data)
-	expected = ComputeChecksum(expectedHasher)
+	expected := ComputeChecksum(expectedHasher)
 
 	// Verify against a fresh hasher with same data
 	verifyHasher := sha256.New()

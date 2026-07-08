@@ -42,7 +42,7 @@ func TestComputeFingerprint(t *testing.T) {
 			}
 			// Verify it's valid hex
 			for _, c := range result {
-				if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 					t.Errorf("computeFingerprint() contains non-hex char: %c", c)
 				}
 			}
@@ -132,7 +132,7 @@ func TestRTCSender_SetTrustedStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer cleanupTempDir(t, tempDir)
 
 	store, err := storage.NewTrustedDeviceStore(tempDir)
 	if err != nil {
@@ -174,7 +174,7 @@ func TestTrustedDeviceStore_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer cleanupTempDir(t, tempDir)
 
 	// Create store
 	store, err := storage.NewTrustedDeviceStore(tempDir)
@@ -355,7 +355,7 @@ func TestRTCSender_PairVerificationIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer cleanupTempDir(t, tempDir)
 
 	store, err := storage.NewTrustedDeviceStore(tempDir)
 	if err != nil {

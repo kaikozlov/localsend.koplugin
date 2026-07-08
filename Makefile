@@ -91,7 +91,7 @@ lint-lua: ## Run luacheck
 
 .PHONY: lint-go
 lint-go: ## Run golangci-lint
-	$(RUN) sh -c 'cd /opt/plugin && GOTOOLCHAIN=go1.24.0 golangci-lint run'
+	$(RUN) sh -c 'cd /opt/plugin && golangci-lint run'
 
 # =============================================================================
 # Formatting
