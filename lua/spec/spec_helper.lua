@@ -289,16 +289,15 @@ local function reset_loaded_plugin_modules()
     }) do
         package.loaded[name] = nil
     end
-    -- Neutralise clearTmpTelemetryFiles so require("main") init doesn't shell out
-    -- `ls -1 /tmp/` (and really os.remove any fm-out-* files) on every spec. The
-    -- real io.popen/os.remove there are unspyed by install_spies, which is an
-    -- uncontrolled side effect we don't want in the suite. The original is kept
-    -- so a spec that wants to exercise it (update_spec's clearTmpTelemetryFiles
-    -- test) can restore it via M.real_clearTmpTelemetryFiles.
-    local ok, upd = pcall(require, "localsend_update")
-    if ok and upd then
-        M.real_clearTmpTelemetryFiles = upd.clearTmpTelemetryFiles
-        upd.clearTmpTelemetryFiles = function() end
+
+    -- Keep require("main") from scanning the real container /tmp on every spec.
+    -- main.lua only calls clearTmpTelemetryFiles when ServerState.telemetry_cleaned
+    -- is false, so seed the fresh state as "already cleaned" instead of
+    -- monkeypatching localsend_update.clearTmpTelemetryFiles. Specs that exercise
+    -- clearTmpTelemetryFiles directly still call the production function.
+    local ok, state = pcall(require, "localsend_state")
+    if ok and state and state.ServerState then
+        state.ServerState.telemetry_cleaned = true
     end
 end
 
@@ -380,7 +379,6 @@ end
 -- (the way KOReader actually instantiates it). Returns (instance, filemanager).
 function M.load_via_filemanager()
     M.prepare_plugin()
-    M.reset_localsend_state()
     reset_loaded_plugin_modules()
     disable_plugins()
     load_plugin("localsend.koplugin")
@@ -413,8 +411,7 @@ function M.setup_complete(opts)
     M.reset_settings()
     -- reset_localsend_state() is intentionally omitted here: reset_loaded_plugin_modules()
     -- nils package.loaded["localsend_state"], so the next require("main") builds a fresh
-    -- ServerState from the module's default table anyway. The reset is meaningful only in
-    -- load_via_filemanager(), which does NOT nil the module.
+    -- ServerState from the module's default table anyway.
     reset_loaded_plugin_modules()
     M.install_spies(opts)
     M._execute_handler = nil

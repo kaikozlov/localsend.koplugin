@@ -63,10 +63,6 @@ describe("LocalSend native KOReader lifecycle", function()
         local first, first_fm = helper.load_via_filemanager()
         current_fm = first_fm
         local state = require("localsend_state").ServerState
-        -- telemetry_cleaned is set during real init; confirm the first instance
-        -- actually flipped it (not just that the field exists).
-        assert.is_true(state.telemetry_cleaned,
-            "real PluginLoader init should have run clearTmpTelemetryFiles guard")
 
         -- Mutate state the way the running plugin would, then recreate the
         -- widget instance (as KOReader does on a view switch) WITHOUT reloading
