@@ -116,6 +116,7 @@ function M.install_spies(opts)
         saved.remove = os.remove
         saved.removeFile = util.removeFile
         saved.purgeDir = ffiUtil.purgeDir
+        saved.popen = io.popen
     end
 
     UIManager.show = function(self, widget, ...)

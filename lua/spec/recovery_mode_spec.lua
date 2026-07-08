@@ -346,7 +346,8 @@ describe("Update orphan cleanup", function()
         -- `ls .../*.lua` call is faked; everything else passes through.
         real_io_popen = io.popen
         io.popen = function(cmd, ...)
-            if type(cmd) == "string" and cmd:match("ls .*%*%.lua") then
+            local expected = "ls " .. util.shell_escape({ "/fake/plugin" }) .. "/*.lua 2>/dev/null"
+            if cmd == expected then
                 local files = {}
                 for _, f in ipairs(old_files_on_disk) do
                     table.insert(files, "/fake/plugin/" .. f)

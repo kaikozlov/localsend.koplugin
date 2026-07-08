@@ -909,6 +909,10 @@ describe("Self-Update", function()
             end
 
             local lsupdate = require("localsend_update")
+            -- Restore the real impl here too; the helper stubs it during normal
+            -- require("main") setup, and this test specifically exercises the
+            -- production failure path.
+            lsupdate.clearTmpTelemetryFiles = helper.real_clearTmpTelemetryFiles
             -- Should not error
             assert.has_no.errors(function()
                 lsupdate.clearTmpTelemetryFiles()

@@ -169,10 +169,14 @@ describe("deletePluginSettings", function()
             local ss = require("localsend_state").ServerState
             ss.user_stopped = true
             ss.was_running_before_suspend = true
+            ss.was_running_before_disconnect = true
             ss.transfer_count = 5
             ss.last_log_position = 100
+            ss.last_sentinel_value = "sentinel"
             ss.server_op_id = 42
             ss.discovered_devices = { "device1" }
+            ss.scan_cancelled = true
+            ss.send_cancelled = true
             ss.stop_in_progress = true
             -- Populate every runtime-added field too. A prior version of this
             -- test skipped these, so it couldn't catch a regression that dropped
