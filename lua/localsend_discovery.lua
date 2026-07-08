@@ -74,9 +74,13 @@ local function isScanProcessRunning()
     end
 
     local content = deps.util.readFromFile(constants.SCAN_OUTPUT_FILE .. ".pid")
-    if not content then return false end
+    if not content then
+        return false
+    end
     local pid = tonumber(content:match("^(%d+)"))
-    if not pid then return false end
+    if not pid then
+        return false
+    end
     return deps.util.pathExists("/proc/" .. pid)
 end
 
@@ -94,11 +98,11 @@ function M.scanDevices(callback, options)
     end
 
     ServerState.scan_in_progress = true
-    ServerState.scan_cancelled = false  -- Reset cancel flag
-    ServerState.scan_start_time = os.time()  -- Track start time for timeout guard
+    ServerState.scan_cancelled = false -- Reset cancel flag
+    ServerState.scan_start_time = os.time() -- Track start time for timeout guard
 
     -- Build scan command
-    local args = {binary_path, "scan", "--json", "-t", tostring(constants.SCAN_TIMEOUT_SECONDS)}
+    local args = { binary_path, "scan", "--json", "-t", tostring(constants.SCAN_TIMEOUT_SECONDS) }
 
     -- Add device name if provided (shows this name to other peers during scan)
     if options.device_name and options.device_name ~= "" then
@@ -122,10 +126,12 @@ function M.scanDevices(callback, options)
 
     -- Run scan in background, redirect stdout to file, discard stderr
     -- Note: We discard stderr because log messages would corrupt the JSON output
-    local cmd = string.format("(%s > %s 2>/dev/null) & echo $! > %s",
+    local cmd = string.format(
+        "(%s > %s 2>/dev/null) & echo $! > %s",
         deps.util.shell_escape(args),
-        deps.util.shell_escape({constants.SCAN_OUTPUT_FILE}),
-        deps.util.shell_escape({pid_file}))
+        deps.util.shell_escape({ constants.SCAN_OUTPUT_FILE }),
+        deps.util.shell_escape({ pid_file })
+    )
 
     deps.logger.dbg("[LocalSend] Starting scan:", cmd)
     os.execute(cmd)
@@ -156,7 +162,7 @@ function M.scanDevices(callback, options)
             if content then
                 local pid = tonumber(content:match("^(%d+)"))
                 if pid then
-                    os.execute(deps.util.shell_escape({"kill", "-9", tostring(pid)}) .. " 2>/dev/null")
+                    os.execute(deps.util.shell_escape({ "kill", "-9", tostring(pid) }) .. " 2>/dev/null")
                 end
             end
         end
@@ -190,14 +196,14 @@ function M.cancelScan()
     local ServerState = state.ServerState
     local pid_file = constants.SCAN_OUTPUT_FILE .. ".pid"
 
-    ServerState.scan_cancelled = true  -- Signal to polling callback
+    ServerState.scan_cancelled = true -- Signal to polling callback
 
     if deps.util.pathExists(pid_file) then
         local content = deps.util.readFromFile(pid_file)
         if content then
             local pid = tonumber(content:match("^(%d+)"))
             if pid then
-                os.execute(deps.util.shell_escape({"kill", "-9", tostring(pid)}) .. " 2>/dev/null")
+                os.execute(deps.util.shell_escape({ "kill", "-9", tostring(pid) }) .. " 2>/dev/null")
             end
         end
         os.remove(pid_file)
@@ -233,34 +239,40 @@ function M.showDeviceSelector(devices, onSelect, onRetry)
         if onRetry then
             -- Show dialog with retry option
             local dialog
-            dialog = deps.ButtonDialog:new{
+            dialog = deps.ButtonDialog:new({
                 title = deps._("No devices found"),
                 info_text = deps._("Make sure LocalSend is running on the target device."),
-                buttons = {{
+                buttons = {
                     {
-                        text = deps._("Scan again"),
-                        callback = function()
-                            deps.UIManager:close(dialog)
-                            onRetry()
-                        end,
+                        {
+                            text = deps._("Scan again"),
+                            callback = function()
+                                deps.UIManager:close(dialog)
+                                onRetry()
+                            end,
+                        },
+                        {
+                            text = deps._("Cancel"),
+                            callback = function()
+                                deps.UIManager:close(dialog)
+                                if onSelect then
+                                    onSelect(nil)
+                                end
+                            end,
+                        },
                     },
-                    {
-                        text = deps._("Cancel"),
-                        callback = function()
-                            deps.UIManager:close(dialog)
-                            if onSelect then onSelect(nil) end
-                        end,
-                    },
-                }},
-            }
+                },
+            })
             deps.UIManager:show(dialog)
         else
             -- Fallback to original behavior (no retry available)
-            deps.UIManager:show(deps.InfoMessage:new{
+            deps.UIManager:show(deps.InfoMessage:new({
                 text = deps._("No devices found. Make sure LocalSend is running on the target device."),
                 timeout = 4,
-            })
-            if onSelect then onSelect(nil) end
+            }))
+            if onSelect then
+                onSelect(nil)
+            end
         end
         return
     end
@@ -272,34 +284,42 @@ function M.showDeviceSelector(devices, onSelect, onRetry)
     -- Build button rows
     local buttons = {}
     for _, device in ipairs(devices) do
-        table.insert(buttons, {{
-            text = M.getDeviceDisplayText(device),
-            callback = function()
-                deps.UIManager:close(dialog)
-                M._current_dialog = nil
-                if onSelect then onSelect(device) end
-            end,
-        }})
+        table.insert(buttons, {
+            {
+                text = M.getDeviceDisplayText(device),
+                callback = function()
+                    deps.UIManager:close(dialog)
+                    M._current_dialog = nil
+                    if onSelect then
+                        onSelect(device)
+                    end
+                end,
+            },
+        })
     end
 
     -- Add cancel button
-    table.insert(buttons, {{
-        text = deps._("Cancel"),
-        callback = function()
-            deps.UIManager:close(dialog)
-            M._current_dialog = nil
-            if onSelect then onSelect(nil) end
-        end,
-    }})
+    table.insert(buttons, {
+        {
+            text = deps._("Cancel"),
+            callback = function()
+                deps.UIManager:close(dialog)
+                M._current_dialog = nil
+                if onSelect then
+                    onSelect(nil)
+                end
+            end,
+        },
+    })
 
-    dialog = deps.ButtonDialog:new{
+    dialog = deps.ButtonDialog:new({
         title = deps._("Select target device"),
         buttons = buttons,
         dismiss_callback = function()
             M._current_dialog = nil
         end,
-    }
-    M._current_dialog = dialog  -- Track for external closing
+    })
+    M._current_dialog = dialog -- Track for external closing
     deps.UIManager:show(dialog)
 end
 
@@ -308,18 +328,22 @@ end
 -- @return table Dialog object (for closing)
 function M.showScanningDialog(onCancel)
     local dialog
-    dialog = deps.ButtonDialog:new{
+    dialog = deps.ButtonDialog:new({
         title = deps._("Scanning for devices..."),
-        buttons = {{
+        buttons = {
             {
-                text = deps._("Cancel"),
-                callback = function()
-                    deps.UIManager:close(dialog)
-                    if onCancel then onCancel() end
-                end,
+                {
+                    text = deps._("Cancel"),
+                    callback = function()
+                        deps.UIManager:close(dialog)
+                        if onCancel then
+                            onCancel()
+                        end
+                    end,
+                },
             },
-        }},
-    }
+        },
+    })
     deps.UIManager:show(dialog)
     return dialog
 end

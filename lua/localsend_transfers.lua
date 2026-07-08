@@ -25,7 +25,9 @@ function M.getTransferLog()
     end
 
     local ok, f = pcall(io.open, constants.TRANSFER_LOG_FILE, "r")
-    if not ok or not f then return transfers end
+    if not ok or not f then
+        return transfers
+    end
 
     local success, _ = pcall(function()
         for line in f:lines() do
@@ -103,10 +105,10 @@ end
 function M.clearTransferLog()
     local ServerState = state.ServerState
     os.remove(constants.TRANSFER_LOG_FILE)
-    os.remove(constants.TRANSFER_NOTIFY_FILE)  -- Also remove sentinel file
-    ServerState.last_log_position = 0  -- Reset position tracking when log is cleared
-    ServerState.transfer_count = 0  -- Reset cached count
-    ServerState.last_sentinel_value = nil  -- Reset sentinel tracking
+    os.remove(constants.TRANSFER_NOTIFY_FILE) -- Also remove sentinel file
+    ServerState.last_log_position = 0 -- Reset position tracking when log is cleared
+    ServerState.transfer_count = 0 -- Reset cached count
+    ServerState.last_sentinel_value = nil -- Reset sentinel tracking
 end
 
 -- Internal polling method for checking new transfers
@@ -131,10 +133,10 @@ function M.checkForNewTransfers(instance)
             text = deps.T(deps._("%1 files received. Latest: %2"), #new_transfers, latest.filename)
         end
 
-        deps.UIManager:show(deps.Notification:new{
+        deps.UIManager:show(deps.Notification:new({
             text = text,
             timeout = 3,
-        })
+        }))
     end
 end
 
@@ -154,7 +156,7 @@ function M.checkSentinelFile(instance)
     -- Read sentinel file content (tiny file with just a timestamp)
     local content = deps.util.readFromFile(constants.TRANSFER_NOTIFY_FILE)
     if content then
-        content = content:gsub("%s+", "")  -- Trim whitespace
+        content = content:gsub("%s+", "") -- Trim whitespace
         -- Trigger check if:
         -- 1. First time seeing sentinel (last_sentinel_value is nil) - handles first transfer
         -- 2. Sentinel content changed - handles subsequent transfers
@@ -177,10 +179,10 @@ function M.showRecentTransfers(instance)
     local transfers = instance:getTransferLog()
 
     if #transfers == 0 then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             text = deps._("No recent transfers."),
             timeout = 3,
-        })
+        }))
         return
     end
 
@@ -193,9 +195,9 @@ function M.showRecentTransfers(instance)
         table.insert(lines, string.format("%d. %s%s", i, t.filename, size_str))
     end
 
-    deps.UIManager:show(deps.InfoMessage:new{
+    deps.UIManager:show(deps.InfoMessage:new({
         text = deps.T(deps._("Recent transfers (%1 total):\n\n%2"), #transfers, table.concat(lines, "\n")),
-    })
+    }))
 end
 
 return M

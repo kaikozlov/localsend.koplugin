@@ -116,10 +116,10 @@ function M.showAddExtensionRouteDialog(instance, touchmenu_instance)
         },
     })
 
-    dialog = ButtonDialog:new{
+    dialog = ButtonDialog:new({
         title = deps._("Select extension to route"),
         buttons = buttons,
-    }
+    })
     deps.UIManager:show(dialog)
 end
 
@@ -128,7 +128,7 @@ end
 -- @param touchmenu_instance table Touch menu instance for updates
 function M.showCustomExtensionDialog(instance, touchmenu_instance)
     local dialog
-    dialog = deps.InputDialog:new{
+    dialog = deps.InputDialog:new({
         title = deps._("Extension to route"),
         description = deps._("Enter file extension (without dot)"),
         input = "",
@@ -156,7 +156,7 @@ function M.showCustomExtensionDialog(instance, touchmenu_instance)
                 },
             },
         },
-    }
+    })
     deps.UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
@@ -167,7 +167,7 @@ end
 -- @param touchmenu_instance table Touch menu instance for updates
 function M.showExtensionDirPicker(instance, ext, touchmenu_instance)
     local start_path = instance:getPickerStartPath(instance.ext_dirs[ext] or instance.save_dir)
-    local path_chooser = deps.PathChooser:new{
+    local path_chooser = deps.PathChooser:new({
         title = deps.T(deps._("Select directory for .%1 files"), ext),
         select_directory = true,
         select_file = false,
@@ -177,18 +177,18 @@ function M.showExtensionDirPicker(instance, ext, touchmenu_instance)
             if valid then
                 instance:addExtensionRoute(ext, path)
                 instance:refreshRoutingMenu(touchmenu_instance)
-                deps.UIManager:show(deps.InfoMessage:new{
+                deps.UIManager:show(deps.InfoMessage:new({
                     text = deps.T(deps._(".%1 files will be saved to:\n%2"), ext, path),
                     timeout = 3,
-                })
+                }))
             else
-                deps.UIManager:show(deps.InfoMessage:new{
+                deps.UIManager:show(deps.InfoMessage:new({
                     icon = "notice-warning",
                     text = deps.T(deps._("Cannot use this directory: %1"), err),
-                })
+                }))
             end
         end,
-    }
+    })
     deps.UIManager:show(path_chooser)
 end
 
@@ -197,7 +197,9 @@ end
 -- @param instance table LocalSend instance
 -- @param touchmenu_instance table Touch menu instance
 function M.refreshRoutingMenu(instance, touchmenu_instance)
-    if not touchmenu_instance then return end
+    if not touchmenu_instance then
+        return
+    end
     -- Rebuild the menu items
     local new_items = instance:buildExtensionRoutingMenu()
     -- Clear and repopulate the existing item_table in-place
@@ -234,8 +236,9 @@ function M.buildExtensionRoutingMenu(instance)
                 instance.routing_enabled = not instance.routing_enabled
                 deps.G_reader_settings:flipNilOrFalse("LocalSend_routing_enabled")
             end,
-            help_text = deps._("When enabled, files are routed to directories based on extension. " ..
-                "When disabled, all files go to the main save directory."),
+            help_text = deps._(
+                "When enabled, files are routed to directories based on extension. " .. "When disabled, all files go to the main save directory."
+            ),
             separator = true,
         })
     end
@@ -250,7 +253,7 @@ function M.buildExtensionRoutingMenu(instance)
                 -- Show options: change directory or remove
                 local ButtonDialog = require("ui/widget/buttondialog")
                 local dialog
-                dialog = ButtonDialog:new{
+                dialog = ButtonDialog:new({
                     title = deps.T(deps._("Route for .%1"), captured_ext),
                     buttons = {
                         {
@@ -269,15 +272,15 @@ function M.buildExtensionRoutingMenu(instance)
                                     deps.UIManager:close(dialog)
                                     instance:removeExtensionRoute(captured_ext)
                                     instance:refreshRoutingMenu(touchmenu_instance)
-                                    deps.UIManager:show(deps.InfoMessage:new{
+                                    deps.UIManager:show(deps.InfoMessage:new({
                                         text = deps.T(deps._("Route for .%1 removed"), captured_ext),
                                         timeout = 2,
-                                    })
+                                    }))
                                 end,
                             },
                         },
                     },
-                }
+                })
                 deps.UIManager:show(dialog)
             end,
         })
@@ -308,8 +311,9 @@ function M.buildExtensionRoutingMenu(instance)
                 instance.routing_accept_all = not instance.routing_accept_all
                 deps.G_reader_settings:flipNilOrFalse("LocalSend_routing_accept_all")
             end,
-            help_text = deps._("When enabled, files without a specific route are saved to the main " ..
-                "save directory. When disabled, only routed file types are accepted."),
+            help_text = deps._(
+                "When enabled, files without a specific route are saved to the main " .. "save directory. When disabled, only routed file types are accepted."
+            ),
         })
     end
 

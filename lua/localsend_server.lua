@@ -14,7 +14,7 @@ local deps = {}
 local binary_path = nil
 
 -- Graceful-stop tuning
-local STOP_POLL_ATTEMPTS = 20       -- 20 * 100ms = 2s
+local STOP_POLL_ATTEMPTS = 20 -- 20 * 100ms = 2s
 
 local function readPIDFromFile()
     if not deps.util.pathExists(constants.PID_FILE) then
@@ -121,20 +121,20 @@ function M.waitForProcessExit(pid, attempts_remaining, force, callback)
     end
 
     if not isProcAlive(pid) then
-        callback(true)  -- Process exited successfully
+        callback(true) -- Process exited successfully
         return
     end
 
     if attempts_remaining <= 0 then
         if force then
             -- Force kill with SIGKILL
-            os.execute(deps.util.shell_escape({"kill", "-KILL", tostring(pid)}))
+            os.execute(deps.util.shell_escape({ "kill", "-KILL", tostring(pid) }))
             -- Give one more brief check after SIGKILL
             deps.UIManager:scheduleIn(0.2, function()
                 callback(not isProcAlive(pid))
             end)
         else
-            callback(false)  -- Process did not exit
+            callback(false) -- Process did not exit
         end
         return
     end
@@ -183,8 +183,8 @@ function M.onServerStarted(instance, silent, effective_name)
     end
 
     -- Start fast sentinel polling for responsive notifications
-    instance:_unschedulePolling()  -- Ensure no duplicate polling
-    ServerState.last_sentinel_value = nil  -- Reset to pick up current state
+    instance:_unschedulePolling() -- Ensure no duplicate polling
+    ServerState.last_sentinel_value = nil -- Reset to pick up current state
     deps.UIManager:scheduleIn(constants.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
 
     if not silent then
@@ -204,10 +204,10 @@ function M.onServerStarted(instance, silent, effective_name)
             table.insert(message_parts, pin_status)
         end
 
-        deps.UIManager:show(deps.Notification:new{
+        deps.UIManager:show(deps.Notification:new({
             text = deps._("LocalSend Ready") .. " - " .. table.concat(message_parts, " | "),
             timeout = 5,
-        })
+        }))
     else
         deps.logger.dbg("[LocalSend] Server restarted after resume")
     end
@@ -222,10 +222,10 @@ function M.onServerStartFailed(instance, silent)
     M.reconcileServerState(instance)
 
     if not silent then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps._("LocalSend process failed to start within 5 seconds. Check if the binary works."),
-        })
+        }))
     else
         deps.logger.warn("[LocalSend] Failed to restart server after resume")
     end
@@ -239,10 +239,10 @@ function M.start(instance, silent)
 
     if ServerState.stop_in_progress then
         if not silent then
-            deps.UIManager:show(deps.InfoMessage:new{
+            deps.UIManager:show(deps.InfoMessage:new({
                 text = deps._("LocalSend is stopping. Please wait a moment and try again."),
                 timeout = 3,
-            })
+            }))
         end
         return
     end
@@ -265,10 +265,10 @@ function M.start(instance, silent)
     local valid, err = instance:validateSaveDir(instance.save_dir)
     if not valid then
         if not silent then
-            deps.UIManager:show(deps.InfoMessage:new{
+            deps.UIManager:show(deps.InfoMessage:new({
                 icon = "notice-warning",
                 text = deps.T(deps._("Invalid save directory: %1"), err),
-            })
+            }))
         end
         return
     end
@@ -279,7 +279,7 @@ function M.start(instance, silent)
     end
 
     -- Build command arguments table
-    local args = {binary_path, "recv", "-d", instance.save_dir, "-l", constants.TRANSFER_LOG_FILE}
+    local args = { binary_path, "recv", "-d", instance.save_dir, "-l", constants.TRANSFER_LOG_FILE }
 
     -- Always pass device name (default to "KOReader" if not set)
     local effective_name = instance.device_name ~= "" and instance.device_name or "KOReader"
@@ -341,10 +341,12 @@ function M.start(instance, silent)
     instance:openFirewall()
 
     -- Build final command: capture backend logs, run in background, and save PID
-    local cmd = string.format("(%s > %s 2>&1) & echo $! > %s",
+    local cmd = string.format(
+        "(%s > %s 2>&1) & echo $! > %s",
         deps.util.shell_escape(args),
-        deps.util.shell_escape({constants.SERVER_OUTPUT_FILE}),
-        deps.util.shell_escape({constants.PID_FILE}))
+        deps.util.shell_escape({ constants.SERVER_OUTPUT_FILE }),
+        deps.util.shell_escape({ constants.PID_FILE })
+    )
 
     deps.logger.dbg("[LocalSend] Starting server: ", cmd)
 
@@ -352,7 +354,10 @@ function M.start(instance, silent)
 
     if result == 0 then
         -- Non-blocking wait for server readiness (max 5 seconds = 50 * 100ms)
-        M.waitForServerReady(instance, 50, silent,
+        M.waitForServerReady(
+            instance,
+            50,
+            silent,
             -- on_ready callback
             function()
                 if not isCurrentServerOp(op_id) then
@@ -372,10 +377,10 @@ function M.start(instance, silent)
         instance:closeFirewall()
         M.reconcileServerState(instance)
         if not silent then
-            local info = deps.InfoMessage:new{
+            local info = deps.InfoMessage:new({
                 icon = "notice-warning",
                 text = deps._("Failed to start LocalSend server."),
-            }
+            })
             deps.UIManager:show(info)
         else
             deps.logger.warn("[LocalSend] Failed to start server after resume")
@@ -436,7 +441,7 @@ function M.stopServer(instance, options)
     end
 
     -- Attempt graceful shutdown first
-    os.execute(deps.util.shell_escape({"kill", "-TERM", tostring(pid)}) .. " 2>/dev/null")
+    os.execute(deps.util.shell_escape({ "kill", "-TERM", tostring(pid) }) .. " 2>/dev/null")
 
     M.waitForProcessExit(pid, STOP_POLL_ATTEMPTS, false, function(exited)
         if not isCurrentServerOp(op_id) then
@@ -483,16 +488,16 @@ function M.stop(instance)
     instance:stopServer({
         callback = function(success, message)
             if success then
-                deps.UIManager:show(deps.Notification:new{
+                deps.UIManager:show(deps.Notification:new({
                     text = deps._("LocalSend stopped"),
                     timeout = 2,
-                })
+                }))
             else
-                deps.UIManager:show(deps.InfoMessage:new{
+                deps.UIManager:show(deps.InfoMessage:new({
                     icon = "notice-warning",
                     text = message or deps._("Failed to stop LocalSend process."),
                     timeout = 4,
-                })
+                }))
             end
         end,
     })
@@ -524,10 +529,10 @@ function M.toggle(instance)
     local ServerState = state.ServerState
 
     if ServerState.stop_in_progress then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             text = deps._("LocalSend is stopping. Please wait."),
             timeout = 3,
-        })
+        }))
         return
     end
 

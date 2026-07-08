@@ -49,9 +49,13 @@ local function isSendProcessRunning()
     end
 
     local content = deps.util.readFromFile(constants.SEND_PID_FILE)
-    if not content then return false end
+    if not content then
+        return false
+    end
     local pid = tonumber(content:match("^(%d+)"))
-    if not pid then return false end
+    if not pid then
+        return false
+    end
     return deps.util.pathExists("/proc/" .. pid)
 end
 
@@ -67,21 +71,25 @@ function M.sendFile(device, filepath, pin, callback, options)
 
     -- Prevent concurrent sends
     if ServerState.send_in_progress then
-        if callback then callback(false, deps._("Another send operation is in progress")) end
+        if callback then
+            callback(false, deps._("Another send operation is in progress"))
+        end
         return
     end
 
     -- Validate file exists
     if not deps.util.pathExists(filepath) then
-        if callback then callback(false, deps._("File does not exist")) end
+        if callback then
+            callback(false, deps._("File does not exist"))
+        end
         return
     end
 
     ServerState.send_in_progress = true
-    ServerState.send_cancelled = false  -- Reset cancel flag
+    ServerState.send_cancelled = false -- Reset cancel flag
 
     -- Build send command based on device type
-    local args = {binary_path, "send"}
+    local args = { binary_path, "send" }
 
     -- Add device name if provided
     if options.device_name and options.device_name ~= "" then
@@ -115,11 +123,13 @@ function M.sendFile(device, filepath, pin, callback, options)
     table.insert(args, filepath)
 
     -- Run send in background, capture output
-    local cmd = string.format("(%s > %s 2>&1; echo $? > %s.exit) & echo $! > %s",
+    local cmd = string.format(
+        "(%s > %s 2>&1; echo $? > %s.exit) & echo $! > %s",
         deps.util.shell_escape(args),
-        deps.util.shell_escape({constants.SEND_OUTPUT_FILE}),
+        deps.util.shell_escape({ constants.SEND_OUTPUT_FILE }),
         constants.SEND_OUTPUT_FILE,
-        deps.util.shell_escape({constants.SEND_PID_FILE}))
+        deps.util.shell_escape({ constants.SEND_PID_FILE })
+    )
 
     deps.logger.dbg("[LocalSend] Starting send:", cmd)
     os.execute(cmd)
@@ -128,10 +138,10 @@ function M.sendFile(device, filepath, pin, callback, options)
     local _, filename = deps.util.splitFilePathName(filepath)
 
     -- Show progress notification
-    deps.UIManager:show(deps.Notification:new{
+    deps.UIManager:show(deps.Notification:new({
         text = deps.T(deps._("Sending %1 to %2..."), filename, device.alias),
         timeout = 3,
-    })
+    }))
 
     -- Poll for completion
     local function checkSendComplete()
@@ -140,11 +150,13 @@ function M.sendFile(device, filepath, pin, callback, options)
             os.remove(constants.SEND_OUTPUT_FILE)
             os.remove(constants.SEND_OUTPUT_FILE .. ".exit")
             os.remove(constants.SEND_PID_FILE)
-            deps.UIManager:show(deps.Notification:new{
+            deps.UIManager:show(deps.Notification:new({
                 text = deps._("Send cancelled"),
                 timeout = 2,
-            })
-            if callback then callback(false, deps._("Cancelled")) end
+            }))
+            if callback then
+                callback(false, deps._("Cancelled"))
+            end
             return
         end
 
@@ -181,10 +193,10 @@ function M.sendFile(device, filepath, pin, callback, options)
 
         if success then
             message = deps.T(deps._("Sent %1 to %2"), filename, device.alias)
-            deps.UIManager:show(deps.Notification:new{
+            deps.UIManager:show(deps.Notification:new({
                 text = message,
                 timeout = 3,
-            })
+            }))
         else
             -- Use categorizeError for consistent error handling
             local error_category = M.categorizeError(output)
@@ -198,14 +210,16 @@ function M.sendFile(device, filepath, pin, callback, options)
                         M.sendFile(device, filepath, entered_pin, callback, options)
                     else
                         -- User cancelled PIN entry
-                        deps.UIManager:show(deps.Notification:new{
+                        deps.UIManager:show(deps.Notification:new({
                             text = deps._("Send cancelled"),
                             timeout = 2,
-                        })
-                        if callback then callback(false, "Cancelled") end
+                        }))
+                        if callback then
+                            callback(false, "Cancelled")
+                        end
                     end
                 end)
-                return  -- Don't show error or call callback - PIN dialog handles it
+                return -- Don't show error or call callback - PIN dialog handles it
             elseif error_category == "connection_refused" then
                 message = deps._("Device is not running LocalSend")
             elseif error_category == "rate_limited" then
@@ -218,18 +232,20 @@ function M.sendFile(device, filepath, pin, callback, options)
                 message = deps._("Send failed")
             end
 
-            deps.UIManager:show(deps.InfoMessage:new{
+            deps.UIManager:show(deps.InfoMessage:new({
                 icon = "notice-warning",
                 text = message,
                 timeout = 4,
-            })
+            }))
         end
 
         -- Record the outcome so diagnostics can report send-side
         -- health (ServerState persists across widget recreations).
         ServerState.last_send = { success = success, message = message, time = os.time() }
 
-        if callback then callback(success, message) end
+        if callback then
+            callback(success, message)
+        end
     end
 
     -- Start polling after a short delay
@@ -250,7 +266,7 @@ local function showFilePicker(device, start_path, callback, options)
         start_path = "/"
     end
 
-    local picker = deps.PathChooser:new{
+    local picker = deps.PathChooser:new({
         path = start_path,
         select_file = true,
         select_directory = false,
@@ -259,9 +275,11 @@ local function showFilePicker(device, start_path, callback, options)
             M.sendFile(device, filepath, nil, callback, options)
         end,
         close_callback = function()
-            if callback then callback(false, deps._("Cancelled")) end
+            if callback then
+                callback(false, deps._("Cancelled"))
+            end
         end,
-    }
+    })
     deps.UIManager:show(picker)
 end
 
@@ -272,7 +290,7 @@ local function getSendFlowConfig(instance)
     local device_name = instance and instance.device_name
     local scan_options = {
         use_webrtc = instance and instance.use_webrtc,
-        device_name = device_name,  -- Pass to scan so we show correct name to peers
+        device_name = device_name, -- Pass to scan so we show correct name to peers
     }
     local send_options = { device_name = device_name }
     local start_path = instance:getPickerStartPath(instance.save_dir)
@@ -358,31 +376,37 @@ showSendMoreDialog = function(instance)
     end
 
     local dialog
-    dialog = deps.ButtonDialog:new{
+    dialog = deps.ButtonDialog:new({
         title = deps._("Send more files?"),
         buttons = {
-            {{
-                text = deps._("Yes"),
-                callback = function()
-                    deps.UIManager:close(dialog)
-                    selectCachedDevice(instance, onDeviceSelected)
-                end,
-            }},
-            {{
-                text = deps._("Scan again"),
-                callback = function()
-                    deps.UIManager:close(dialog)
-                    scanAndSelectDevice(instance, onDeviceSelected)
-                end,
-            }},
-            {{
-                text = deps._("No"),
-                callback = function()
-                    deps.UIManager:close(dialog)
-                end,
-            }},
+            {
+                {
+                    text = deps._("Yes"),
+                    callback = function()
+                        deps.UIManager:close(dialog)
+                        selectCachedDevice(instance, onDeviceSelected)
+                    end,
+                },
+            },
+            {
+                {
+                    text = deps._("Scan again"),
+                    callback = function()
+                        deps.UIManager:close(dialog)
+                        scanAndSelectDevice(instance, onDeviceSelected)
+                    end,
+                },
+            },
+            {
+                {
+                    text = deps._("No"),
+                    callback = function()
+                        deps.UIManager:close(dialog)
+                    end,
+                },
+            },
         },
-    }
+    })
     deps.UIManager:show(dialog)
 end
 
@@ -394,10 +418,10 @@ function M.showFileSendFlow(instance, preset_file)
 
     -- Prevent concurrent sends
     if ServerState.send_in_progress then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             text = deps._("A send operation is already in progress"),
             timeout = 3,
-        })
+        }))
         return
     end
 
@@ -441,14 +465,14 @@ end
 function M.cancelSend()
     local ServerState = state.ServerState
 
-    ServerState.send_cancelled = true  -- Signal to polling callback
+    ServerState.send_cancelled = true -- Signal to polling callback
 
     if deps.util.pathExists(constants.SEND_PID_FILE) then
         local content = deps.util.readFromFile(constants.SEND_PID_FILE)
         if content then
             local pid = tonumber(content:match("^(%d+)"))
             if pid then
-                os.execute(deps.util.shell_escape({"kill", "-9", tostring(pid)}) .. " 2>/dev/null")
+                os.execute(deps.util.shell_escape({ "kill", "-9", tostring(pid) }) .. " 2>/dev/null")
             end
         end
         os.remove(constants.SEND_PID_FILE)
@@ -510,30 +534,36 @@ end
 -- @param callback function Called with PIN string or nil if cancelled
 function M.showPINDialog(device, callback)
     local dialog
-    dialog = deps.InputDialog:new{
+    dialog = deps.InputDialog:new({
         title = deps.T(deps._("Enter PIN for %1"), device.alias),
         input_type = "number",
         input_hint = deps._("PIN code"),
-        buttons = {{
+        buttons = {
             {
-                text = deps._("Cancel"),
-                id = "close",
-                callback = function()
-                    deps.UIManager:close(dialog)
-                    if callback then callback(nil) end
-                end,
+                {
+                    text = deps._("Cancel"),
+                    id = "close",
+                    callback = function()
+                        deps.UIManager:close(dialog)
+                        if callback then
+                            callback(nil)
+                        end
+                    end,
+                },
+                {
+                    text = deps._("OK"),
+                    is_enter_default = true,
+                    callback = function()
+                        local pin = dialog:getInputText()
+                        deps.UIManager:close(dialog)
+                        if callback then
+                            callback(pin)
+                        end
+                    end,
+                },
             },
-            {
-                text = deps._("OK"),
-                is_enter_default = true,
-                callback = function()
-                    local pin = dialog:getInputText()
-                    deps.UIManager:close(dialog)
-                    if callback then callback(pin) end
-                end,
-            },
-        }},
-    }
+        },
+    })
     deps.UIManager:show(dialog)
     dialog:onShowKeyboard()
 end

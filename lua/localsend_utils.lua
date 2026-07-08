@@ -8,7 +8,9 @@ local M = {}
 -- DEPRECATED: Use util.args() from KOReader's util module instead.
 -- This function is kept for testing and backward compatibility.
 function M.shellEscape(str)
-    if str == nil then return "''" end
+    if str == nil then
+        return "''"
+    end
     -- Single quote escape: replace ' with '\''
     return "'" .. str:gsub("'", "'\\''") .. "'"
 end
@@ -25,24 +27,40 @@ end
 
 -- Validate that a path is safe for shell operations
 function M.isValidPath(path)
-    if path == nil or path == "" then return false end
+    if path == nil or path == "" then
+        return false
+    end
     -- Reject paths with null bytes
-    if path:find("%z") then return false end
+    if path:find("%z") then
+        return false
+    end
     -- Must be absolute path
-    if not path:match("^/") then return false end
+    if not path:match("^/") then
+        return false
+    end
     -- No command substitution patterns
-    if path:find("`") or path:find("%$%(") then return false end
+    if path:find("`") or path:find("%$%(") then
+        return false
+    end
     return true
 end
 
 -- Validate that a port number is safe for shell operations
 function M.isValidPort(port)
-    if port == nil then return false end
+    if port == nil then
+        return false
+    end
     local num = tonumber(port)
-    if num == nil then return false end
-    if num < 1 or num > 65535 then return false end
+    if num == nil then
+        return false
+    end
+    if num < 1 or num > 65535 then
+        return false
+    end
     -- Ensure it's an integer
-    if num ~= math.floor(num) then return false end
+    if num ~= math.floor(num) then
+        return false
+    end
     return true
 end
 
@@ -60,8 +78,12 @@ function M.compareVersions(v1, v2)
     local p1, p2 = parseVersion(v1), parseVersion(v2)
     for i = 1, math.max(#p1, #p2) do
         local n1, n2 = p1[i] or 0, p2[i] or 0
-        if n1 < n2 then return -1 end
-        if n1 > n2 then return 1 end
+        if n1 < n2 then
+            return -1
+        end
+        if n1 > n2 then
+            return 1
+        end
     end
     return 0
 end
@@ -79,7 +101,9 @@ end
 
 -- Normalize curly quotes to straight quotes
 function M.normalizeApostrophes(str)
-    if str == nil then return nil end
+    if str == nil then
+        return nil
+    end
     -- Replace curly single quotes (U+2018, U+2019) with straight quote
     return str:gsub("\xe2\x80\x98", "'"):gsub("\xe2\x80\x99", "'")
 end
@@ -118,10 +142,14 @@ function M.buildRadioMenu(options, get_value, set_value, enabled_func)
     for _, opt in ipairs(options) do
         table.insert(menu, {
             text = opt.text,
-            checked_func = function() return get_value() == opt.value end,
+            checked_func = function()
+                return get_value() == opt.value
+            end,
             radio = true,
             enabled_func = enabled_func,
-            callback = function() set_value(opt.value) end,
+            callback = function()
+                set_value(opt.value)
+            end,
         })
     end
     return menu

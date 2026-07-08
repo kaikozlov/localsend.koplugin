@@ -27,8 +27,12 @@ end
 local function ruleLabel(rule_args)
     local proto, dport
     for i, arg in ipairs(rule_args) do
-        if arg == "-p" then proto = rule_args[i + 1] end
-        if arg == "--dport" then dport = rule_args[i + 1] end
+        if arg == "-p" then
+            proto = rule_args[i + 1]
+        end
+        if arg == "--dport" then
+            dport = rule_args[i + 1]
+        end
     end
     if proto and dport then
         return proto .. "/" .. dport
@@ -39,14 +43,29 @@ end
 local function inputRules(port, use_webrtc)
     local rules = {
         {
-            "INPUT", "-p", "tcp", "--dport", port,
-            "-m", "conntrack", "--ctstate", "NEW,ESTABLISHED", "-j", "ACCEPT",
+            "INPUT",
+            "-p",
+            "tcp",
+            "--dport",
+            port,
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "NEW,ESTABLISHED",
+            "-j",
+            "ACCEPT",
         },
         { "INPUT", "-p", "udp", "--dport", port, "-j", "ACCEPT" },
     }
     if use_webrtc then
         table.insert(rules, {
-            "INPUT", "-p", "udp", "--dport", constants.WEBRTC_PORT_RANGE, "-j", "ACCEPT",
+            "INPUT",
+            "-p",
+            "udp",
+            "--dport",
+            constants.WEBRTC_PORT_RANGE,
+            "-j",
+            "ACCEPT",
         })
     end
     return rules
@@ -55,14 +74,29 @@ end
 local function outputRules(port, use_webrtc)
     local rules = {
         {
-            "OUTPUT", "-p", "tcp", "--sport", port,
-            "-m", "conntrack", "--ctstate", "ESTABLISHED", "-j", "ACCEPT",
+            "OUTPUT",
+            "-p",
+            "tcp",
+            "--sport",
+            port,
+            "-m",
+            "conntrack",
+            "--ctstate",
+            "ESTABLISHED",
+            "-j",
+            "ACCEPT",
         },
         { "OUTPUT", "-p", "udp", "--sport", port, "-j", "ACCEPT" },
     }
     if use_webrtc then
         table.insert(rules, {
-            "OUTPUT", "-p", "udp", "--sport", constants.WEBRTC_PORT_RANGE, "-j", "ACCEPT",
+            "OUTPUT",
+            "-p",
+            "udp",
+            "--sport",
+            constants.WEBRTC_PORT_RANGE,
+            "-j",
+            "ACCEPT",
         })
     end
     return rules
@@ -207,9 +241,7 @@ function M.selfTestFirewall(port, use_webrtc)
     local close_result = M.closeFirewall(port)
 
     local ok = open_result.ok and check_result.ok and close_result.ok
-    local detail = "open: " .. tostring(open_result.detail) ..
-        "; verify: " .. tostring(check_result.detail) ..
-        "; close: " .. tostring(close_result.detail)
+    local detail = "open: " .. tostring(open_result.detail) .. "; verify: " .. tostring(check_result.detail) .. "; close: " .. tostring(close_result.detail)
     return {
         managed = true,
         ok = ok,

@@ -242,10 +242,12 @@ local function activeServerProbe(instance)
         end
     end
 
-    local cmd = string.format("(%s > %s 2>&1) & echo $! > %s",
+    local cmd = string.format(
+        "(%s > %s 2>&1) & echo $! > %s",
         deps.util.shell_escape(buildDiagnosticRecvArgs(instance)),
         deps.util.shell_escape({ DIAG_SERVER_OUTPUT_FILE }),
-        deps.util.shell_escape({ DIAG_SERVER_PID_FILE }))
+        deps.util.shell_escape({ DIAG_SERVER_PID_FILE })
+    )
     deps.logger.dbg("[LocalSend] Running diagnostic server probe")
     local start_result = os.execute(cmd)
     if start_result ~= 0 then
@@ -351,8 +353,7 @@ local function binaryStatus(instance)
     -- Arch token from "vX.Y.Z <goos>/<arch>"; only trust it when the binary ran.
     local arch = runs and version_output:match("/([%w%-]+)%s*$") or nil
     local device_arch = instance.getDeviceArch and (instance:getDeviceArch() or nil) or nil
-    local mismatch = arch ~= nil and KNOWN_ARCH_TAGS[arch]
-        and device_arch ~= nil and arch ~= device_arch or false
+    local mismatch = arch ~= nil and KNOWN_ARCH_TAGS[arch] and device_arch ~= nil and arch ~= device_arch or false
     return {
         exists = exists,
         runs = runs,
@@ -383,7 +384,7 @@ local function checksFromReport(instance, report)
         table.insert(checks, {
             ok = false,
             label = "LAN connected",
-            hint = "Enable Wi-Fi and connect to the same network as your other devices."
+            hint = "Enable Wi-Fi and connect to the same network as your other devices.",
         })
     end
 
@@ -391,29 +392,28 @@ local function checksFromReport(instance, report)
         table.insert(checks, {
             ok = false,
             label = "Receiver binary present",
-            hint = "The localsend binary is missing. Reinstall the plugin via " ..
-                "Updates → Check for updates / reinstall."
+            hint = "The localsend binary is missing. Reinstall the plugin via " .. "Updates → Check for updates / reinstall.",
         })
     elseif not report.binary_runs then
         table.insert(checks, {
             ok = false,
             label = "Receiver binary runs",
-            hint = "The binary is present but would not run. This usually means the wrong " ..
-                "architecture package was installed, or the executable bit was lost when " ..
-                "extracting the archive. Reinstall the package matching your device."
+            hint = "The binary is present but would not run. This usually means the wrong "
+                .. "architecture package was installed, or the executable bit was lost when "
+                .. "extracting the archive. Reinstall the package matching your device.",
         })
     elseif report.arch_mismatch then
         table.insert(checks, {
             ok = false,
             label = "Receiver binary architecture",
             detail = "binary " .. tostring(report.binary_arch) .. ", device " .. tostring(report.arch),
-            hint = "The binary runs but its architecture does not match the device. Install the matching package."
+            hint = "The binary runs but its architecture does not match the device. Install the matching package.",
         })
     else
         table.insert(checks, {
             ok = true,
             label = "Receiver binary runs",
-            detail = (report.binary_version or ""):gsub("%s+$", "")
+            detail = (report.binary_version or ""):gsub("%s+$", ""),
         })
     end
 
@@ -424,7 +424,7 @@ local function checksFromReport(instance, report)
             ok = false,
             label = "Server self-test",
             detail = report.server.self_test and report.server.self_test.detail or "unknown",
-            hint = "The receiver did not start and answer locally. Check the diagnostic server self-test log below."
+            hint = "The receiver did not start and answer locally. Check the diagnostic server self-test log below.",
         })
     end
 
@@ -437,8 +437,9 @@ local function checksFromReport(instance, report)
             ok = false,
             label = "Firewall self-test",
             detail = report.firewall and report.firewall.detail or "unknown",
-            hint = "The plugin could not open the iptables rules for port " ..
-                tostring(instance.port) .. ". Check permissions and iptables support on this device."
+            hint = "The plugin could not open the iptables rules for port "
+                .. tostring(instance.port)
+                .. ". Check permissions and iptables support on this device.",
         })
     end
 
@@ -449,8 +450,8 @@ local function checksFromReport(instance, report)
             table.insert(checks, {
                 ok = false,
                 label = "Internet reachable (WebRTC)",
-                hint = "WebRTC needs Internet access to reach the signaling server. " ..
-                    "Connect to the Internet, or disable WebRTC if you only need LAN transfers."
+                hint = "WebRTC needs Internet access to reach the signaling server. "
+                    .. "Connect to the Internet, or disable WebRTC if you only need LAN transfers.",
             })
         end
     end
@@ -463,17 +464,18 @@ local function checksFromReport(instance, report)
             table.insert(checks, {
                 ok = true,
                 label = "Last send",
-                detail = (ls.message or "OK") .. "  (" .. age_str .. ")"
+                detail = (ls.message or "OK") .. "  (" .. age_str .. ")",
             })
         else
             table.insert(checks, {
                 ok = false,
                 label = "Last send",
                 detail = (ls.message or "failed") .. "  (" .. age_str .. ")",
-                hint = "A recent send failed. Common causes: the recipient is not running " ..
-                    "LocalSend, a PIN mismatch, or the recipient's firewall blocks port " ..
-                    tostring(instance.port) .. ". Try Test discovery to confirm the recipient " ..
-                    "is visible, then send again."
+                hint = "A recent send failed. Common causes: the recipient is not running "
+                    .. "LocalSend, a PIN mismatch, or the recipient's firewall blocks port "
+                    .. tostring(instance.port)
+                    .. ". Try Test discovery to confirm the recipient "
+                    .. "is visible, then send again.",
             })
         end
     end
@@ -486,7 +488,11 @@ local function formatCheckSummary(checks)
     local passed, failed = 0, 0
     for _, c in ipairs(checks or {}) do
         if not c.info then
-            if c.ok then passed = passed + 1 else failed = failed + 1 end
+            if c.ok then
+                passed = passed + 1
+            else
+                failed = failed + 1
+            end
         end
     end
     if failed == 0 then
@@ -498,7 +504,9 @@ local function formatCheckSummary(checks)
     for _, c in ipairs(checks or {}) do
         local symbol = c.info and "•" or (c.ok and "✓" or "✗")
         local line = symbol .. " " .. tostring(c.label or "")
-        if c.detail then line = line .. " — " .. tostring(c.detail) end
+        if c.detail then
+            line = line .. " — " .. tostring(c.detail)
+        end
         table.insert(lines, line)
         if c.hint then
             for hint_line in c.hint:gmatch("[^\n]+") do
@@ -608,15 +616,20 @@ function M.formatReport(report)
     table.insert(lines, statusLabel(report.binary_exists, "Binary exists"))
     table.insert(lines, statusLabel(report.binary_runs, "Binary is executable / runs"))
     table.insert(lines, "Binary version: " .. tostring(report.binary_version or "unknown"))
-    table.insert(lines, "Binary arch: " .. tostring(report.binary_arch or "unknown") ..
-        "  (device: " .. tostring(report.arch) .. ")")
+    table.insert(lines, "Binary arch: " .. tostring(report.binary_arch or "unknown") .. "  (device: " .. tostring(report.arch) .. ")")
     if report.binary_exists and not report.binary_runs then
         table.insert(lines, "  The binary is present but did not run. This usually means the")
         table.insert(lines, "  wrong architecture package was installed, or the executable bit")
         table.insert(lines, "  was lost when extracting the archive. Reinstall the matching package.")
     elseif report.arch_mismatch then
-        table.insert(lines, "  ✗ Binary arch (" .. tostring(report.binary_arch) .. ") does not match the device (" ..
-            tostring(report.arch) .. "). Install the matching package for this device.")
+        table.insert(
+            lines,
+            "  ✗ Binary arch ("
+                .. tostring(report.binary_arch)
+                .. ") does not match the device ("
+                .. tostring(report.arch)
+                .. "). Install the matching package for this device."
+        )
     end
     table.insert(lines, "Device: " .. tostring(report.device_info))
 
@@ -626,8 +639,7 @@ function M.formatReport(report)
     table.insert(lines, "Network info:")
     table.insert(lines, tostring(report.network_info or "unavailable"))
     table.insert(lines, "Discovery tip: if other apps can't find this device, also check the")
-    table.insert(lines, "  sender's firewall (port " .. tostring(report.settings.port) ..
-        " TCP+UDP) and Local Network permission.")
+    table.insert(lines, "  sender's firewall (port " .. tostring(report.settings.port) .. " TCP+UDP) and Local Network permission.")
 
     addSection(lines, "Settings")
     table.insert(lines, "Device name: " .. tostring(report.settings.device_name))
@@ -647,16 +659,20 @@ function M.formatReport(report)
     table.insert(lines, "Autostart: " .. boolLabel(report.settings.autostart))
 
     addSection(lines, "Server self-test")
-    table.insert(lines, statusLabel(report.server.self_test and report.server.self_test.ok,
-        "Temporary server starts and local API responds"))
+    table.insert(lines, statusLabel(report.server.self_test and report.server.self_test.ok, "Temporary server starts and local API responds"))
     table.insert(lines, "Result: " .. tostring(report.server.self_test and report.server.self_test.detail or "unknown"))
     table.insert(lines, "Diagnostic server log: " .. tostring(report.server.probe_log_path))
     table.insert(lines, "Previous backend log: " .. tostring(report.server.backend_log_path))
     table.insert(lines, "Transfer log: " .. tostring(report.server.transfer_log_path))
 
     addSection(lines, "Firewall")
-    table.insert(lines, statusLabel(report.firewall and report.firewall.ok,
-        report.firewall and report.firewall.managed and "iptables open/verify/close self-test" or "Plugin-managed firewall"))
+    table.insert(
+        lines,
+        statusLabel(
+            report.firewall and report.firewall.ok,
+            report.firewall and report.firewall.managed and "iptables open/verify/close self-test" or "Plugin-managed firewall"
+        )
+    )
     table.insert(lines, "Result: " .. tostring(report.firewall and report.firewall.detail or "unknown"))
 
     addSection(lines, "Recent backend log")
@@ -692,14 +708,20 @@ end
 function M.saveReportText(text, filename)
     local report_dir = (paths.data_dir or "") .. "/cache/localsend"
     if deps.util and deps.util.makePath then
-        if not deps.util.makePath(report_dir) then return nil end
+        if not deps.util.makePath(report_dir) then
+            return nil
+        end
     end
     local path = report_dir .. "/" .. (filename or "localsend-report.txt")
     local f = io.open(path, "w")
-    if not f then return nil end
+    if not f then
+        return nil
+    end
     local ok = pcall(f.write, f, text)
     f:close()
-    if not ok then return nil end
+    if not ok then
+        return nil
+    end
     return path
 end
 
@@ -710,10 +732,10 @@ function M.showDiagnostics(instance)
     if saved then
         text = text .. "\n\nSaved to: " .. saved
     end
-    deps.UIManager:show(TextViewer:new {
+    deps.UIManager:show(TextViewer:new({
         title = deps._("LocalSend diagnostics"),
         text = text,
-    })
+    }))
 end
 
 function M.showNetworkInfo()
@@ -723,17 +745,17 @@ function M.showNetworkInfo()
     else
         text = deps._("Could not retrieve network info.")
     end
-    deps.UIManager:show(deps.InfoMessage:new {
+    deps.UIManager:show(deps.InfoMessage:new({
         text = text,
-    })
+    }))
 end
 
 function M.showRecentBackendLog()
     local TextViewer = require("ui/widget/textviewer")
-    deps.UIManager:show(TextViewer:new {
+    deps.UIManager:show(TextViewer:new({
         title = deps._("LocalSend backend log"),
         text = readTail(constants.SERVER_OUTPUT_FILE, REPORT_TAIL_BYTES) or deps._("No backend log found."),
-    })
+    }))
 end
 
 function M.showBugReport(instance)
@@ -742,22 +764,22 @@ function M.showBugReport(instance)
 
     -- Best-effort: append the tail of KOReader's crash.log so users paste it
     -- alongside the diagnostics report when filing an issue.
-    local crash_log_path = (paths.data_dir and (paths.data_dir .. "/crash.log"))
-        or "KOReader data directory/crash.log"
+    local crash_log_path = (paths.data_dir and (paths.data_dir .. "/crash.log")) or "KOReader data directory/crash.log"
     local crash_tail = readTail(crash_log_path, REPORT_TAIL_BYTES)
-    local crash_section = "\n\n## crash.log (tail)\nPath: " .. crash_log_path .. "\n\n" ..
-        (crash_tail or "(crash.log not found or empty)")
+    local crash_section = "\n\n## crash.log (tail)\nPath: " .. crash_log_path .. "\n\n" .. (crash_tail or "(crash.log not found or empty)")
 
-    local checklist = deps._("When reporting a LocalSend issue, please include:\n\n" ..
-        "• Device model and firmware\n" ..
-        "• KOReader version\n" ..
-        "• LocalSend plugin version\n" ..
-        "• Sender app/version\n" ..
-        "• Steps to reproduce\n" ..
-        "• KOReader crash.log\n" ..
-        "• The diagnostics report below\n\n" ..
-        "Review the report before posting publicly — it can include device names, " ..
-        "file names, and network addresses.\n\n%1")
+    local checklist = deps._(
+        "When reporting a LocalSend issue, please include:\n\n"
+            .. "• Device model and firmware\n"
+            .. "• KOReader version\n"
+            .. "• LocalSend plugin version\n"
+            .. "• Sender app/version\n"
+            .. "• Steps to reproduce\n"
+            .. "• KOReader crash.log\n"
+            .. "• The diagnostics report below\n\n"
+            .. "Review the report before posting publicly — it can include device names, "
+            .. "file names, and network addresses.\n\n%1"
+    )
     local text = deps.T(checklist, report) .. crash_section
 
     -- Save the full bug report so users can attach the file (over USB/cloud)
@@ -767,10 +789,10 @@ function M.showBugReport(instance)
         text = text .. "\n\nSaved to: " .. saved
     end
 
-    deps.UIManager:show(TextViewer:new {
+    deps.UIManager:show(TextViewer:new({
         title = deps._("LocalSend bug report"),
         text = text,
-    })
+    }))
 end
 
 -- =============================================================================
@@ -784,7 +806,6 @@ function M.runChecks(instance)
     local report = M.collect(instance)
     return checksFromReport(instance, report)
 end
-
 
 -- =============================================================================
 -- Discovery self-test (multicast loopback + peer attribution)
@@ -802,9 +823,16 @@ function M.formatDiscoveryResult(instance, r)
     table.insert(lines, "LocalSend Discovery Test")
     table.insert(lines, "")
     table.insert(lines, "Multicast loopback: " .. (r.loopback and "OK" or "FAILED"))
-    table.insert(lines, "Other devices seen: " .. tostring(r.peers or 0) ..
-        " (UDP announce: " .. tostring(r.udp_peers or 0) ..
-        ", HTTP register: " .. tostring(r.register_peers or 0) .. ")")
+    table.insert(
+        lines,
+        "Other devices seen: "
+            .. tostring(r.peers or 0)
+            .. " (UDP announce: "
+            .. tostring(r.udp_peers or 0)
+            .. ", HTTP register: "
+            .. tostring(r.register_peers or 0)
+            .. ")"
+    )
     if type(r.seen_aliases) == "table" and #r.seen_aliases > 0 then
         table.insert(lines, "Devices that responded: " .. table.concat(r.seen_aliases, ", "))
     end
@@ -867,10 +895,16 @@ end
 
 local function readNetTestResult()
     local content = readFile(constants.NETTEST_OUTPUT_FILE)
-    if not content or content == "" then return nil end
-    if not deps.json then return nil end
+    if not content or content == "" then
+        return nil
+    end
+    if not deps.json then
+        return nil
+    end
     local decode_ok, result = pcall(deps.json.decode, content)
-    if not decode_ok or type(result) ~= "table" then return nil end
+    if not decode_ok or type(result) ~= "table" then
+        return nil
+    end
     return result
 end
 
@@ -892,20 +926,20 @@ function M._pollDiscoveryTest(instance, attempts, deadline)
         instance:closeFirewall()
         local text = M.formatDiscoveryResult(instance, result)
         local TextViewer = require("ui/widget/textviewer")
-        deps.UIManager:show(TextViewer:new {
+        deps.UIManager:show(TextViewer:new({
             title = deps._("LocalSend discovery test"),
             text = text,
-        })
+        }))
         return
     end
     if os.time() > deadline or attempts > 30 then
         killStaleNetTest()
         os.remove(constants.NETTEST_OUTPUT_FILE)
-        deps.UIManager:show(deps.InfoMessage:new {
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps._("Discovery test timed out. Is the binary working? Try Run diagnostics first."),
             timeout = 4,
-        })
+        }))
         instance:closeFirewall()
         return
     end
@@ -920,26 +954,28 @@ function M._launchNetTest(instance)
     -- only reachable while the normal server is stopped, so nettest can own the port.
     instance:openFirewall()
     -- Record the probe's PID so a timed-out test can be killed before the firewall closes.
-    local cmd = string.format("%s nettest --json -d %d > %s 2>/dev/null & echo $! > %s",
+    local cmd = string.format(
+        "%s nettest --json -d %d > %s 2>/dev/null & echo $! > %s",
         deps.util.shell_escape({ paths.binary_path }),
         constants.NETTEST_DURATION,
         deps.util.shell_escape({ constants.NETTEST_OUTPUT_FILE }),
-        deps.util.shell_escape({ constants.NETTEST_PID_FILE }))
+        deps.util.shell_escape({ constants.NETTEST_PID_FILE })
+    )
     deps.logger.dbg("[LocalSend] Running discovery test:", cmd)
     os.execute(cmd)
-    deps.UIManager:show(deps.InfoMessage:new {
+    deps.UIManager:show(deps.InfoMessage:new({
         text = deps._("Running discovery test… this takes a few seconds."),
         timeout = 3,
-    })
+    }))
     M._pollDiscoveryTest(instance, 0, os.time() + constants.NETTEST_DURATION + 5)
 end
 
 function M.showDiscoveryTest(instance)
     if not deps.util.pathExists(paths.binary_path or "") then
-        deps.UIManager:show(deps.InfoMessage:new {
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps._("The localsend binary is missing. Reinstall the plugin first."),
-        })
+        }))
         return
     end
     -- Settings/Troubleshooting is disabled while the normal server is running,

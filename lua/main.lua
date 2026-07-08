@@ -85,7 +85,7 @@ local PLUGIN_VERSION = plugin_meta.version or "unknown"
 local GITHUB_URL = "https://github.com/kaikozlov/localsend.koplugin"
 local GITHUB_URL_DISPLAY = "github.com/kaikozlov/localsend.koplugin"
 local binary_path = plugin_path .. "/localsend"
-local certs_path = plugin_path .. "/certs"  -- Certs folder next to binary (managed by Go)
+local certs_path = plugin_path .. "/certs" -- Certs folder next to binary (managed by Go)
 
 -- Check if a previous update failed and reinstall is required
 local REINSTALL_REQUIRED = lsupdate.isReinstallRequired(plugin_path)
@@ -95,7 +95,7 @@ end
 
 -- Check if binary exists
 if not util.pathExists(binary_path) then
-    return { disabled = true, }
+    return { disabled = true }
 end
 
 -- Helper function to initialize the update module (used in both normal and recovery mode)
@@ -116,10 +116,10 @@ local function initUpdateModule()
     })
 end
 
-local LocalSend = WidgetContainer:extend{
+local LocalSend = WidgetContainer:extend({
     name = "LocalSend",
     is_doc_only = false,
-}
+})
 
 -- =============================================================================
 -- WIDGET LIFECYCLE WARNING
@@ -160,8 +160,7 @@ function LocalSend:init()
 
     -- Auto update check settings
     self.auto_update_check = G_reader_settings:nilOrTrue("LocalSend_auto_update_check")
-    self.update_check_interval_hours = G_reader_settings:readSetting("LocalSend_update_check_interval_hours")
-        or constants.DEFAULT_UPDATE_CHECK_INTERVAL_HOURS
+    self.update_check_interval_hours = G_reader_settings:readSetting("LocalSend_update_check_interval_hours") or constants.DEFAULT_UPDATE_CHECK_INTERVAL_HOURS
     self.last_update_check = G_reader_settings:readSetting("LocalSend_last_update_check") or 0
     self.update_available_tag = G_reader_settings:readSetting("LocalSend_update_available_tag") or ""
 
@@ -294,7 +293,7 @@ function LocalSend:init()
         self:_checkSentinelFile()
     end
     self.resume_start_task = function()
-        self:start(true)  -- silent=true to suppress notification
+        self:start(true) -- silent=true to suppress notification
     end
     self.check_update_task = function()
         self:_autoCheckForUpdates()
@@ -308,15 +307,20 @@ function LocalSend:init()
     -- 2. Autostart on fresh KOReader launch - silent (no WiFi prompts on startup)
     -- Both paths silently skip if offline - no WiFi prompts during widget recreation.
     -- Users can manually start the server from the menu if they want WiFi prompted.
-    logger.dbg("[LocalSend] init() autostart check:",
-               "autostart=", tostring(self.autostart),
-               "user_stopped=", tostring(ServerState.user_stopped),
-               "was_running_before_suspend=", tostring(ServerState.was_running_before_suspend))
+    logger.dbg(
+        "[LocalSend] init() autostart check:",
+        "autostart=",
+        tostring(self.autostart),
+        "user_stopped=",
+        tostring(ServerState.user_stopped),
+        "was_running_before_suspend=",
+        tostring(ServerState.was_running_before_suspend)
+    )
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
         ServerState.was_running_before_suspend = false
-        self:_startWhenConnected(true)  -- silent - no notification, no WiFi prompt
+        self:_startWhenConnected(true) -- silent - no notification, no WiFi prompt
     elseif self.autostart and not ServerState.user_stopped then
-        self:_startWhenConnected(true)  -- silent - no WiFi prompt (will start silently if connected)
+        self:_startWhenConnected(true) -- silent - no WiFi prompt (will start silently if connected)
     end
 
     -- Sync cache with actual state (server may be running from previous widget instance)
@@ -430,7 +434,7 @@ function LocalSend:_onResume()
         if NetworkMgr:isConnected() then
             -- Network already available (fast reconnect or didn't disconnect)
             ServerState.was_running_before_suspend = false
-            self:start(true)  -- silent=true to suppress notification
+            self:start(true) -- silent=true to suppress notification
         else
             -- Network not ready yet - keep flag set and let _onNetworkConnected handle it
             logger.dbg("[LocalSend] Waiting for network to restart server")
@@ -459,7 +463,7 @@ function LocalSend:_onLeaveStandby()
         if NetworkMgr:isConnected() then
             -- Network already available
             ServerState.was_running_before_suspend = false
-            self:start(true)  -- silent=true to suppress notification
+            self:start(true) -- silent=true to suppress notification
         else
             -- Network not ready yet - keep flag set and let _onNetworkConnected handle it
             logger.dbg("[LocalSend] Waiting for network to restart server")
@@ -483,13 +487,12 @@ end
 function LocalSend:_onNetworkConnected()
     logger.dbg("[LocalSend] onNetworkConnected")
     -- Restart if we were waiting for network after suspend OR after disconnect
-    local should_restart = (ServerState.was_running_before_suspend or ServerState.was_running_before_disconnect)
-        and not ServerState.user_stopped
+    local should_restart = (ServerState.was_running_before_suspend or ServerState.was_running_before_disconnect) and not ServerState.user_stopped
     if should_restart then
         -- Clear both flags
         ServerState.was_running_before_suspend = false
         ServerState.was_running_before_disconnect = false
-        self:start(true)  -- silent=true to suppress notification
+        self:start(true) -- silent=true to suppress notification
         logger.dbg("[LocalSend] Server restarted after network reconnect")
     end
 end
@@ -775,10 +778,10 @@ function LocalSend:start(silent)
     -- Block server start if reinstall is required (plugin may be in broken state)
     if REINSTALL_REQUIRED then
         if not silent then
-            UIManager:show(InfoMessage:new{
+            UIManager:show(InfoMessage:new({
                 icon = "notice-warning",
                 text = _("Cannot start LocalSend: plugin reinstall required.\n\nPlease use 'Check for updates' to reinstall."),
-            })
+            }))
         end
         return
     end
@@ -810,7 +813,9 @@ end
 
 function LocalSend:isRunning()
     -- In recovery mode, lsserver is nil - server cannot be running
-    if not lsserver then return false end
+    if not lsserver then
+        return false
+    end
     return lsserver.isRunning()
 end
 
@@ -911,15 +916,17 @@ function LocalSend:showFileSendFlow()
 end
 
 function LocalSend:sendCurrentBook()
-    if not lssender then return end
+    if not lssender then
+        return
+    end
 
     -- Get current document path
     local doc_path = self.ui.document and self.ui.document.file
     if not doc_path then
-        UIManager:show(InfoMessage:new{
+        UIManager:show(InfoMessage:new({
             text = _("No book is currently open."),
             timeout = 3,
-        })
+        }))
         return
     end
 
@@ -939,7 +946,7 @@ end
 
 function LocalSend:rotateCertificates()
     local ConfirmBox = require("ui/widget/confirmbox")
-    UIManager:show(ConfirmBox:new{
+    UIManager:show(ConfirmBox:new({
         text = _("This will delete the current TLS certificates.\n\nTrusted devices may need to re-verify the connection.\n\nContinue?"),
         ok_text = _("Delete"),
         cancel_text = _("Cancel"),
@@ -949,12 +956,12 @@ function LocalSend:rotateCertificates()
             os.remove(certs_path .. "/server.key.pem")
             os.remove(certs_path .. "/server.crt")
 
-            UIManager:show(InfoMessage:new{
+            UIManager:show(InfoMessage:new({
                 text = _("Certificates cleared. New certificates will be generated on next start."),
                 timeout = 3,
-            })
+            }))
         end,
-    })
+    }))
 end
 
 function LocalSend:getDeviceArch()
@@ -1030,17 +1037,17 @@ function LocalSend:_openProjectPage()
         pcall(function()
             Device.input.setClipboardText(GITHUB_URL)
         end)
-        UIManager:show(Notification:new{
+        UIManager:show(Notification:new({
             text = _("GitHub link copied to clipboard"),
             timeout = 3,
-        })
+        }))
         return
     end
 
-    UIManager:show(InfoMessage:new{
+    UIManager:show(InfoMessage:new({
         text = T(_("Project page:\n%1"), GITHUB_URL),
         timeout = 5,
-    })
+    }))
 end
 
 function LocalSend:showDiagnostics()
@@ -1077,17 +1084,16 @@ function LocalSend:showAbout()
     local ConfirmBox = require("ui/widget/confirmbox")
     local description = plugin_meta.description or _("Send and receive files using LocalSend protocol.")
     local arch = self:getDeviceArch() or _("unknown")
-    local text = T(_("LocalSend for KOReader\n\nVersion: %1\nArchitecture: %2\n\n%3\n\n%4"),
-        PLUGIN_VERSION, arch, description, GITHUB_URL_DISPLAY)
+    local text = T(_("LocalSend for KOReader\n\nVersion: %1\nArchitecture: %2\n\n%3\n\n%4"), PLUGIN_VERSION, arch, description, GITHUB_URL_DISPLAY)
 
-    UIManager:show(ConfirmBox:new{
+    UIManager:show(ConfirmBox:new({
         text = text,
         ok_text = _("GitHub"),
         cancel_text = _("Close"),
         ok_callback = function()
             self:_openProjectPage()
         end,
-    })
+    }))
 end
 
 function LocalSend:addToMainMenu(menu_items)
@@ -1099,11 +1105,15 @@ function LocalSend:addToMainMenu(menu_items)
             sub_item_table = {
                 {
                     text = _("Plugin Error - Reinstall Required"),
-                    enabled_func = function() return false end,
+                    enabled_func = function()
+                        return false
+                    end,
                 },
                 {
                     text = _("Missing modules:"),
-                    enabled_func = function() return false end,
+                    enabled_func = function()
+                        return false
+                    end,
                 },
                 {
                     text_func = function()
@@ -1117,7 +1127,9 @@ function LocalSend:addToMainMenu(menu_items)
                         end
                         return table.concat(errors, "\n")
                     end,
-                    enabled_func = function() return false end,
+                    enabled_func = function()
+                        return false
+                    end,
                     separator = true,
                 },
                 {
@@ -1155,7 +1167,9 @@ function LocalSend:addToMainMenu(menu_items)
         end,
         sorting_hint = "network",
         -- Add check indicator for running state
-        checked_func = function() return self._cached_running end,
+        checked_func = function()
+            return self._cached_running
+        end,
         -- Quick toggle via long-press (SSH plugin pattern)
         hold_callback = function(touchmenu_instance)
             self:onToggleLocalSend()
@@ -1173,7 +1187,9 @@ function LocalSend:_buildMainMenu()
     if REINSTALL_REQUIRED then
         table.insert(menu, {
             text = _("⚠ Previous update failed - Reinstall required"),
-            enabled_func = function() return false end,
+            enabled_func = function()
+                return false
+            end,
             separator = true,
         })
     end
@@ -1183,7 +1199,9 @@ function LocalSend:_buildMainMenu()
             text_func = function()
                 return T(_("⬆ Update available: %1"), self.update_available_tag)
             end,
-            enabled_func = function() return false end,
+            enabled_func = function()
+                return false
+            end,
             separator = true,
         })
     end
@@ -1201,7 +1219,9 @@ function LocalSend:_buildMainMenu()
             end
         end,
         keep_menu_open = true,
-        checked_func = function() return self._cached_running end,
+        checked_func = function()
+            return self._cached_running
+        end,
         enabled_func = function()
             if self._cached_stopping then
                 return false
@@ -1224,7 +1244,9 @@ function LocalSend:_buildMainMenu()
             end
             return _("Recent transfers")
         end,
-        enabled_func = function() return self._cached_transfer_count > 0 end,
+        enabled_func = function()
+            return self._cached_transfer_count > 0
+        end,
         callback = function()
             self:showRecentTransfers()
         end,
@@ -1236,7 +1258,9 @@ function LocalSend:_buildMainMenu()
             return T(_("Save directory (%1)"), self.save_dir)
         end,
         keep_menu_open = true,
-        enabled_func = function() return not self._cached_running end,
+        enabled_func = function()
+            return not self._cached_running
+        end,
         callback = function(touchmenu_instance)
             self:showSaveDirPicker(touchmenu_instance)
         end,
@@ -1245,7 +1269,9 @@ function LocalSend:_buildMainMenu()
     -- Settings submenu
     table.insert(menu, {
         text = _("Settings"),
-        enabled_func = function() return not self._cached_running end,
+        enabled_func = function()
+            return not self._cached_running
+        end,
         sub_item_table = {
             {
                 text_func = function()
@@ -1281,7 +1307,9 @@ function LocalSend:_buildMainMenu()
             {
                 text_func = function()
                     local count = 0
-                    for _ in pairs(self.ext_dirs) do count = count + 1 end
+                    for _ in pairs(self.ext_dirs) do
+                        count = count + 1
+                    end
                     if count > 0 then
                         if self.routing_enabled then
                             return T(_("File type routing (%1 rules)"), count)
@@ -1313,7 +1341,9 @@ function LocalSend:_buildMainMenu()
             },
             {
                 text = _("Use HTTPS"),
-                checked_func = function() return self.use_https end,
+                checked_func = function()
+                    return self.use_https
+                end,
                 callback = function()
                     self.use_https = not self.use_https
                     G_reader_settings:flipNilOrTrue("LocalSend_use_https")
@@ -1322,7 +1352,9 @@ function LocalSend:_buildMainMenu()
             },
             {
                 text = _("Start with KOReader"),
-                checked_func = function() return self.autostart end,
+                checked_func = function()
+                    return self.autostart
+                end,
                 callback = function()
                     self.autostart = not self.autostart
                     G_reader_settings:flipNilOrFalse("LocalSend_autostart")
@@ -1331,7 +1363,9 @@ function LocalSend:_buildMainMenu()
             },
             {
                 text = _("Enable WebRTC Support (Experimental)"),
-                checked_func = function() return self.use_webrtc end,
+                checked_func = function()
+                    return self.use_webrtc
+                end,
                 callback = function()
                     self.use_webrtc = not self.use_webrtc
                     G_reader_settings:flipNilOrFalse("LocalSend_use_webrtc")
@@ -1407,8 +1441,7 @@ function LocalSend:_buildTroubleshootingMenu()
             callback = function()
                 self:showDiagnostics()
             end,
-            help_text = _("Run checks for network, binary, server, and firewall, then show detailed logs " ..
-                "and report information."),
+            help_text = _("Run checks for network, binary, server, and firewall, then show detailed logs " .. "and report information."),
         },
         {
             text = _("Test discovery"),
@@ -1416,8 +1449,10 @@ function LocalSend:_buildTroubleshootingMenu()
             callback = function()
                 self:runDiscoveryTest()
             end,
-            help_text = _("Check whether this device can send/receive LocalSend multicast discovery packets " ..
-                "and whether other devices are visible, to explain why a device isn't being found."),
+            help_text = _(
+                "Check whether this device can send/receive LocalSend multicast discovery packets "
+                    .. "and whether other devices are visible, to explain why a device isn't being found."
+            ),
         },
         {
             text = _("Show network info"),
@@ -1460,7 +1495,9 @@ function LocalSend:_buildTroubleshootingMenu()
                 },
                 {
                     text = _("Use HTTPS"),
-                    checked_func = function() return self.use_https end,
+                    checked_func = function()
+                        return self.use_https
+                    end,
                     callback = function()
                         self.use_https = not self.use_https
                         _G.G_reader_settings:flipNilOrTrue("LocalSend_use_https")
@@ -1469,13 +1506,14 @@ function LocalSend:_buildTroubleshootingMenu()
                 },
                 {
                     text = _("Enable WebRTC Support (Experimental)"),
-                    checked_func = function() return self.use_webrtc end,
+                    checked_func = function()
+                        return self.use_webrtc
+                    end,
                     callback = function()
                         self.use_webrtc = not self.use_webrtc
                         _G.G_reader_settings:flipNilOrFalse("LocalSend_use_webrtc")
                     end,
-                    help_text = _("Disable temporarily if startup or discovery fails while WebRTC signaling " ..
-                        "is enabled."),
+                    help_text = _("Disable temporarily if startup or discovery fails while WebRTC signaling " .. "is enabled."),
                 },
                 {
                     text = _("Check for updates / reinstall"),
@@ -1501,7 +1539,9 @@ function LocalSend:_buildAutoUpdateMenuItem()
                 return _("Auto-check for updates")
             end
         end,
-        checked_func = function() return self.auto_update_check end,
+        checked_func = function()
+            return self.auto_update_check
+        end,
         hold_callback = function(touchmenu_instance)
             self.auto_update_check = not self.auto_update_check
             G_reader_settings:flipNilOrTrue("LocalSend_auto_update_check")
@@ -1524,7 +1564,9 @@ function LocalSend:_buildAutoUpdateMenuItem()
             local submenu = {
                 {
                     text = _("Enable auto-check"),
-                    checked_func = function() return self.auto_update_check end,
+                    checked_func = function()
+                        return self.auto_update_check
+                    end,
                     callback = function()
                         self.auto_update_check = not self.auto_update_check
                         G_reader_settings:flipNilOrTrue("LocalSend_auto_update_check")
@@ -1537,15 +1579,14 @@ function LocalSend:_buildAutoUpdateMenuItem()
                     separator = true,
                 },
             }
-            local radio_items = lsutils.buildRadioMenu(
-                intervals,
-                function() return self.update_check_interval_hours end,
-                function(v)
-                    self.update_check_interval_hours = v
-                    G_reader_settings:saveSetting("LocalSend_update_check_interval_hours", v)
-                end,
-                function() return self.auto_update_check end
-            )
+            local radio_items = lsutils.buildRadioMenu(intervals, function()
+                return self.update_check_interval_hours
+            end, function(v)
+                self.update_check_interval_hours = v
+                G_reader_settings:saveSetting("LocalSend_update_check_interval_hours", v)
+            end, function()
+                return self.auto_update_check
+            end)
             for _, item in ipairs(radio_items) do
                 table.insert(submenu, item)
             end
@@ -1581,10 +1622,11 @@ function LocalSend:_buildUpdatesMenu()
 end
 
 function LocalSend:onDispatcherRegisterActions()
-    Dispatcher:registerAction("toggle_localsend_server",
-        { category = "none", event = "ToggleLocalSend", title = _("Toggle LocalSend server"), general = true })
-    Dispatcher:registerAction("send_file_localsend",
-        { category = "none", event = "ShowLocalSendFileSendFlow", title = _("LocalSend: send file"), general = true })
+    Dispatcher:registerAction("toggle_localsend_server", { category = "none", event = "ToggleLocalSend", title = _("Toggle LocalSend server"), general = true })
+    Dispatcher:registerAction(
+        "send_file_localsend",
+        { category = "none", event = "ShowLocalSendFileSendFlow", title = _("LocalSend: send file"), general = true }
+    )
     Dispatcher:registerAction("send_current_book_localsend", {
         category = "none",
         event = "SendCurrentBookWithLocalSend",

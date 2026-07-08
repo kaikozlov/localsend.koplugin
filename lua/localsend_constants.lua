@@ -8,8 +8,8 @@ local M = {}
 M.PID_FILE = "/tmp/localsend_koreader.pid"
 M.TRANSFER_LOG_FILE = "/tmp/localsend_transfers.log"
 M.TRANSFER_NOTIFY_FILE = "/tmp/localsend_notify"
-M.SIGNALING_ID_FILE = "/tmp/localsend_signaling.id"  -- WebRTC signaling ID for self-filtering
-M.SERVER_OUTPUT_FILE = "/tmp/localsend_server.out"  -- Combined stdout/stderr from receiver process
+M.SIGNALING_ID_FILE = "/tmp/localsend_signaling.id" -- WebRTC signaling ID for self-filtering
+M.SERVER_OUTPUT_FILE = "/tmp/localsend_server.out" -- Combined stdout/stderr from receiver process
 
 -- Send-related file paths
 M.SEND_PID_FILE = "/tmp/localsend_send.pid"
@@ -19,7 +19,7 @@ M.SCAN_OUTPUT_FILE = "/tmp/localsend_scan.json"
 -- Diagnostics: nettest (multicast discovery self-test) output
 M.NETTEST_OUTPUT_FILE = "/tmp/localsend_nettest.json"
 M.NETTEST_PID_FILE = "/tmp/localsend_nettest.pid"
-M.NETTEST_DURATION = 3  -- seconds the Go nettest probe listens
+M.NETTEST_DURATION = 3 -- seconds the Go nettest probe listens
 
 -- Polling intervals (seconds)
 M.SENTINEL_POLL_INTERVAL = 2
@@ -33,9 +33,9 @@ M.WEBRTC_PORT_RANGE = "50000:50100"
 
 -- Scan defaults
 M.SCAN_TIMEOUT_SECONDS = 4
-M.SCAN_MAX_POLL_DURATION = 15  -- Maximum seconds to poll before giving up (guard against hung processes)
+M.SCAN_MAX_POLL_DURATION = 15 -- Maximum seconds to poll before giving up (guard against hung processes)
 
 -- Update check defaults
-M.DEFAULT_UPDATE_CHECK_INTERVAL_HOURS = 168  -- Weekly
+M.DEFAULT_UPDATE_CHECK_INTERVAL_HOURS = 168 -- Weekly
 
 return M

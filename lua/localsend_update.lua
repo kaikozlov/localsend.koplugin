@@ -93,7 +93,9 @@ end
 function M.clearTmpTelemetryFiles()
     -- Use ls + Lua pattern matching instead of find (busybox find may lack -delete)
     local handle = io.popen("ls -1 /tmp/ 2>/dev/null")
-    if not handle then return end
+    if not handle then
+        return
+    end
 
     local ok, err = pcall(function()
         for filename in handle:lines() do
@@ -116,12 +118,17 @@ end
 -- @return string Shell-escaped curl command that outputs HTTP status code
 function M.buildCurlCommand(output_file, url)
     return deps.util.shell_escape({
-        "curl", "-s",
-        "-o", output_file,
-        "-w", "%{http_code}",
-        "--connect-timeout", "10",
-        "-H", "Accept: application/vnd.github.v3+json",
-        url
+        "curl",
+        "-s",
+        "-o",
+        output_file,
+        "-w",
+        "%{http_code}",
+        "--connect-timeout",
+        "10",
+        "-H",
+        "Accept: application/vnd.github.v3+json",
+        url,
     })
 end
 
@@ -129,12 +136,18 @@ end
 -- @return string|nil Architecture name: "arm64", "armv7", "arm-legacy", or nil
 function M.getDeviceArch()
     local handle = io.popen("uname -m")
-    if not handle then return nil end
+    if not handle then
+        return nil
+    end
     local ok, arch = pcall(handle.read, handle, "*l")
     handle:close()
-    if not ok then return nil end
+    if not ok then
+        return nil
+    end
 
-    if not arch then return nil end
+    if not arch then
+        return nil
+    end
 
     -- Map uname output to our asset naming
     -- arm64/aarch64: 64-bit ARM (newer devices)
@@ -172,42 +185,42 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     local tmp_extract = update_cache .. "/extract"
 
     -- Download the zip
-    local cmd = deps.util.shell_escape({"curl", "-L", "-s", "-o", tmp_zip, "-w", "%{http_code}",
-        "--connect-timeout", "30", "--max-time", "120", download_url})
+    local cmd =
+        deps.util.shell_escape({ "curl", "-L", "-s", "-o", tmp_zip, "-w", "%{http_code}", "--connect-timeout", "30", "--max-time", "120", download_url })
 
     local handle = io.popen(cmd)
     if not handle then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps._("Failed to execute download command."),
-        })
+        }))
         return
     end
     local ok, http_code = pcall(handle.read, handle, "*a")
     handle:close()
     if not ok then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps._("Download failed: read error."),
-        })
+        }))
         return
     end
 
     if http_code ~= "200" then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps.T(deps._("Download failed.\nHTTP status: %1"), http_code),
-        })
+        }))
         deps.util.removeFile(tmp_zip)
         return
     end
 
     -- Verify zip was downloaded
     if not deps.util.pathExists(tmp_zip) then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps._("Download failed: file not saved."),
-        })
+        }))
         return
     end
 
@@ -215,23 +228,23 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     deps.util.makePath(tmp_extract)
 
     -- Extract the zip (don't check return value - Lua 5.1 vs 5.2 incompatibility)
-    os.execute(deps.util.shell_escape({"unzip", "-o", tmp_zip, "-d", tmp_extract}))
+    os.execute(deps.util.shell_escape({ "unzip", "-o", tmp_zip, "-d", tmp_extract }))
 
     -- The zip contains localsend.koplugin/ folder
     local extracted_plugin = tmp_extract .. "/localsend.koplugin"
 
     if not deps.util.pathExists(extracted_plugin) then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps._("Invalid update package structure."),
-        })
+        }))
         M.cleanupCache()
         return
     end
 
     -- Track which lua files are in the update package (for orphan cleanup later)
     local new_lua_files = {}
-    local track_handle = io.popen("ls " .. deps.util.shell_escape({extracted_plugin}) .. "/*.lua 2>/dev/null")
+    local track_handle = io.popen("ls " .. deps.util.shell_escape({ extracted_plugin }) .. "/*.lua 2>/dev/null")
     if track_handle then
         local ok, err = pcall(function()
             for lua_file in track_handle:lines() do
@@ -259,7 +272,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
         if deps.util.pathExists(src) then
             -- Delete destination first so we can verify copy actually worked
             deps.util.removeFile(dst)
-            os.execute(deps.util.shell_escape({"cp", src, dst}))
+            os.execute(deps.util.shell_escape({ "cp", src, dst }))
             -- Verify copy succeeded by checking destination exists
             if not deps.util.pathExists(dst) then
                 copy_failed = true
@@ -273,7 +286,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     end
 
     -- Also copy any additional .lua files (for future-proofing)
-    local copy_handle = io.popen(deps.util.shell_escape({"ls"}) .. " " .. deps.util.shell_escape({extracted_plugin}) .. "/*.lua 2>/dev/null")
+    local copy_handle = io.popen(deps.util.shell_escape({ "ls" }) .. " " .. deps.util.shell_escape({ extracted_plugin }) .. "/*.lua 2>/dev/null")
     if copy_handle then
         local process_ok, process_err = pcall(function()
             for lua_file in copy_handle:lines() do
@@ -283,7 +296,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
                     local dst = plugin_path .. "/" .. filename
                     -- Delete destination first so we can verify copy actually worked
                     deps.util.removeFile(dst)
-                    os.execute(deps.util.shell_escape({"cp", lua_file, dst}))
+                    os.execute(deps.util.shell_escape({ "cp", lua_file, dst }))
                     -- Verify copy succeeded
                     if not deps.util.pathExists(dst) then
                         deps.logger.warn("[LocalSend] Failed to copy additional lua file:", filename)
@@ -300,7 +313,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     end
 
     -- Make binary executable
-    os.execute(deps.util.shell_escape({"chmod", "+x", plugin_path .. "/localsend"}))
+    os.execute(deps.util.shell_escape({ "chmod", "+x", plugin_path .. "/localsend" }))
 
     -- Remove orphaned lua files (files that exist locally but not in the update)
     -- Only do this if copy succeeded to avoid leaving plugin in broken state
@@ -309,7 +322,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     -- Safety check: don't cleanup if tracking failed (new_lua_files is empty)
     local has_tracked_files = next(new_lua_files) ~= nil
     if not copy_failed and has_tracked_files then
-        local old_ls_handle = io.popen("ls " .. deps.util.shell_escape({plugin_path}) .. "/*.lua 2>/dev/null")
+        local old_ls_handle = io.popen("ls " .. deps.util.shell_escape({ plugin_path }) .. "/*.lua 2>/dev/null")
         if old_ls_handle then
             for old_file in old_ls_handle:lines() do
                 local _, filename = deps.util.splitFilePathName(old_file)
@@ -332,19 +345,19 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     if copy_failed then
         -- Mark that reinstall is required so user sees warning on restart
         M.setReinstallRequired(plugin_path)
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps._("Update partially failed. Some files could not be copied. Please reinstall the plugin."),
-        })
+        }))
         return
     end
 
     -- Success! Clear any previous reinstall marker
     M.clearReinstallRequired(plugin_path)
     setUpdateAvailable(instance, nil)
-    deps.UIManager:show(deps.InfoMessage:new{
+    deps.UIManager:show(deps.InfoMessage:new({
         text = deps.T(deps._("Update to %1 installed successfully!\n\nPlease restart KOReader for changes to take effect."), new_version),
-    })
+    }))
 end
 
 -- Start update process with UI feedback
@@ -359,10 +372,10 @@ function M.performUpdate(instance, download_url, asset_name, new_version, plugin
         instance:stopServer()
     end
 
-    deps.UIManager:show(deps.InfoMessage:new{
+    deps.UIManager:show(deps.InfoMessage:new({
         text = deps._("Downloading update..."),
         timeout = 2,
-    })
+    }))
 
     -- Give UI time to show the message
     deps.UIManager:scheduleIn(0.5, function()
@@ -381,7 +394,7 @@ function M.getUpdateCheckDelay(last_check, interval_hours)
     local delay = interval_seconds - time_since_last
     -- If we're past due, schedule a short delay (60s) to not flood on startup
     if delay <= 0 then
-        return 60  -- 1 minute delay for startup
+        return 60 -- 1 minute delay for startup
     end
     return delay
 end
@@ -443,10 +456,10 @@ function M.doAutoCheckForUpdates(instance, plugin_version, schedule_next)
         setUpdateAvailable(instance, release.tag_name)
 
         if should_notify then
-            deps.UIManager:show(deps.Notification:new{
+            deps.UIManager:show(deps.Notification:new({
                 text = deps.T(deps._("LocalSend update available: %1"), release.tag_name),
                 timeout = 5,
-            })
+            }))
         end
     else
         setUpdateAvailable(instance, nil)
@@ -461,10 +474,10 @@ end
 -- @param plugin_version string Current plugin version
 -- @param plugin_path string Path to plugin directory
 function M.doCheckForUpdates(instance, plugin_version, plugin_path)
-    deps.UIManager:show(deps.InfoMessage:new{
+    deps.UIManager:show(deps.InfoMessage:new({
         text = deps._("Checking for updates..."),
         timeout = 2,
-    })
+    }))
 
     local update_cache = getUpdateCacheDir()
     local tmp_file = update_cache .. "/update_check.json"
@@ -472,27 +485,27 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path)
 
     local handle = io.popen(cmd)
     if not handle then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps._("Failed to execute update check command."),
-        })
+        }))
         return
     end
     local ok, http_code = pcall(handle.read, handle, "*a")
     handle:close()
     if not ok then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps._("Failed to read update check response."),
-        })
+        }))
         return
     end
 
     if http_code ~= "200" then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps.T(deps._("Failed to check for updates.\nHTTP status: %1\n\nPlease check your internet connection."), http_code),
-        })
+        }))
         deps.util.removeFile(tmp_file)
         return
     end
@@ -501,19 +514,19 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path)
     deps.util.removeFile(tmp_file)
 
     if not content then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps._("Failed to read update information."),
-        })
+        }))
         return
     end
 
     local decode_ok, release = pcall(deps.json.decode, content)
     if not decode_ok or not release or not release.tag_name then
-        deps.UIManager:show(deps.InfoMessage:new{
+        deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
             text = deps._("Failed to parse update information."),
-        })
+        }))
         return
     end
 
@@ -535,19 +548,19 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path)
         if download_url then
             local ConfirmBox = require("ui/widget/confirmbox")
             local up_to_date_msg = deps._("You're up to date!\n\nCurrent version: %1\nLatest version: %2\n\nReinstall anyway?")
-            deps.UIManager:show(ConfirmBox:new{
+            deps.UIManager:show(ConfirmBox:new({
                 text = deps.T(up_to_date_msg, plugin_version, release.tag_name),
                 ok_text = deps._("Reinstall"),
                 cancel_text = deps._("Cancel"),
                 ok_callback = function()
                     M.performUpdate(instance, download_url, asset_name, release.tag_name, plugin_path)
                 end,
-            })
+            }))
         else
-            deps.UIManager:show(deps.InfoMessage:new{
+            deps.UIManager:show(deps.InfoMessage:new({
                 text = deps.T(deps._("You're up to date!\n\nCurrent version: %1\nLatest version: %2"), plugin_version, release.tag_name),
                 timeout = 5,
-            })
+            }))
         end
     else
         setUpdateAvailable(instance, release.tag_name)
@@ -560,10 +573,9 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path)
             -- Can auto-update. Use TextViewer so long release notes remain readable.
             local TextViewer = require("ui/widget/textviewer")
             local viewer
-            viewer = TextViewer:new{
+            viewer = TextViewer:new({
                 title = deps._("Update available!"),
-                text = deps.T(deps._("Current: %1\nLatest: %2\n\n%3"),
-                    plugin_version, release.tag_name, release_notes),
+                text = deps.T(deps._("Current: %1\nLatest: %2\n\n%3"), plugin_version, release.tag_name, release_notes),
                 buttons_table = {
                     {
                         {
@@ -582,7 +594,7 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path)
                     },
                 },
                 add_default_buttons = false,
-            }
+            })
             deps.UIManager:show(viewer)
         else
             -- Can't auto-update (unknown arch or no matching asset)
@@ -593,10 +605,15 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path)
                 reason = deps.T(deps._("\n\nAuto-update not available: no package for %1 architecture."), arch)
             end
 
-            deps.UIManager:show(deps.InfoMessage:new{
-                text = deps.T(deps._("Update available!\n\nCurrent: %1\nLatest: %2\n\n%3%4\n\nVisit GitHub to download manually."),
-                    plugin_version, release.tag_name, release_notes, reason),
-            })
+            deps.UIManager:show(deps.InfoMessage:new({
+                text = deps.T(
+                    deps._("Update available!\n\nCurrent: %1\nLatest: %2\n\n%3%4\n\nVisit GitHub to download manually."),
+                    plugin_version,
+                    release.tag_name,
+                    release_notes,
+                    reason
+                ),
+            }))
         end
     end
 end

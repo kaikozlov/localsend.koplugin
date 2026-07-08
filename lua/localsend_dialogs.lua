@@ -79,7 +79,7 @@ end
 -- @param touchmenu_instance table Touch menu instance for updates
 function M.showSaveDirPicker(instance, touchmenu_instance)
     local start_path = instance:getPickerStartPath(instance.save_dir)
-    local path_chooser = deps.PathChooser:new{
+    local path_chooser = deps.PathChooser:new({
         select_directory = true,
         select_file = false,
         path = start_path,
@@ -90,13 +90,13 @@ function M.showSaveDirPicker(instance, touchmenu_instance)
                 deps.G_reader_settings:saveSetting("LocalSend_save_dir", instance.save_dir)
                 touchmenu_instance:updateItems()
             else
-                deps.UIManager:show(deps.InfoMessage:new{
+                deps.UIManager:show(deps.InfoMessage:new({
                     icon = "notice-warning",
                     text = deps.T(deps._("Cannot use this directory: %1"), err),
-                })
+                }))
             end
         end,
-    }
+    })
     deps.UIManager:show(path_chooser)
 end
 
@@ -105,7 +105,7 @@ end
 -- @param touchmenu_instance table Touch menu instance for updates
 function M.showDeviceNameDialog(instance, touchmenu_instance)
     local dialog
-    dialog = deps.InputDialog:new{
+    dialog = deps.InputDialog:new({
         title = deps._("Device name"),
         description = deps._("Leave empty for default ('KOReader')"),
         input = instance.device_name,
@@ -126,10 +126,10 @@ function M.showDeviceNameDialog(instance, touchmenu_instance)
                         local new_name = dialog:getInputText()
                         local valid, err = instance:validateDeviceName(new_name)
                         if not valid then
-                            deps.UIManager:show(deps.InfoMessage:new{
+                            deps.UIManager:show(deps.InfoMessage:new({
                                 icon = "notice-warning",
                                 text = err,
-                            })
+                            }))
                             return
                         end
                         instance.device_name = new_name
@@ -140,7 +140,7 @@ function M.showDeviceNameDialog(instance, touchmenu_instance)
                 },
             },
         },
-    }
+    })
     deps.UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
@@ -150,7 +150,7 @@ end
 -- @param touchmenu_instance table Touch menu instance for updates
 function M.showPinDialog(instance, touchmenu_instance)
     local dialog
-    dialog = deps.InputDialog:new{
+    dialog = deps.InputDialog:new({
         title = deps._("PIN code"),
         description = deps._("Leave empty to disable PIN protection"),
         input = instance.pin,
@@ -176,7 +176,7 @@ function M.showPinDialog(instance, touchmenu_instance)
                 },
             },
         },
-    }
+    })
     deps.UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
@@ -186,7 +186,7 @@ end
 -- @param touchmenu_instance table Optional menu instance to refresh after save
 function M.showCustomExtDialog(instance, touchmenu_instance)
     local dialog
-    dialog = deps.InputDialog:new{
+    dialog = deps.InputDialog:new({
         title = deps._("Custom extensions"),
         description = deps._("Comma-separated list (e.g., 'epub,pdf,mobi')"),
         input = instance.accept_ext,
@@ -215,7 +215,7 @@ function M.showCustomExtDialog(instance, touchmenu_instance)
                 },
             },
         },
-    }
+    })
     deps.UIManager:show(dialog)
     dialog:onShowKeyboard()
 end
@@ -236,14 +236,12 @@ function M.buildExtensionPresetsMenu(instance)
     end
 
     -- Build radio menu for standard presets
-    local menu = lsutils.buildRadioMenu(
-        radio_presets,
-        function() return instance.accept_ext end,
-        function(v)
-            instance.accept_ext = v
-            deps.G_reader_settings:saveSetting("LocalSend_accept_ext", v)
-        end
-    )
+    local menu = lsutils.buildRadioMenu(radio_presets, function()
+        return instance.accept_ext
+    end, function(v)
+        instance.accept_ext = v
+        deps.G_reader_settings:saveSetting("LocalSend_accept_ext", v)
+    end)
 
     -- Build a set of known preset values for quick lookup
     local preset_values = {}
