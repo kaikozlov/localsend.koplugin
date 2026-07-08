@@ -11,12 +11,12 @@ jobs:
     name: Go Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.23"
+          go-version: "1.26.5"
           cache: true
 
       - name: Run unit tests with race detector
@@ -29,17 +29,17 @@ jobs:
     name: Lua Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Pull koplugin-dev image
-        run: docker pull ghcr.io/kaikozlov/koplugin-dev:v2026.03_2
+        run: docker pull ghcr.io/kaikozlov/koplugin-dev:v2026.03_4
 
       - name: Run Lua tests
         run: |
           docker run --rm \
             -v "$PWD":/opt/plugin \
             -e PLUGIN_NAME=localsend \
-            ghcr.io/kaikozlov/koplugin-dev:v2026.03_2 \
+            ghcr.io/kaikozlov/koplugin-dev:v2026.03_4 \
             busted-koreader --verbose \
               --helper=/opt/koplugin-dev/commonrequire.lua \
               /opt/plugin/lua/spec/
