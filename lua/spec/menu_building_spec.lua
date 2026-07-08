@@ -262,9 +262,9 @@ describe("Menu Building", function()
             local found_transfers = false
             local found_save_dir = false
             local found_settings = false
-            local found_troubleshooting = false
             local found_updates = false
             local found_about = false
+            local settings_item
 
             for _, item in ipairs(sub_items) do
                 if item.text_func then
@@ -279,8 +279,7 @@ describe("Menu Building", function()
                 elseif item.text then
                     if item.text == "Settings" then
                         found_settings = true
-                    elseif item.text == "Troubleshooting" then
-                        found_troubleshooting = true
+                        settings_item = item
                     elseif item.text == "Updates" then
                         found_updates = true
                     elseif item.text == "About LocalSend" then
@@ -293,9 +292,20 @@ describe("Menu Building", function()
             assert.is_true(found_transfers, "Should have recent transfers")
             assert.is_true(found_save_dir, "Should have save directory")
             assert.is_true(found_settings, "Should have settings submenu")
-            assert.is_true(found_troubleshooting, "Should have troubleshooting submenu")
             assert.is_true(found_updates, "Should have updates submenu")
             assert.is_true(found_about, "Should have about menu item")
+
+            -- Troubleshooting is nested under Settings, not a top-level item.
+            assert.is_not_nil(settings_item, "Settings submenu should exist")
+            local found_troubleshooting_in_settings = false
+            for _, item in ipairs(settings_item.sub_item_table) do
+                if item.text == "Troubleshooting" then
+                    found_troubleshooting_in_settings = true
+                    break
+                end
+            end
+            assert.is_true(found_troubleshooting_in_settings,
+                "Troubleshooting should be nested under Settings")
         end)
 
         it("builds troubleshooting submenu with diagnostics and common fixes", function()
@@ -305,8 +315,8 @@ describe("Menu Building", function()
 
             assert.is_table(troubleshooting_menu)
             assert.equals("Run diagnostics", troubleshooting_menu[1].text)
-            assert.equals("Show network info", troubleshooting_menu[2].text)
-            assert.equals("Show server status", troubleshooting_menu[3].text)
+            assert.equals("Test discovery", troubleshooting_menu[2].text)
+            assert.equals("Show network info", troubleshooting_menu[3].text)
             assert.equals("Show recent LocalSend log", troubleshooting_menu[4].text)
             assert.equals("Prepare bug report", troubleshooting_menu[5].text)
             assert.equals("Common fixes", troubleshooting_menu[6].text)
@@ -717,11 +727,9 @@ describe("Menu Building", function()
         it("Settings submenu enabled_func should use _cached_running not isRunning()", function()
             local instance = helper.create_instance()
 
-            -- Get the menu items
             local menu_items = {}
             instance:addToMainMenu(menu_items)
 
-            -- Find the Settings submenu
             local settings_item = nil
             for _, item in ipairs(menu_items.localsend.sub_item_table) do
                 if item.text == "Settings" then
@@ -733,17 +741,12 @@ describe("Menu Building", function()
             assert.is_not_nil(settings_item, "Settings menu item should exist")
             assert.is_function(settings_item.enabled_func, "Settings should have enabled_func")
 
-            -- Set cached value to true (running)
+            -- Cached says running, but isRunning disagrees.
             instance._cached_running = true
-            -- But isRunning returns false
             instance.isRunning = function() return false end
 
-            -- enabled_func should use cached value, not call isRunning
-            local is_enabled = settings_item.enabled_func()
-
-            -- If using cache: enabled = not true = false
-            -- If calling isRunning: enabled = not false = true
-            assert.is_false(is_enabled,
+            -- Uses cache → disabled (false). If it called isRunning → enabled (true).
+            assert.is_false(settings_item.enabled_func(),
                 "Settings enabled_func should use _cached_running, not call isRunning()")
         end)
 
@@ -753,7 +756,6 @@ describe("Menu Building", function()
             local menu_items = {}
             instance:addToMainMenu(menu_items)
 
-            -- Find Settings item
             local settings_item = nil
             for _, item in ipairs(menu_items.localsend.sub_item_table) do
                 if item.text == "Settings" then
@@ -762,16 +764,12 @@ describe("Menu Building", function()
                 end
             end
 
-            -- Set cached value to false (not running)
+            -- Cached says not running, but isRunning disagrees.
             instance._cached_running = false
-            -- isRunning returns true (inconsistent - to test which is used)
             instance.isRunning = function() return true end
 
-            local is_enabled = settings_item.enabled_func()
-
-            -- If using cache: enabled = not false = true
-            -- If calling isRunning: enabled = not true = false
-            assert.is_true(is_enabled,
+            -- Uses cache → enabled (true). If it called isRunning → disabled (false).
+            assert.is_true(settings_item.enabled_func(),
                 "Settings enabled_func should use _cached_running, not call isRunning()")
         end)
     end)

@@ -206,6 +206,23 @@ describe("Firewall Management", function()
             end)
         end)
 
+        describe("selfTestFirewall", function()
+            it("opens, verifies, and closes the LocalSend rules", function()
+                local instance = helper.create_instance()
+                instance.port = "53317"
+
+                local result = instance:testFirewall()
+
+                assert.is_true(result.managed)
+                assert.is_true(result.ok)
+                assert.truthy(result.detail:match("open: iptables rules open"))
+                assert.truthy(result.detail:match("verify: tcp/53317: open, udp/53317: open"))
+                assert.truthy(result.detail:match("close: iptables rules closed"))
+                assert.is_nil(iptables_rules["INPUT -p tcp --dport 53317 -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"])
+                assert.is_nil(iptables_rules["INPUT -p udp --dport 53317 -j ACCEPT"])
+            end)
+        end)
+
         describe("closeFirewall", function()
             it("removes TCP rules", function()
                 -- Pre-add rules
@@ -282,7 +299,7 @@ describe("Firewall Management", function()
         end)
     end)
 
-    describe("on non-Kindle devices", function()
+    describe("on non-Kindle devices with iptables", function()
         before_each(function()
             package.loaded["device"] = {
                 isKindle = function() return false end,
@@ -290,38 +307,52 @@ describe("Firewall Management", function()
             }
         end)
 
-        it("openFirewall does nothing", function()
+        it("openFirewall configures iptables", function()
             local instance = helper.create_instance()
             instance.port = "53317"
-
-            os_execute_calls = {}
 
             instance:openFirewall()
 
-            local iptables_calls = 0
-            for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("iptables") then
-                    iptables_calls = iptables_calls + 1
-                end
-            end
-            assert.equal(0, iptables_calls, "Should not call iptables on non-Kindle")
+            assert.is_not_nil(iptables_rules["INPUT -p tcp --dport 53317 -m conntrack --ctstate NEW,ESTABLISHED -j ACCEPT"])
+            assert.is_not_nil(iptables_rules["INPUT -p udp --dport 53317 -j ACCEPT"])
         end)
 
-        it("closeFirewall does nothing", function()
+        it("closeFirewall removes iptables rules", function()
             local instance = helper.create_instance()
             instance.port = "53317"
-
-            os_execute_calls = {}
+            iptables_rules["INPUT -p udp --dport 53317 -j ACCEPT"] = true
 
             instance:closeFirewall()
 
-            local iptables_calls = 0
-            for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("iptables") then
-                    iptables_calls = iptables_calls + 1
+            assert.is_nil(iptables_rules["INPUT -p udp --dport 53317 -j ACCEPT"])
+        end)
+    end)
+
+    describe("when iptables is unavailable", function()
+        before_each(function()
+            package.loaded["device"] = {
+                isKindle = function() return false end,
+                retrieveNetworkInfo = function() return "WiFi" end,
+            }
+        end)
+
+        it("reports unmanaged without changing rules", function()
+            local base_execute = os.execute
+            _G.os.execute = function(cmd)
+                table.insert(os_execute_calls, cmd)
+                if cmd:match("command %-v iptables") then
+                    return 1
                 end
+                return base_execute(cmd)
             end
-            assert.equal(0, iptables_calls, "Should not call iptables on non-Kindle")
+            local instance = helper.create_instance()
+            instance.port = "53317"
+
+            local result = instance:openFirewall()
+
+            assert.is_false(result.managed)
+            assert.is_true(result.ok)
+            assert.is_nil(iptables_rules["INPUT -p udp --dport 53317 -j ACCEPT"])
         end)
     end)
 

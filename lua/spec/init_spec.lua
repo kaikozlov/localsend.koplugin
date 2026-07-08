@@ -15,24 +15,10 @@ describe("init() function", function()
     end)
 
     describe("settings loading", function()
-        it("should load port from settings", function()
+        it("should always use the protocol port 53317", function()
+            -- The Go backend has no port flag, so a legacy LocalSend_port setting
+            -- must be ignored to keep firewall/diagnostics on the real port.
             helper.state.settings["LocalSend_port"] = "12345"
-
-            LocalSend = require("main")
-            local instance = helper.create_instance()
-
-            assert.equal("12345", instance.port)
-        end)
-
-        it("should use default port 53317 when not set", function()
-            LocalSend = require("main")
-            local instance = helper.create_instance()
-
-            assert.equal("53317", instance.port)
-        end)
-
-        it("should use default port for invalid port", function()
-            helper.state.settings["LocalSend_port"] = "99999" -- Invalid
 
             LocalSend = require("main")
             local instance = helper.create_instance()

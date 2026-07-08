@@ -84,7 +84,6 @@ describe("Command Building Logic", function()
 
     describe("settings persistence", function()
         it("loads settings from G_reader_settings on init", function()
-            helper.state.settings["LocalSend_port"] = "12345"
             helper.state.settings["LocalSend_save_dir"] = "/custom/path"
             helper.state.settings["LocalSend_device_name"] = "My Device"
             helper.state.settings["LocalSend_pin"] = "1234"
@@ -94,7 +93,6 @@ describe("Command Building Logic", function()
 
             local instance = helper.create_instance()
 
-            assert.equal("12345", instance.port)
             assert.equal("/custom/path", instance.save_dir)
             assert.equal("My Device", instance.device_name)
             assert.equal("1234", instance.pin)
@@ -115,16 +113,9 @@ describe("Command Building Logic", function()
             assert.is_false(instance.autostart)
         end)
 
-        it("rejects invalid port and uses default", function()
-            helper.state.settings["LocalSend_port"] = "invalid"
-
-            local instance = helper.create_instance()
-
-            assert.equal("53317", instance.port)
-        end)
-
-        it("rejects out of range port and uses default", function()
-            helper.state.settings["LocalSend_port"] = "99999"
+        it("ignores a legacy LocalSend_port setting", function()
+            -- The Go backend has no port flag; the port is always 53317.
+            helper.state.settings["LocalSend_port"] = "12345"
 
             local instance = helper.create_instance()
 

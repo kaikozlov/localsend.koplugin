@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"localsend-cli/cmd/nettest"
 	"localsend-cli/cmd/recv"
 	"localsend-cli/cmd/scan"
 	"localsend-cli/cmd/send"
@@ -14,7 +15,7 @@ var rootCmd = &cobra.Command{
 	Use:     "localsend",
 	Short:   "LocalSend CLI",
 	Long:    "LocalSend CLI",
-	Version: version,
+	Version: versionString(),
 }
 
 func Execute() {
@@ -31,4 +32,5 @@ func init() {
 	rootCmd.AddCommand(scan.Cmd)
 	rootCmd.AddCommand(recv.Cmd)
 	rootCmd.AddCommand(send.Cmd)
+	rootCmd.AddCommand(nettest.Cmd)
 }

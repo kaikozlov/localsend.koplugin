@@ -142,12 +142,11 @@ function LocalSend:init()
         return
     end
 
-    local loaded_port = G_reader_settings:readSetting("LocalSend_port") or constants.DEFAULT_PORT
-    if not isValidPort(loaded_port) then
-        logger.warn("[LocalSend] Invalid port in settings, using default " .. constants.DEFAULT_PORT)
-        loaded_port = constants.DEFAULT_PORT
-    end
-    self.port = loaded_port
+    -- The Go backend always binds the LocalSend protocol port (recv has no port
+    -- flag), so a stale LocalSend_port setting must not make the firewall rules
+    -- and diagnostics diverge from the port actually in use. The legacy key is
+    -- still cleared by deletePluginSettings.
+    self.port = constants.DEFAULT_PORT
     self.save_dir = G_reader_settings:readSetting("LocalSend_save_dir") or constants.DEFAULT_SAVE_DIR
     self.device_name = G_reader_settings:readSetting("LocalSend_device_name") or ""
     self.use_https = G_reader_settings:nilOrTrue("LocalSend_use_https")
@@ -271,6 +270,7 @@ function LocalSend:init()
             Device = Device,
             NetworkMgr = NetworkMgr,
             util = util,
+            json = json,
             logger = logger,
             T = T,
             _ = _,
@@ -678,17 +678,34 @@ end
 function LocalSend:openFirewall()
     if not isValidPort(self.port) then
         logger.err("[LocalSend] Invalid port, cannot configure firewall")
-        return
+        return { managed = false, ok = false, detail = "invalid port" }
     end
-    lsfirewall.openFirewall(self.port, self.use_webrtc)
+    if not lsfirewall then
+        return { managed = false, ok = true, detail = "firewall module unavailable" }
+    end
+    return lsfirewall.openFirewall(self.port, self.use_webrtc)
 end
 
 function LocalSend:closeFirewall()
     if not isValidPort(self.port) then
         logger.err("[LocalSend] Invalid port, cannot configure firewall")
-        return
+        return { managed = false, ok = false, detail = "invalid port" }
     end
-    lsfirewall.closeFirewall(self.port)
+    if not lsfirewall then
+        return { managed = false, ok = true, detail = "firewall module unavailable" }
+    end
+    return lsfirewall.closeFirewall(self.port)
+end
+
+function LocalSend:testFirewall()
+    if not isValidPort(self.port) then
+        logger.err("[LocalSend] Invalid port, cannot test firewall")
+        return { managed = false, ok = false, detail = "invalid port" }
+    end
+    if not lsfirewall or not lsfirewall.selfTestFirewall then
+        return { managed = false, ok = true, detail = "firewall module unavailable" }
+    end
+    return lsfirewall.selfTestFirewall(self.port, self.use_webrtc)
 end
 
 function LocalSend:validateDeviceName(name)
@@ -1032,15 +1049,15 @@ function LocalSend:showDiagnostics()
     end
 end
 
-function LocalSend:showNetworkInfo()
+function LocalSend:runDiscoveryTest()
     if lsdiagnostics then
-        lsdiagnostics.showNetworkInfo()
+        lsdiagnostics.showDiscoveryTest(self)
     end
 end
 
-function LocalSend:showServerStatus()
+function LocalSend:showNetworkInfo()
     if lsdiagnostics then
-        lsdiagnostics.showServerStatus(self)
+        lsdiagnostics.showNetworkInfo()
     end
 end
 
@@ -1329,6 +1346,12 @@ function LocalSend:_buildMainMenu()
                 end,
                 help_text = _("Generate new TLS certificates. Use if you experience connection issues or want to reset trusted device pairings."),
             },
+            {
+                text = _("Troubleshooting"),
+                sub_item_table_func = function()
+                    return self:_buildTroubleshootingMenu()
+                end,
+            },
         },
         separator = true,
     })
@@ -1357,16 +1380,6 @@ function LocalSend:_buildMainMenu()
         })
     end
 
-    -- Troubleshooting
-    if lsdiagnostics then
-        table.insert(menu, {
-            text = _("Troubleshooting"),
-            sub_item_table_func = function()
-                return self:_buildTroubleshootingMenu()
-            end,
-        })
-    end
-
     -- Updates
     table.insert(menu, {
         text = _("Updates"),
@@ -1390,32 +1403,39 @@ function LocalSend:_buildTroubleshootingMenu()
     local menu = {
         {
             text = _("Run diagnostics"),
+            keep_menu_open = true,
             callback = function()
                 self:showDiagnostics()
             end,
-            help_text = _("Collect LocalSend plugin, network, server, and recent log information " ..
-                "without changing Wi-Fi state."),
+            help_text = _("Run checks for network, binary, server, and firewall, then show detailed logs " ..
+                "and report information."),
+        },
+        {
+            text = _("Test discovery"),
+            keep_menu_open = true,
+            callback = function()
+                self:runDiscoveryTest()
+            end,
+            help_text = _("Check whether this device can send/receive LocalSend multicast discovery packets " ..
+                "and whether other devices are visible, to explain why a device isn't being found."),
         },
         {
             text = _("Show network info"),
+            keep_menu_open = true,
             callback = function()
                 self:showNetworkInfo()
             end,
         },
         {
-            text = _("Show server status"),
-            callback = function()
-                self:showServerStatus()
-            end,
-        },
-        {
             text = _("Show recent LocalSend log"),
+            keep_menu_open = true,
             callback = function()
                 self:showRecentBackendLog()
             end,
         },
         {
             text = _("Prepare bug report"),
+            keep_menu_open = true,
             callback = function()
                 self:showBugReportInfo()
             end,
@@ -1426,12 +1446,14 @@ function LocalSend:_buildTroubleshootingMenu()
             sub_item_table = {
                 {
                     text = _("Restart LocalSend server"),
+                    keep_menu_open = true,
                     callback = function()
                         self:restart()
                     end,
                 },
                 {
                     text = _("Rotate certificates"),
+                    keep_menu_open = true,
                     callback = function()
                         self:rotateCertificates()
                     end,
@@ -1457,6 +1479,7 @@ function LocalSend:_buildTroubleshootingMenu()
                 },
                 {
                     text = _("Check for updates / reinstall"),
+                    keep_menu_open = true,
                     callback = function()
                         self:checkForUpdates()
                     end,

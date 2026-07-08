@@ -16,6 +16,11 @@ M.SEND_PID_FILE = "/tmp/localsend_send.pid"
 M.SEND_OUTPUT_FILE = "/tmp/localsend_send.out"
 M.SCAN_OUTPUT_FILE = "/tmp/localsend_scan.json"
 
+-- Diagnostics: nettest (multicast discovery self-test) output
+M.NETTEST_OUTPUT_FILE = "/tmp/localsend_nettest.json"
+M.NETTEST_PID_FILE = "/tmp/localsend_nettest.pid"
+M.NETTEST_DURATION = 3  -- seconds the Go nettest probe listens
+
 -- Polling intervals (seconds)
 M.SENTINEL_POLL_INTERVAL = 2
 M.SEND_POLL_INTERVAL = 0.5

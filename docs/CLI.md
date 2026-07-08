@@ -28,6 +28,17 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -ldflags="-s -w" -o localse
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o localsend
 ```
 
+## Version
+
+```bash
+./localsend --version
+```
+
+Prints `<version> <goos>/<arch>` (for example `v1.3.0 linux/arm64`). The
+architecture is injected at build time and matches the asset names (`arm64`,
+`armv7`, `arm-legacy`); the KOReader plugin compares it against the device's
+architecture to flag a mismatched package.
+
 ## Scanning for Devices
 
 ```bash
@@ -43,6 +54,41 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o localsend
 # Scan with custom timeout
 ./localsend scan -t 10
 ```
+
+## Diagnosing discovery (nettest)
+
+`nettest` checks whether this device can send and receive LocalSend multicast
+discovery packets, and whether other LocalSend devices are on the LAN. It
+announces itself to the multicast group and counts peers that respond either
+with a UDP announcement or with an HTTP register call to the discovery port
+(the official app's primary response path). The KOReader plugin's "Test
+discovery" troubleshooting action uses it to attribute a "device not
+discovered" problem to this device/network vs. the other device(s).
+
+```bash
+# Human-readable output
+./localsend nettest
+
+# JSON output (consumed by the plugin)
+./localsend nettest --json
+
+# Run for 5 seconds
+./localsend nettest -d 5
+```
+
+JSON result fields:
+
+| Field                 | Description                                                    |
+|-----------------------|----------------------------------------------------------------|
+| `loopback`            | `true` if this device received its own multicast probe        |
+| `bind_error`          | non-empty if the UDP discovery port could not be bound         |
+| `peers`               | distinct other LocalSend devices seen (union of both paths)    |
+| `udp_peers`           | peers seen via UDP announcements                               |
+| `register_peers`      | peers seen via HTTP register calls                             |
+| `register_bind_error` | non-empty if the TCP register listener could not bind          |
+| `seen_aliases`        | device names (aliases) of responding peers, capped at 10       |
+| `local_ips`           | this device's IPv4 addresses                                   |
+| `duration_ms`         | how long the test ran                                          |
 
 ## Receiving Files
 

@@ -54,17 +54,17 @@ cp "$PLUGIN_SRC"/*.lua "$BUILD_DIR/$PLUGIN_NAME/"
 if ! $PACKAGE_ONLY; then
     # Build for armv5 (soft-float, legacy devices like K3)
     echo "Building for armv5 (legacy)..."
-    CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 go build -ldflags="-s -w" -o "$BIN_DIR/localsend-arm-legacy" .
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 go build -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=arm-legacy" -o "$BIN_DIR/localsend-arm-legacy" .
     echo "armv5: $(ls -lh "$BIN_DIR/localsend-arm-legacy" | awk '{print $5}')"
 
     # Build for armv7 (32-bit ARM)
     echo "Building for armv7..."
-    CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w" -o "$BIN_DIR/localsend-armv7" .
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=armv7" -o "$BIN_DIR/localsend-armv7" .
     echo "armv7: $(ls -lh "$BIN_DIR/localsend-armv7" | awk '{print $5}')"
 
     # Build for arm64 (64-bit ARM)
     echo "Building for arm64..."
-    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w" -o "$BIN_DIR/localsend-arm64" .
+    CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=arm64" -o "$BIN_DIR/localsend-arm64" .
     echo "arm64: $(ls -lh "$BIN_DIR/localsend-arm64" | awk '{print $5}')"
 fi
 

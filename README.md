@@ -60,23 +60,11 @@ If you are already up to date, the updater can reinstall the current release. Th
 
 ### Troubleshooting
 
-Open **Menu → Network → LocalSend → Troubleshooting** for in-plugin diagnostics:
+Stop the server, then open **Menu → Network → LocalSend → Settings → Troubleshooting** for in-plugin diagnostics — run diagnostics, test discovery, view network info and recent logs, and prepare a bug report.
 
-- **Run diagnostics** — shows plugin version, device architecture, network state, server process state, local API probe result, firewall status on Kindle, settings, and recent LocalSend logs.
-- **Show network info** — displays KOReader's current network information, including IP addresses when available.
-- **Show server status** — checks the LocalSend PID file, process state, and local API endpoint.
-- **Show recent LocalSend log** — displays the receiver backend log captured at `/tmp/localsend_server.out`.
-- **Prepare bug report** — formats the diagnostics details with a checklist of information to include in GitHub issues.
+For common symptoms and fixes (connection refused, device not discovered, HTTP 400/403, HTTPS and WebRTC issues), see the **[Troubleshooting guide](docs/TROUBLESHOOTING.md)**.
 
 When reporting a bug, include the diagnostics report plus KOReader's `crash.log` (`/mnt/us/koreader/crash.log` on Kindle, `.adds/koreader/crash.log` on Kobo).
-
-Common symptoms:
-
-- **Connection refused** — the device is reachable, but the LocalSend receiver is not listening. Check **Show server status**, then restart the server. On older Kindles, verify that you installed the `arm-legacy` package.
-- **Device not discovered** — make sure both devices are on the same LAN, Wi-Fi isolation is disabled on the router, and Kindle firewall rules are open. Diagnostics reports the relevant firewall status on Kindle.
-- **HTTP 400/403 during receive** — check PIN, allowed extensions, and file type routing. Archives such as `.zip`, `.rar`, and `.7z` are received as files; the plugin does not extract them.
-- **HTTPS connection problems** — temporarily disable **Use HTTPS** from **Settings** or **Troubleshooting → Common fixes**, then try again.
-- **WebRTC/signaling problems** — WebRTC requires Internet access; LAN send/receive only requires local connectivity. Temporarily disable **Enable WebRTC Support** if startup or discovery is unreliable.
 
 ### Compatibility
 

@@ -225,6 +225,10 @@ function M.sendFile(device, filepath, pin, callback, options)
             })
         end
 
+        -- Record the outcome so diagnostics can report send-side
+        -- health (ServerState persists across widget recreations).
+        ServerState.last_send = { success = success, message = message, time = os.time() }
+
         if callback then callback(success, message) end
     end
 

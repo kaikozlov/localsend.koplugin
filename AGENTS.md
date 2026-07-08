@@ -1,7 +1,5 @@
 # AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Overview
 
 LocalSend CLI: Go implementation of LocalSend protocol (AirDrop alternative).
@@ -37,7 +35,7 @@ make shell              # Interactive container shell
 make help               # List all targets
 ```
 
-Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.03_1` — contains real KOReader Linux runtime.
+Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.03_4` — contains real KOReader Linux runtime.
 Bump `KOPLUGIN_DEV_VERSION` in Makefile when the image updates.
 
 ### Local (no Docker required)
