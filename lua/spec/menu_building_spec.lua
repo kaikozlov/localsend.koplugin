@@ -1,5 +1,5 @@
-require 'busted.runner'()
-local helper = require("spec.test_helper")
+require("busted.runner")()
+local helper = require("spec.spec_helper")
 
 -- Tests for menu building functions
 
@@ -304,8 +304,7 @@ describe("Menu Building", function()
                     break
                 end
             end
-            assert.is_true(found_troubleshooting_in_settings,
-                "Troubleshooting should be nested under Settings")
+            assert.is_true(found_troubleshooting_in_settings, "Troubleshooting should be nested under Settings")
         end)
 
         it("builds troubleshooting submenu with diagnostics and common fixes", function()
@@ -649,7 +648,9 @@ describe("Menu Building", function()
 
             local update_count = 0
             local mock_touchmenu = {
-                updateItems = function() update_count = update_count + 1 end
+                updateItems = function()
+                    update_count = update_count + 1
+                end,
             }
 
             instance:_refreshMenuUntilSettled(mock_touchmenu, 3)
@@ -672,7 +673,9 @@ describe("Menu Building", function()
 
             local update_count = 0
             local mock_touchmenu = {
-                updateItems = function() update_count = update_count + 1 end
+                updateItems = function()
+                    update_count = update_count + 1
+                end,
             }
 
             instance:_refreshMenuUntilSettled(mock_touchmenu, 3)
@@ -695,7 +698,9 @@ describe("Menu Building", function()
 
             local update_count = 0
             local mock_touchmenu = {
-                updateItems = function() update_count = update_count + 1 end
+                updateItems = function()
+                    update_count = update_count + 1
+                end,
             }
 
             instance:_refreshMenuUntilSettled(mock_touchmenu, 0)
@@ -743,11 +748,12 @@ describe("Menu Building", function()
 
             -- Cached says running, but isRunning disagrees.
             instance._cached_running = true
-            instance.isRunning = function() return false end
+            instance.isRunning = function()
+                return false
+            end
 
             -- Uses cache → disabled (false). If it called isRunning → enabled (true).
-            assert.is_false(settings_item.enabled_func(),
-                "Settings enabled_func should use _cached_running, not call isRunning()")
+            assert.is_false(settings_item.enabled_func(), "Settings enabled_func should use _cached_running, not call isRunning()")
         end)
 
         it("Settings submenu enabled_func should return true when _cached_running is false", function()
@@ -766,11 +772,12 @@ describe("Menu Building", function()
 
             -- Cached says not running, but isRunning disagrees.
             instance._cached_running = false
-            instance.isRunning = function() return true end
+            instance.isRunning = function()
+                return true
+            end
 
             -- Uses cache → enabled (true). If it called isRunning → disabled (false).
-            assert.is_true(settings_item.enabled_func(),
-                "Settings enabled_func should use _cached_running, not call isRunning()")
+            assert.is_true(settings_item.enabled_func(), "Settings enabled_func should use _cached_running, not call isRunning()")
         end)
     end)
 end)

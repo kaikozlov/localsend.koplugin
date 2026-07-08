@@ -2,9 +2,10 @@
 -- Verifies that the LocalSend plugin correctly cleans up all persistent state
 -- when deletePluginSettings() is called by PluginLoader.
 
-require 'busted.runner'()
+require("busted.runner")()
 
-local helper = require("spec/test_helper")
+local helper = require("spec.spec_helper")
+local util = require("util")
 
 -- All setting keys used by the plugin (must match main.lua deletePluginSettings)
 local ALL_SETTINGS_KEYS = {
@@ -25,15 +26,22 @@ local ALL_SETTINGS_KEYS = {
     "LocalSend_update_available_tag",
 }
 
--- Plugin-path based files that deletePluginSettings should remove
-local PLUGIN_DIR = "/tmp/koreader/plugins/localsend.koplugin"
-local PLUGIN_FILES = {
-    PLUGIN_DIR .. "/ext_routing.json",
-    PLUGIN_DIR .. "/.reinstall_required",
-}
+local function plugin_dir()
+    return helper.runtime_plugin_dir()
+end
 
 -- Certs directory that should be purged
-local CERTS_DIR = PLUGIN_DIR .. "/certs"
+local function certs_dir()
+    return plugin_dir() .. "/certs"
+end
+
+-- Plugin-path based files that deletePluginSettings should remove
+local function plugin_files()
+    return {
+        plugin_dir() .. "/ext_routing.json",
+        plugin_dir() .. "/.reinstall_required",
+    }
+end
 
 -- Temporary runtime files (from constants)
 local TMP_FILES = {
@@ -48,37 +56,16 @@ local TMP_FILES = {
 }
 
 describe("deletePluginSettings", function()
-    local instance, _ -- _ = LocalSend class
+    local instance
+
+    setup(function()
+        helper.setup_complete()
+    end)
 
     before_each(function()
         helper.before_each()
-        helper.setup_complete({
-            data_dir = "/tmp/koreader",
-            util = {
-                pathExists = function(path)
-                    -- Simulate existing files for cleanup tests
-                    for _, f in ipairs(PLUGIN_FILES) do
-                        if path == f then return true end
-                    end
-                    if path == CERTS_DIR then return true end
-                    for _, f in ipairs(TMP_FILES) do
-                        if path == f then return true end
-                    end
-                    if path == PLUGIN_DIR then return true end
-                    if path == PLUGIN_DIR .. "/localsend" then return true end
-                    return false
-                end,
-                removeFile = function(path)
-                    table.insert(helper.state.removed_files, path)
-                    return true
-                end,
-            },
-        })
 
-        -- Mock os.remove to capture calls (not included in setup_complete by default)
-        helper.mock_os_remove()
-
-        -- Populate all settings with sample data (use appropriate types)
+        -- Populate all settings with sample data.
         local test_defaults = {
             LocalSend_port = "53317",
             LocalSend_save_dir = "/documents",
@@ -97,103 +84,89 @@ describe("deletePluginSettings", function()
             LocalSend_update_available_tag = "v1.2.0",
         }
         for _, key in ipairs(ALL_SETTINGS_KEYS) do
-            _G.G_reader_settings:saveSetting(key, test_defaults[key])
+            G_reader_settings:saveSetting(key, test_defaults[key])
         end
 
-        instance, _ = helper.create_instance()
+        instance = helper.create_instance()
     end)
 
     describe("removes all G_reader_settings keys", function()
         it("removes every known settings key", function()
-            -- Verify settings exist before cleanup
             for _, key in ipairs(ALL_SETTINGS_KEYS) do
-                assert.is.not_nil(_G.G_reader_settings:readSetting(key),
-                    "Expected " .. key .. " to be set before cleanup")
+                assert.is.not_nil(G_reader_settings:readSetting(key), "Expected " .. key .. " to be set before cleanup")
             end
 
             instance:deletePluginSettings()
 
-            -- Verify all settings are gone
             for _, key in ipairs(ALL_SETTINGS_KEYS) do
-                assert.is_nil(_G.G_reader_settings:readSetting(key),
-                    "Expected " .. key .. " to be nil after cleanup")
+                assert.is_nil(G_reader_settings:readSetting(key), "Expected " .. key .. " to be nil after cleanup")
             end
         end)
 
         it("removes settings even when only some are set", function()
-            -- Reset and set only a subset
-            _G.G_reader_settings._reset()
-            _G.G_reader_settings:saveSetting("LocalSend_port", "53317")
-            _G.G_reader_settings:saveSetting("LocalSave_dir", "/documents")
-            -- Note: LocalSave_dir is a typo — wrong key. Only LocalSend_port should be removed.
-            _G.G_reader_settings:saveSetting("LocalSend_autostart", true)
+            helper.reset_settings()
+            G_reader_settings:saveSetting("LocalSend_port", "53317")
+            G_reader_settings:saveSetting("LocalSave_dir", "/documents") -- unrelated typo key
+            G_reader_settings:saveSetting("LocalSend_autostart", true)
 
             instance:deletePluginSettings()
 
-            assert.is_nil(_G.G_reader_settings:readSetting("LocalSend_port"))
-            assert.is_nil(_G.G_reader_settings:readSetting("LocalSend_autostart"))
-            -- The unrelated key should remain (it's not ours to manage)
-            assert.is.not_nil(_G.G_reader_settings:readSetting("LocalSave_dir"))
+            assert.is_nil(G_reader_settings:readSetting("LocalSend_port"))
+            assert.is_nil(G_reader_settings:readSetting("LocalSend_autostart"))
+            assert.is.not_nil(G_reader_settings:readSetting("LocalSave_dir"))
         end)
     end)
 
     describe("removes plugin directory files", function()
         it("removes ext_routing.json and reinstall marker", function()
+            for _, f in ipairs(plugin_files()) do
+                local fh = assert(io.open(f, "w"))
+                fh:write("x")
+                fh:close()
+            end
+
             instance:deletePluginSettings()
 
-            -- Check that os.remove was called for plugin-path files
-            for _, expected_path in ipairs(PLUGIN_FILES) do
-                local found = false
-                for _, removed in ipairs(helper.state.removed_files) do
-                    if removed == expected_path then
-                        found = true
-                        break
-                    end
-                end
-                assert.is_true(found,
-                    "Expected " .. expected_path .. " to be removed")
+            for _, expected_path in ipairs(plugin_files()) do
+                assert.is_false(util.pathExists(expected_path), "Expected " .. expected_path .. " to be removed")
             end
         end)
     end)
 
     describe("removes TLS certs directory", function()
         it("purges the certs directory", function()
+            local dir = certs_dir()
+            util.makePath(dir)
+            local fh = assert(io.open(dir .. "/server.crt", "w"))
+            fh:write("x")
+            fh:close()
+            assert.is_true(util.pathExists(dir))
+
             instance:deletePluginSettings()
 
-            -- Check that purgeDir was called for certs
-            local found = false
-            for _, dir in ipairs(helper.state.purged_dirs) do
-                if dir == CERTS_DIR then
-                    found = true
-                    break
-                end
-            end
-            assert.is_true(found, "Expected certs directory to be purged")
+            assert.is_false(util.pathExists(dir), "Expected certs directory to be purged")
         end)
     end)
 
     describe("removes temporary runtime files", function()
         it("removes PID, log, and other tmp files", function()
+            for _, f in ipairs(TMP_FILES) do
+                local fh = assert(io.open(f, "w"))
+                fh:write("x")
+                fh:close()
+            end
+
             instance:deletePluginSettings()
 
-            for _, expected_path in ipairs(TMP_FILES) do
-                local found = false
-                for _, removed in ipairs(helper.state.removed_files) do
-                    if removed == expected_path then
-                        found = true
-                        break
-                    end
-                end
-                assert.is_true(found,
-                    "Expected " .. expected_path .. " to be removed")
+            for _, f in ipairs(TMP_FILES) do
+                assert.is_false(util.pathExists(f), "Expected " .. f .. " to be removed")
             end
         end)
     end)
 
     describe("resets in-memory ServerState", function()
         it("resets all ServerState fields to defaults", function()
-            -- Set some non-default values
-            local ss = package.loaded["localsend_state"].ServerState
+            local ss = require("localsend_state").ServerState
             ss.user_stopped = true
             ss.was_running_before_suspend = true
             ss.transfer_count = 5
@@ -223,32 +196,32 @@ describe("deletePluginSettings", function()
 
     describe("resets PluginShare", function()
         it("clears localsend_running flag", function()
-            package.loaded["pluginshare"].localsend_running = true
+            local PluginShare = require("pluginshare")
+            PluginShare.localsend_running = true
 
             instance:deletePluginSettings()
 
-            assert.is_nil(package.loaded["pluginshare"].localsend_running)
+            assert.is_nil(PluginShare.localsend_running)
         end)
     end)
 
     describe("idempotency", function()
         it("does not error when called with no existing settings", function()
-            _G.G_reader_settings._reset()
-
-            local ok, err = pcall(function() instance:deletePluginSettings() end)
+            helper.reset_settings()
+            local ok, err = pcall(function()
+                instance:deletePluginSettings()
+            end)
             assert.is_true(ok, "deletePluginSettings threw: " .. tostring(err))
         end)
 
         it("is safe to call twice", function()
             instance:deletePluginSettings()
-
-            local ok, err = pcall(function() instance:deletePluginSettings() end)
+            local ok, err = pcall(function()
+                instance:deletePluginSettings()
+            end)
             assert.is_true(ok, "second deletePluginSettings threw: " .. tostring(err))
-
-            -- Verify settings are still clean
             for _, key in ipairs(ALL_SETTINGS_KEYS) do
-                assert.is_nil(_G.G_reader_settings:readSetting(key),
-                    "Expected " .. key .. " to remain nil after second call")
+                assert.is_nil(G_reader_settings:readSetting(key), "Expected " .. key .. " to remain nil after second call")
             end
         end)
     end)
@@ -262,40 +235,29 @@ describe("deletePluginSettings", function()
 
     describe("settings snapshot diff", function()
         it("leaves no LocalSend keys in G_reader_settings after cleanup", function()
-            -- Set all keys
             for _, key in ipairs(ALL_SETTINGS_KEYS) do
-                _G.G_reader_settings:saveSetting(key, "test_value")
-            end
-
-            -- Verify they exist
-            for _, key in ipairs(ALL_SETTINGS_KEYS) do
-                assert.is.not_nil(_G.G_reader_settings:readSetting(key))
+                G_reader_settings:saveSetting(key, "test_value")
             end
 
             instance:deletePluginSettings()
 
-            -- Snapshot: no LocalSend_* keys should remain
             local remaining = {}
-            for key, _ in pairs(helper.state.settings) do
+            for key in pairs(G_reader_settings.data) do
                 if key:match("^LocalSend_") then
                     table.insert(remaining, key)
                 end
             end
-
-            assert.are.same({}, remaining,
-                "These LocalSend_* keys were not cleaned up: " ..
-                table.concat(remaining, ", "))
+            assert.are.same({}, remaining, "These LocalSend_* keys were not cleaned up: " .. table.concat(remaining, ", "))
         end)
 
         it("does not remove unrelated settings", function()
-            _G.G_reader_settings:saveSetting("some_other_plugin_key", "keep_me")
-            _G.G_reader_settings:saveSetting("LocalSend_port", "53317")
+            G_reader_settings:saveSetting("some_other_plugin_key", "keep_me")
+            G_reader_settings:saveSetting("LocalSend_port", "53317")
 
             instance:deletePluginSettings()
 
-            assert.are.equal("keep_me",
-                _G.G_reader_settings:readSetting("some_other_plugin_key"))
-            assert.is_nil(_G.G_reader_settings:readSetting("LocalSend_port"))
+            assert.are.equal("keep_me", G_reader_settings:readSetting("some_other_plugin_key"))
+            assert.is_nil(G_reader_settings:readSetting("LocalSend_port"))
         end)
     end)
 end)

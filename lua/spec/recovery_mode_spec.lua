@@ -1,5 +1,5 @@
-require 'busted.runner'()
-local helper = require("spec.test_helper")
+require("busted.runner")()
+local helper = require("spec.spec_helper")
 
 -- Tests for recovery mode functionality
 
@@ -143,8 +143,7 @@ describe("Recovery Mode", function()
             instance:addToMainMenu(menu_items)
 
             -- Should NOT be in recovery mode - normal mode uses text_func, not text
-            local menu_text = menu_items.localsend.text or
-                (menu_items.localsend.text_func and menu_items.localsend.text_func())
+            local menu_text = menu_items.localsend.text or (menu_items.localsend.text_func and menu_items.localsend.text_func())
             assert.is_truthy(menu_text)
             assert.is_falsy(menu_text:match("Recovery"))
         end)
@@ -262,12 +261,14 @@ describe("Recovery Mode", function()
 
             local menu_registered = false
             local mock_menu = {
-                registerToMainMenu = function() menu_registered = true end
+                registerToMainMenu = function()
+                    menu_registered = true
+                end,
             }
 
-            local instance = LocalSend:new{
-                ui = { menu = mock_menu }
-            }
+            local instance = LocalSend:new({
+                ui = { menu = mock_menu },
+            })
 
             assert.is_true(menu_registered, "Menu should be registered in recovery mode")
         end)
@@ -323,15 +324,19 @@ describe("Update orphan cleanup", function()
 
         -- Initialize with mocked dependencies
         deps_mock = {
-            UIManager = package.loaded["ui/uimanager"],
-            InfoMessage = package.loaded["ui/widget/infomessage"],
-            NetworkMgr = package.loaded["ui/network/manager"],
-            util = package.loaded["util"],
-            json = package.loaded["json"],
-            logger = package.loaded["logger"],
-            T = function(s, ...) return s end,
-            _ = function(s) return s end,
-            G_reader_settings = package.loaded["G_reader_settings"],
+            UIManager = require("ui/uimanager"),
+            InfoMessage = require("ui/widget/infomessage"),
+            NetworkMgr = require("ui/network/manager"),
+            util = require("util"),
+            json = require("json"),
+            logger = require("logger"),
+            T = function(s, ...)
+                return s
+            end,
+            _ = function(s)
+                return s
+            end,
+            G_reader_settings = G_reader_settings,
         }
         lsupdate.init(deps_mock)
     end)
@@ -425,8 +430,12 @@ describe("Update orphan cleanup", function()
             local removed_old = false
             local removed_deprecated = false
             for _, path in ipairs(removed_files) do
-                if path:match("old_module%.lua") then removed_old = true end
-                if path:match("deprecated%.lua") then removed_deprecated = true end
+                if path:match("old_module%.lua") then
+                    removed_old = true
+                end
+                if path:match("deprecated%.lua") then
+                    removed_deprecated = true
+                end
             end
             assert.is_true(removed_old, "old_module.lua should be deleted")
             assert.is_true(removed_deprecated, "deprecated.lua should be deleted")
@@ -438,7 +447,7 @@ describe("Update orphan cleanup", function()
             local plugin_path = "/tmp/test_plugin"
             local new_lua_files = { ["new.lua"] = true }
             local protected_files = { ["main.lua"] = true, ["localsend_update.lua"] = true, ["localsend_utils.lua"] = true }
-            local copy_failed = true  -- Simulate failed copy
+            local copy_failed = true -- Simulate failed copy
 
             local old_files = { "orphan.lua" }
 
@@ -459,7 +468,7 @@ describe("Update orphan cleanup", function()
             local plugin_path = "/tmp/test_plugin"
             local new_lua_files = { ["new.lua"] = true }
             local protected_files = { ["main.lua"] = true, ["localsend_update.lua"] = true, ["localsend_utils.lua"] = true }
-            local copy_failed = false  -- Copy succeeded
+            local copy_failed = false -- Copy succeeded
 
             local old_files = { "orphan.lua" }
 
@@ -484,9 +493,19 @@ describe("Reinstall marker file", function()
     local marker_file_exists
     local marker_file_content
     local written_files
+    local restore_io_open, restore_util_removeFile
 
     setup(function()
         helper.setup_complete()
+    end)
+
+    after_each(function()
+        if restore_io_open then
+            _G.io.open = restore_io_open
+        end
+        if restore_util_removeFile then
+            require("util").removeFile = restore_util_removeFile
+        end
     end)
 
     before_each(function()
@@ -497,12 +516,15 @@ describe("Reinstall marker file", function()
 
         -- Mock io.open for marker file operations
         local original_io_open = _G.io.open
+        restore_io_open = original_io_open
         _G.io.open = function(path, mode)
             if path:match("%.reinstall_required$") then
                 if mode == "r" then
                     if marker_file_exists then
                         return {
-                            read = function() return marker_file_content end,
+                            read = function()
+                                return marker_file_content
+                            end,
                             close = function() end,
                         }
                     else
@@ -534,7 +556,9 @@ describe("Reinstall marker file", function()
         end
 
         -- Override util.removeFile to handle marker file removal
-        package.loaded["util"].removeFile = function(path)
+        local util_mod = require("util")
+        restore_util_removeFile = util_mod.removeFile
+        util_mod.removeFile = function(path)
             if path:match("%.reinstall_required$") then
                 marker_file_exists = false
                 marker_file_content = nil
@@ -549,17 +573,21 @@ describe("Reinstall marker file", function()
 
         -- Initialize with mocked dependencies
         lsupdate.init({
-            UIManager = package.loaded["ui/uimanager"],
-            InfoMessage = package.loaded["ui/widget/infomessage"],
-            NetworkMgr = package.loaded["ui/network/manager"],
-            util = package.loaded["util"],
-            ffiutil = package.loaded["ffi/util"],
-            json = package.loaded["json"],
-            logger = package.loaded["logger"],
-            T = function(s, ...) return s end,
-            _ = function(s) return s end,
-            G_reader_settings = package.loaded["G_reader_settings"],
-            cache_dir = "/tmp/koreader/cache",
+            UIManager = require("ui/uimanager"),
+            InfoMessage = require("ui/widget/infomessage"),
+            NetworkMgr = require("ui/network/manager"),
+            util = require("util"),
+            ffiutil = require("ffi/util"),
+            json = require("json"),
+            logger = require("logger"),
+            T = function(s, ...)
+                return s
+            end,
+            _ = function(s)
+                return s
+            end,
+            G_reader_settings = G_reader_settings,
+            cache_dir = (get_test_data_dir() .. "/cache"),
         })
     end)
 

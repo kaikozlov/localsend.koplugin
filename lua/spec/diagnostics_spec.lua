@@ -1,5 +1,8 @@
-require 'busted.runner'()
-local helper = require("spec.test_helper")
+require("busted.runner")()
+local helper = require("spec.spec_helper")
+local util = require("util")
+local Device = require("device")
+local NetworkMgr = require("ui/network/manager")
 
 -- Tests for LocalSend troubleshooting/diagnostics flow
 
@@ -8,6 +11,8 @@ describe("LocalSend diagnostics", function()
     local original_io_popen
     local original_os_remove
     local original_os_execute
+
+    local orig_pathExists, orig_retrieveNetworkInfo, orig_isKindle, orig_isConnected, orig_isOnline
 
     local files
 
@@ -66,8 +71,7 @@ describe("LocalSend diagnostics", function()
             elseif cmd:match("command %-v iptables") then
                 output = "/sbin/iptables\n"
             elseif cmd:match("^'df'") then
-                output = "Filesystem     1K-blocks   Used Available Use% Mounted on\n" ..
-                    "/dev/root        1000000 500000    500000  50% /mnt/us\n"
+                output = "Filesystem     1K-blocks   Used Available Use% Mounted on\n" .. "/dev/root        1000000 500000    500000  50% /mnt/us\n"
             elseif cmd:match("iptables") then
                 output = ""
             end
@@ -83,18 +87,23 @@ describe("LocalSend diagnostics", function()
     local function mock_server_probe(result)
         result = result or { ok = true, detail = "HTTP 200", log_path = "/tmp/localsend_diag_server.out" }
         local diagnostics = require("localsend_diagnostics")
-        diagnostics._setServerProbeOverride(function() return result end)
+        diagnostics._setServerProbeOverride(function()
+            return result
+        end)
     end
 
     local function mock_firewall_probe(result)
-        result = result or {
-            managed = true,
-            ok = true,
-            detail = "open: iptables rules open; verify: tcp/53317: open, udp/53317: open; close: iptables rules closed",
-            status = "tcp/53317: open, udp/53317: open",
-        }
+        result = result
+            or {
+                managed = true,
+                ok = true,
+                detail = "open: iptables rules open; verify: tcp/53317: open, udp/53317: open; close: iptables rules closed",
+                status = "tcp/53317: open, udp/53317: open",
+            }
         local diagnostics = require("localsend_diagnostics")
-        diagnostics._setFirewallProbeOverride(function() return result end)
+        diagnostics._setFirewallProbeOverride(function()
+            return result
+        end)
     end
 
     setup(function()
@@ -102,6 +111,11 @@ describe("LocalSend diagnostics", function()
         original_io_popen = io.popen
         original_os_remove = os.remove
         original_os_execute = os.execute
+        orig_pathExists = util.pathExists
+        orig_retrieveNetworkInfo = Device.retrieveNetworkInfo
+        orig_isKindle = Device.isKindle
+        orig_isConnected = NetworkMgr.isConnected
+        orig_isOnline = NetworkMgr.isOnline
     end)
 
     teardown(function()
@@ -109,40 +123,54 @@ describe("LocalSend diagnostics", function()
         _G.io.popen = original_io_popen
         _G.os.remove = original_os_remove
         _G.os.execute = original_os_execute
+        util.pathExists = orig_pathExists
+        Device.retrieveNetworkInfo = orig_retrieveNetworkInfo
+        Device.isKindle = orig_isKindle
+        NetworkMgr.isConnected = orig_isConnected
+        NetworkMgr.isOnline = orig_isOnline
     end)
+
+    -- Apply device/network/util overrides for a scenario (replaces the old
+    -- setup_complete opts, which the real-KOReader helper ignores).
+    local function apply_mocks(opts)
+        opts = opts or {}
+        Device.retrieveNetworkInfo = function()
+            return opts.network_info or "wlan0: 192.168.1.100"
+        end
+        Device.isKindle = function()
+            return opts.is_kindle ~= false
+        end
+        NetworkMgr.isConnected = function()
+            return opts.is_connected ~= false
+        end
+        NetworkMgr.isOnline = function()
+            return opts.is_online == true
+        end
+        util.pathExists = function(path)
+            if files[path] ~= nil then
+                return true
+            end
+            if path == "/tmp/localsend_koreader.pid" then
+                return true
+            end
+            if path == "/proc/12345" then
+                return true
+            end
+            return orig_pathExists(path)
+        end
+    end
 
     before_each(function()
         files = {
             ["/tmp/localsend_koreader.pid"] = "12345\n",
-            ["/proc/12345/cmdline"] = "/tmp/koreader/plugins/localsend.koplugin/localsend\0" ..
-                "recv\0-d\0/mnt/us/documents\0",
+            ["/proc/12345/cmdline"] = "/tmp/koreader/plugins/localsend.koplugin/localsend\0" .. "recv\0-d\0/mnt/us/documents\0",
             ["/tmp/localsend_server.out"] = "backend log line\n",
             ["/tmp/localsend_send.out"] = "send log line\n",
-            ["/tmp/localsend_transfers.log"] = "{\"filename\":\"book.epub\"}\n",
+            ["/tmp/localsend_transfers.log"] = '{"filename":"book.epub"}\n',
         }
         helper.before_each()
-        helper.setup_complete({
-            device = {
-                is_kindle = true,
-                network_info = "wlan0: 192.168.1.100",
-                info = "Kindle Test Device",
-            },
-            network = {
-                is_connected = true,
-                is_online = false,
-            },
-            util = {
-                pathExists = function(path)
-                    if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                    if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                    if path == "/mnt/us/documents" then return true end
-                    if path == "/tmp/localsend_koreader.pid" then return true end
-                    if path == "/proc/12345" then return true end
-                    if files[path] ~= nil then return true end
-                    return false
-                end,
-            },
-        })
+        helper.setup_complete()
+        apply_mocks({ is_kindle = true, is_connected = true, is_online = false })
         mock_io()
         mock_server_probe()
         mock_firewall_probe()
@@ -185,7 +213,11 @@ describe("LocalSend diagnostics", function()
     end)
 
     it("reports server self-test failures", function()
-        mock_server_probe({ ok = false, detail = "failed (curl: not found)", log_path = "/tmp/localsend_diag_server.out" })
+        mock_server_probe({
+            ok = false,
+            detail = "failed (curl: not found)",
+            log_path = "/tmp/localsend_diag_server.out",
+        })
         local instance = helper.create_instance()
         local diagnostics = require("localsend_diagnostics")
 
@@ -239,19 +271,7 @@ describe("LocalSend diagnostics", function()
     end)
 
     it("does not prompt for Wi-Fi when diagnostics run offline", function()
-        helper.setup_complete({
-            network = {
-                is_connected = false,
-                is_online = false,
-            },
-            util = {
-                pathExists = function(path)
-                    if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                    if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                    return false
-                end,
-            },
-        })
+        apply_mocks({ is_connected = false, is_online = false })
         mock_io()
         mock_server_probe()
         mock_firewall_probe()
@@ -287,23 +307,11 @@ describe("LocalSend diagnostics", function()
         assert.truthy(dialog.text:match("all %d+ checks passed"))
         assert.truthy(dialog.text:match("LAN connected"))
         assert.truthy(dialog.text:match("Server self%-test"))
-        assert.truthy(dialog.text:match("53317"))  -- computer-firewall tip
+        assert.truthy(dialog.text:match("53317")) -- computer-firewall tip
     end)
 
     it("diagnostics summary flags missing network with hints", function()
-        helper.setup_complete({
-            network = {
-                is_connected = false,
-                is_online = false,
-            },
-            util = {
-                pathExists = function(path)
-                    if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                    if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                    return false
-                end,
-            },
-        })
+        apply_mocks({ is_connected = false, is_online = false })
         mock_io()
         mock_server_probe()
         mock_firewall_probe()
@@ -313,17 +321,23 @@ describe("LocalSend diagnostics", function()
 
         local dialog = helper.find_dialog("TextViewer")
         assert.is_not_nil(dialog)
-        assert.truthy(dialog.text:match("to fix"))           -- "N to fix" summary
-        assert.truthy(dialog.text:match("Enable Wi%-Fi"))    -- LAN hint
+        assert.truthy(dialog.text:match("to fix")) -- "N to fix" summary
+        assert.truthy(dialog.text:match("Enable Wi%-Fi")) -- LAN hint
         assert.truthy(dialog.text:match("Server self%-test"))
     end)
 
     it("flags a binary that exists but cannot run", function()
         -- Simulate a non-executable / wrong-architecture binary: --version prints nothing.
         _G.io.popen = function(cmd)
-            if cmd:match("curl") then return fake_file("200") end
-            if cmd:match("%-%-version") then return fake_file("") end
-            if cmd:match("iptables") then return fake_file("") end
+            if cmd:match("curl") then
+                return fake_file("200")
+            end
+            if cmd:match("%-%-version") then
+                return fake_file("")
+            end
+            if cmd:match("iptables") then
+                return fake_file("")
+            end
             return fake_file("")
         end
         local instance = helper.create_instance()
@@ -332,7 +346,7 @@ describe("LocalSend diagnostics", function()
         local report = diagnostics.getReportText(instance)
 
         assert.truthy(report:match("Binary is executable / runs"))
-        assert.truthy(report:match("wrong architecture package"))  -- only shown on failure
+        assert.truthy(report:match("wrong architecture package")) -- only shown on failure
     end)
 
     it("treats shell exec-error output as a binary that cannot run", function()
@@ -340,12 +354,15 @@ describe("LocalSend diagnostics", function()
         -- stderr, which commandOutput captures via 2>&1. That must not count as
         -- the binary running.
         _G.io.popen = function(cmd)
-            if cmd:match("curl") then return fake_file("200") end
-            if cmd:match("%-%-version") then
-                return fake_file("sh: /tmp/koreader/plugins/localsend.koplugin/localsend: " ..
-                    "cannot execute binary file: Exec format error\n")
+            if cmd:match("curl") then
+                return fake_file("200")
             end
-            if cmd:match("iptables") then return fake_file("") end
+            if cmd:match("%-%-version") then
+                return fake_file("sh: /tmp/koreader/plugins/localsend.koplugin/localsend: " .. "cannot execute binary file: Exec format error\n")
+            end
+            if cmd:match("iptables") then
+                return fake_file("")
+            end
             return fake_file("")
         end
         local instance = helper.create_instance()
@@ -363,13 +380,21 @@ describe("LocalSend diagnostics", function()
         -- the release tag vocabulary (armv7/arm64/arm-legacy) and must not be
         -- compared against the device arch.
         _G.io.popen = function(cmd)
-            if cmd:match("curl") then return fake_file("200") end
-            if cmd:match("%-%-version") then return fake_file("v1.3.0 linux/arm\n") end
-            if cmd:match("iptables") then return fake_file("") end
+            if cmd:match("curl") then
+                return fake_file("200")
+            end
+            if cmd:match("%-%-version") then
+                return fake_file("v1.3.0 linux/arm\n")
+            end
+            if cmd:match("iptables") then
+                return fake_file("")
+            end
             return fake_file("")
         end
         local instance = helper.create_instance()
-        instance.getDeviceArch = function() return "armv7" end
+        instance.getDeviceArch = function()
+            return "armv7"
+        end
         local diagnostics = require("localsend_diagnostics")
 
         local report = diagnostics.collect(instance)
@@ -382,7 +407,9 @@ describe("LocalSend diagnostics", function()
     it("flags a binary/device architecture mismatch", function()
         -- --version reports arm64; force the device arch to arm-legacy to trigger a mismatch.
         local instance = helper.create_instance()
-        instance.getDeviceArch = function() return "arm-legacy" end
+        instance.getDeviceArch = function()
+            return "arm-legacy"
+        end
         local diagnostics = require("localsend_diagnostics")
 
         local report = diagnostics.collect(instance)
@@ -405,7 +432,8 @@ describe("LocalSend diagnostics", function()
     end)
 
     it("includes a crash.log tail in the bug report", function()
-        files["/tmp/koreader/crash.log"] = "some crash line\n"
+        local crash_log = require("datastorage"):getFullDataDir() .. "/crash.log"
+        files[crash_log] = "some crash line\n"
         local instance = helper.create_instance()
 
         instance:showBugReportInfo()
@@ -489,11 +517,12 @@ describe("LocalSend diagnostics", function()
     it("discovery poll parses the nettest JSON output end to end", function()
         -- Regression test: this exercises readNetTestResult against the real
         -- KOReader json module, which a formatter-only test cannot catch.
-        files["/tmp/localsend_nettest.json"] =
-            '{"loopback":true,"bind_error":"","peers":1,"local_ips":["192.168.1.100"],"duration_ms":3000}'
+        files["/tmp/localsend_nettest.json"] = '{"loopback":true,"bind_error":"","peers":1,"local_ips":["192.168.1.100"],"duration_ms":3000}'
         local instance = helper.create_instance()
         local closed = false
-        instance.closeFirewall = function() closed = true end
+        instance.closeFirewall = function()
+            closed = true
+        end
         local diagnostics = require("localsend_diagnostics")
 
         diagnostics._pollDiscoveryTest(instance, 0, os.time() + 5)
@@ -568,7 +597,7 @@ describe("LocalSend diagnostics", function()
             assert.truthy(text:match("Last send"))
             assert.truthy(text:match("Device is not running LocalSend"))
             assert.truthy(text:match("to fix"))
-            assert.truthy(text:match("recipient is not running LocalSend"))  -- hint
+            assert.truthy(text:match("recipient is not running LocalSend")) -- hint
         end)
 
         it("reports a recent successful send", function()
@@ -601,7 +630,9 @@ describe("LocalSend diagnostics", function()
     it("diagnostics suggests Test discovery when all checks pass", function()
         local state = require("localsend_state")
         state.ServerState.last_send = nil
-        finally(function() state.ServerState.last_send = nil end)
+        finally(function()
+            state.ServerState.last_send = nil
+        end)
         local instance = helper.create_instance()
 
         instance:showDiagnostics()

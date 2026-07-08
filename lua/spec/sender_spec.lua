@@ -1,13 +1,22 @@
-require 'busted.runner'()
+require("busted.runner")()
+local helper = require("spec.spec_helper")
+
+local UIManager = require("ui/uimanager")
+local InfoMessage = require("ui/widget/infomessage")
+local Notification = require("ui/widget/notification")
+local InputDialog = require("ui/widget/inputdialog")
+local ButtonDialog = require("ui/widget/buttondialog")
+local PathChooser = require("ui/widget/pathchooser")
+local NetworkMgr = require("ui/network/manager")
+local util = require("util")
+local json = require("json")
+local logger = require("logger")
+local T = require("ffi/util").template
+local _ = require("gettext")
 
 describe("localsend_sender", function()
-    local helper = require("spec.test_helper")
-
-    -- Setup before all tests in this file
     setup(function()
         helper.setup_complete()
-        helper.mock_os_execute()
-        helper.mock_os_remove()
     end)
 
     before_each(function()
@@ -15,28 +24,30 @@ describe("localsend_sender", function()
         helper.reset_localsend_state()
     end)
 
+    local function init_sender(network_mgr)
+        package.loaded["localsend_sender"] = nil
+        local sender = require("localsend_sender")
+        sender.init({
+            UIManager = UIManager,
+            InfoMessage = InfoMessage,
+            Notification = Notification,
+            InputDialog = InputDialog,
+            ButtonDialog = ButtonDialog,
+            PathChooser = PathChooser,
+            NetworkMgr = network_mgr or NetworkMgr,
+            util = util,
+            json = json,
+            logger = logger,
+            T = T,
+            _ = _,
+        }, { binary_path = "/tmp/localsend" })
+        return sender
+    end
+
     describe("isSendInProgress", function()
         local sender
-
         before_each(function()
-            package.loaded["localsend_sender"] = nil
-            sender = require("localsend_sender")
-            sender.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                InputDialog = package.loaded["ui/widget/inputdialog"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                PathChooser = package.loaded["ui/widget/pathchooser"],
-                NetworkMgr = package.loaded["ui/network/manager"],
-                util = package.loaded["util"],
-                json = package.loaded["json"],
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
+            sender = init_sender()
         end)
 
         it("returns false when no send in progress", function()
@@ -44,93 +55,59 @@ describe("localsend_sender", function()
         end)
 
         it("returns true when send is in progress", function()
-            local state = require("localsend_state")
-            state.ServerState.send_in_progress = true
+            require("localsend_state").ServerState.send_in_progress = true
             assert.is_true(sender.isSendInProgress())
         end)
     end)
 
     describe("sendFile", function()
         local sender
+        local orig_pathExists
+
+        setup(function()
+            orig_pathExists = util.pathExists
+        end)
+
+        teardown(function()
+            util.pathExists = orig_pathExists
+        end)
 
         before_each(function()
-            package.loaded["localsend_sender"] = nil
-            sender = require("localsend_sender")
-            -- Mock pathExists to return true for test files
-            package.loaded["util"].pathExists = function(path)
-                if path == "/test/file.epub" then return true end
-                if path:match("^/proc/") then return false end
+            util.pathExists = function(path)
+                if path == "/test/file.epub" then
+                    return true
+                end
                 return false
             end
-            sender.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                InputDialog = package.loaded["ui/widget/inputdialog"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                PathChooser = package.loaded["ui/widget/pathchooser"],
-                NetworkMgr = package.loaded["ui/network/manager"],
-                util = package.loaded["util"],
-                json = package.loaded["json"],
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
+            sender = init_sender()
         end)
 
         it("blocks concurrent sends", function()
             local state = require("localsend_state")
             state.ServerState.send_in_progress = true
-
-            local callback_called = false
-            local callback_success = true
-            local callback_msg = ""
-
-            sender.sendFile(
-                { type = "lan", ip = "192.168.1.50", alias = "Phone" },
-                "/test/file.epub",
-                nil,
-                function(success, msg)
-                    callback_called = true
-                    callback_success = success
-                    callback_msg = msg
-                end
-            )
-
+            local callback_called, callback_success, callback_msg = false, true, ""
+            sender.sendFile({ type = "lan", ip = "192.168.1.50", alias = "Phone" }, "/test/file.epub", nil, function(success, msg)
+                callback_called = true
+                callback_success = success
+                callback_msg = msg
+            end)
             assert.is_true(callback_called)
             assert.is_false(callback_success)
             assert.truthy(callback_msg:match("in progress"))
         end)
 
         it("fails for nonexistent file", function()
-            local callback_called = false
-            local callback_success = true
-
-            sender.sendFile(
-                { type = "lan", ip = "192.168.1.50", alias = "Phone" },
-                "/nonexistent/file.epub",
-                nil,
-                function(success, msg)
-                    callback_called = true
-                    callback_success = success
-                end
-            )
-
+            local callback_called, callback_success = false, true
+            sender.sendFile({ type = "lan", ip = "192.168.1.50", alias = "Phone" }, "/nonexistent/file.epub", nil, function(success)
+                callback_called = true
+                callback_success = success
+            end)
             assert.is_true(callback_called)
             assert.is_false(callback_success)
         end)
 
         it("builds correct command for LAN device", function()
-            sender.sendFile(
-                { type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" },
-                "/test/file.epub",
-                nil,
-                nil
-            )
-
-            -- Check that os.execute was called with the right command
+            sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" }, "/test/file.epub", nil, nil)
             assert.is_true(#helper.state.os_execute_calls > 0)
             local cmd = helper.state.os_execute_calls[1]
             assert.truthy(cmd:match("send"))
@@ -140,13 +117,7 @@ describe("localsend_sender", function()
         end)
 
         it("builds correct command for WebRTC device", function()
-            sender.sendFile(
-                { type = "webrtc", id = "abc-123", alias = "Browser" },
-                "/test/file.epub",
-                nil,
-                nil
-            )
-
+            sender.sendFile({ type = "webrtc", id = "abc-123", alias = "Browser" }, "/test/file.epub", nil, nil)
             assert.is_true(#helper.state.os_execute_calls > 0)
             local cmd = helper.state.os_execute_calls[1]
             assert.truthy(cmd:match("send"))
@@ -156,14 +127,7 @@ describe("localsend_sender", function()
         end)
 
         it("includes PIN in command when provided", function()
-            sender.sendFile(
-                { type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" },
-                "/test/file.epub",
-                "1234",
-                nil
-            )
-
-            assert.is_true(#helper.state.os_execute_calls > 0)
+            sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" }, "/test/file.epub", "1234", nil)
             local cmd = helper.state.os_execute_calls[1]
             assert.truthy(cmd:match("%-p"))
             assert.truthy(cmd:match("1234"))
@@ -172,90 +136,47 @@ describe("localsend_sender", function()
         it("sets send_in_progress flag", function()
             local state = require("localsend_state")
             assert.is_false(state.ServerState.send_in_progress)
-
-            sender.sendFile(
-                { type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" },
-                "/test/file.epub",
-                nil,
-                nil
-            )
-
+            sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" }, "/test/file.epub", nil, nil)
             assert.is_true(state.ServerState.send_in_progress)
         end)
     end)
 
     describe("cancelSend", function()
         local sender
-
         before_each(function()
-            package.loaded["localsend_sender"] = nil
-            sender = require("localsend_sender")
-            sender.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                InputDialog = package.loaded["ui/widget/inputdialog"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                PathChooser = package.loaded["ui/widget/pathchooser"],
-                NetworkMgr = package.loaded["ui/network/manager"],
-                util = package.loaded["util"],
-                json = package.loaded["json"],
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
+            sender = init_sender()
         end)
 
         it("clears send_in_progress flag", function()
             local state = require("localsend_state")
             state.ServerState.send_in_progress = true
-
             sender.cancelSend()
-
             assert.is_false(state.ServerState.send_in_progress)
         end)
     end)
 
     describe("showFileSendFlow", function()
         local sender
-
         before_each(function()
-            package.loaded["localsend_sender"] = nil
-            sender = require("localsend_sender")
-            sender.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                InputDialog = package.loaded["ui/widget/inputdialog"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                PathChooser = package.loaded["ui/widget/pathchooser"],
-                NetworkMgr = package.loaded["ui/network/manager"],
-                util = package.loaded["util"],
-                json = package.loaded["json"],
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
+            sender = init_sender()
         end)
 
         it("blocks when send already in progress", function()
-            local state = require("localsend_state")
-            state.ServerState.send_in_progress = true
-
-            sender.showFileSendFlow({ getPickerStartPath = function(_, path) return path end })
-
-            local notification = helper.find_notification("in progress")
-            assert.is_not_nil(notification)
+            require("localsend_state").ServerState.send_in_progress = true
+            sender.showFileSendFlow({
+                getPickerStartPath = function(_, path)
+                    return path
+                end,
+            })
+            assert.is_not_nil(helper.find_notification("in progress"))
         end)
 
         it("starts device scan when network connected", function()
-            sender.showFileSendFlow({ getPickerStartPath = function(_, path) return path end })
-
-            -- Should have executed scan command
+            sender.showFileSendFlow({
+                getPickerStartPath = function(_, path)
+                    return path
+                end,
+            })
             assert.is_true(#helper.state.os_execute_calls > 0)
             local cmd = helper.state.os_execute_calls[1]
             assert.truthy(cmd:match("scan"))
@@ -263,162 +184,84 @@ describe("localsend_sender", function()
         end)
 
         it("uses willRerunWhenConnected to avoid duplicate flow when offline", function()
-            local rerun_called = false
-            local scan_called = false
-            package.loaded["ui/network/manager"] = {
-                isConnected = function() return false end,
-                willRerunWhenConnected = function(self, callback)
+            local rerun_called, scan_called = false, false
+            local offline_nm = {
+                isConnected = function()
+                    return false
+                end,
+                willRerunWhenConnected = function()
                     rerun_called = true
                     return true
                 end,
-                runWhenConnected = function(self, callback)
+                runWhenConnected = function()
                     scan_called = true
-                    if callback then callback() end
                 end,
             }
-
-            sender.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                InputDialog = package.loaded["ui/widget/inputdialog"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                PathChooser = package.loaded["ui/widget/pathchooser"],
-                NetworkMgr = package.loaded["ui/network/manager"],
-                util = package.loaded["util"],
-                json = package.loaded["json"],
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
+            sender = init_sender(offline_nm)
+            sender.showFileSendFlow({
+                getPickerStartPath = function(_, path)
+                    return path
+                end,
             })
-
-            sender.showFileSendFlow({ getPickerStartPath = function(_, path) return path end })
-
             assert.is_true(rerun_called)
             assert.is_false(scan_called)
             assert.equals(0, #helper.state.os_execute_calls)
         end)
     end)
 
-    -- =============================================================================
-    -- Error Categorization Tests
-    -- =============================================================================
-
     describe("error categorization", function()
         local sender
-
         before_each(function()
-            package.loaded["localsend_sender"] = nil
-            sender = require("localsend_sender")
-            sender.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                InputDialog = package.loaded["ui/widget/inputdialog"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                PathChooser = package.loaded["ui/widget/pathchooser"],
-                NetworkMgr = package.loaded["ui/network/manager"],
-                util = package.loaded["util"],
-                json = package.loaded["json"],
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
+            sender = init_sender()
         end)
 
         it("categorizeError identifies PIN required errors", function()
-            local category = sender.categorizeError("error: PIN required (401)")
-            assert.equals("pin_required", category)
+            assert.equals("pin_required", sender.categorizeError("error: PIN required (401)"))
         end)
-
         it("categorizeError identifies wrong PIN errors", function()
-            local category = sender.categorizeError("error: wrong PIN")
-            assert.equals("wrong_pin", category)
+            assert.equals("wrong_pin", sender.categorizeError("error: wrong PIN"))
         end)
-
         it("categorizeError identifies rejected errors", function()
-            local category = sender.categorizeError("error: transfer rejected by receiver")
-            assert.equals("rejected", category)
+            assert.equals("rejected", sender.categorizeError("error: transfer rejected by receiver"))
         end)
-
         it("categorizeError identifies connection refused (device not running)", function()
-            local category = sender.categorizeError("error: connection refused")
-            assert.equals("connection_refused", category)
+            assert.equals("connection_refused", sender.categorizeError("error: connection refused"))
         end)
-
         it("categorizeError identifies generic connection errors", function()
-            local category = sender.categorizeError("error: connection reset by peer")
-            assert.equals("connection", category)
+            assert.equals("connection", sender.categorizeError("error: connection reset by peer"))
         end)
-
         it("categorizeError identifies rate limiting", function()
-            local category = sender.categorizeError("error: too many attempts")
-            assert.equals("rate_limited", category)
+            assert.equals("rate_limited", sender.categorizeError("error: too many attempts"))
         end)
-
         it("categorizeError identifies timeout errors", function()
-            local category = sender.categorizeError("error: timeout waiting for response")
-            assert.equals("timeout", category)
+            assert.equals("timeout", sender.categorizeError("error: timeout waiting for response"))
         end)
-
         it("categorizeError returns unknown for unrecognized errors", function()
-            local category = sender.categorizeError("error: some random error")
-            assert.equals("unknown", category)
+            assert.equals("unknown", sender.categorizeError("error: some random error"))
         end)
-
         it("categorizeError handles nil input", function()
-            local category = sender.categorizeError(nil)
-            assert.equals("unknown", category)
+            assert.equals("unknown", sender.categorizeError(nil))
         end)
-
         it("categorizeError handles empty string", function()
-            local category = sender.categorizeError("")
-            assert.equals("unknown", category)
+            assert.equals("unknown", sender.categorizeError(""))
         end)
     end)
 
     describe("PIN dialog flow", function()
         local sender
-
         before_each(function()
-            package.loaded["localsend_sender"] = nil
-            sender = require("localsend_sender")
-            sender.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                InputDialog = package.loaded["ui/widget/inputdialog"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                PathChooser = package.loaded["ui/widget/pathchooser"],
-                NetworkMgr = package.loaded["ui/network/manager"],
-                util = package.loaded["util"],
-                json = package.loaded["json"],
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
+            sender = init_sender()
         end)
 
         it("showPINDialog shows input dialog", function()
-            local callback_called = false
-            sender.showPINDialog({ alias = "Test Device" }, function(pin)
-                callback_called = true
-            end)
-
+            sender.showPINDialog({ alias = "Test Device" }, function() end)
             local dialog = helper.find_dialog("InputDialog")
             assert.is_not_nil(dialog)
             assert.truthy(dialog.title:match("PIN"))
         end)
 
         it("showPINDialog includes device name in title", function()
-            sender.showPINDialog({ alias = "iPhone" }, function(pin) end)
-
+            sender.showPINDialog({ alias = "iPhone" }, function() end)
             local dialog = helper.find_dialog("InputDialog")
             assert.is_not_nil(dialog)
             assert.truthy(dialog.title:match("iPhone"))

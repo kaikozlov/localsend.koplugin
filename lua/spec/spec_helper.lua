@@ -1,0 +1,476 @@
+require("busted.runner")()
+-- spec_helper.lua
+--
+-- Real-KOReader test helper for the LocalSend plugin.
+--
+-- This runs inside busted-koreader with /opt/koplugin-dev/commonrequire.lua as
+-- the busted --helper, so every KOReader module (UIManager, Device, util,
+-- NetworkMgr, widgets, G_reader_settings, ...) is the REAL module — no mocks.
+--
+-- This helper only provides:
+--   * A binary shim + settings isolation so require("main") instantiates the
+--     plugin exactly as KOReader would on-device.
+--   * Transparent SPIES (call-through) on UIManager.show/close/scheduleIn and
+--     os.execute/os.remove so specs can observe what the plugin did without
+--     stubbing KOReader out. Spies call the real implementation; os.execute is
+--     the lone exception (it is captured, not run, so tests never actually
+--     launch the receiver or touch iptables).
+--
+-- Drop-in replacement for the old mock-based test_helper.lua.
+
+local M = {}
+
+local UIManager = require("ui/uimanager")
+local DataStorage = require("datastorage")
+local ffiUtil = require("ffi/util")
+local util = require("util")
+
+-- Capture the real os.execute/os.remove before any spy wraps them (spies install
+-- later in setup). prepare_runtime_plugin must actually mkdir/cp/chmod.
+local _real_os_execute = os.execute
+local _real_os_remove = os.remove
+
+-- Widget classes, keyed by the name find_dialog() / state.dialogs_shown use.
+local WidgetClasses = {
+    InfoMessage = require("ui/widget/infomessage"),
+    Notification = require("ui/widget/notification"),
+    InputDialog = require("ui/widget/inputdialog"),
+    ButtonDialog = require("ui/widget/buttondialog"),
+    ConfirmBox = require("ui/widget/confirmbox"),
+    TextViewer = require("ui/widget/textviewer"),
+    PathChooser = require("ui/widget/pathchooser"),
+}
+
+local NotificationClasses = { InfoMessage = true, Notification = true }
+
+--- Identify a widget instance by its class table (Widget:new sets metatable = class).
+function M.widget_class(widget)
+    if type(widget) ~= "table" then
+        return nil
+    end
+    local mt = getmetatable(widget)
+    for name, cls in pairs(WidgetClasses) do
+        if mt == cls then
+            return name
+        end
+    end
+    return nil
+end
+
+-- =============================================================================
+-- Capture state (same field names as the old helper so specs need few changes)
+-- =============================================================================
+M.state = {
+    notifications_shown = {}, -- InfoMessage / Notification instances
+    dialogs_shown = {}, -- InputDialog / ButtonDialog / ConfirmBox / TextViewer / PathChooser
+    os_execute_calls = {},
+    scheduled_tasks = {},
+    unscheduled_tasks = {},
+    removed_files = {},
+    close_calls = {},
+}
+
+function M.reset_state()
+    M.state.notifications_shown = {}
+    M.state.dialogs_shown = {}
+    M.state.os_execute_calls = {}
+    M.state.scheduled_tasks = {}
+    M.state.unscheduled_tasks = {}
+    M.state.removed_files = {}
+    M.state.close_calls = {}
+    M.state.purged_dirs = {}
+end
+
+-- =============================================================================
+-- Spies (transparent — call through to the real implementation)
+-- =============================================================================
+local saved = {}
+local spies_installed = false
+
+local function record_shown(widget)
+    local cls = M.widget_class(widget)
+    if cls then
+        widget._type = widget._type or cls -- tag for find_dialog() compatibility
+        if NotificationClasses[cls] then
+            table.insert(M.state.notifications_shown, widget)
+        else
+            table.insert(M.state.dialogs_shown, widget)
+        end
+    end
+end
+
+--- Install transparent spies. Capture-once, but always re-assert the wrapped
+-- refs so a spec that overwrote os.execute / UIManager.show between tests gets
+-- reset on the next before_each.
+-- opts.execute_handler: optional fn(cmd)->exitcode overriding os.execute's return.
+-- opts.execute_result:  exitcode returned when no handler is set (default 0).
+function M.install_spies(opts)
+    opts = opts or {}
+    if not spies_installed then
+        spies_installed = true
+        saved.show = UIManager.show
+        saved.close = UIManager.close
+        saved.scheduleIn = UIManager.scheduleIn
+        saved.unschedule = UIManager.unschedule
+        saved.execute = os.execute
+        saved.remove = os.remove
+        saved.removeFile = util.removeFile
+        saved.purgeDir = ffiUtil.purgeDir
+    end
+
+    UIManager.show = function(self, widget, ...)
+        record_shown(widget)
+        -- Best-effort call-through: some widgets' Show handler needs a fuller UI
+        -- pipeline than a headless unit test provides. Recording is what specs
+        -- assert on, so never let a render-time error escape.
+        pcall(saved.show, UIManager, widget, ...)
+    end
+    UIManager.close = function(self, widget, ...)
+        table.insert(M.state.close_calls, widget)
+        pcall(saved.close, UIManager, widget, ...)
+    end
+    UIManager.scheduleIn = function(self, delay, callback, ...)
+        table.insert(M.state.scheduled_tasks, { delay = delay, callback = callback })
+        return saved.scheduleIn(UIManager, delay, callback, ...)
+    end
+    UIManager.unschedule = function(self, callback, ...)
+        table.insert(M.state.unscheduled_tasks, callback)
+        return saved.unschedule(UIManager, callback, ...)
+    end
+
+    M._execute_handler = nil
+    M._execute_result = opts.execute_result or 0
+    -- os.execute: capture but do NOT actually run (no launching receivers / iptables in tests).
+    os.execute = function(cmd)
+        table.insert(M.state.os_execute_calls, cmd)
+        if M._execute_handler then
+            return M._execute_handler(cmd)
+        end
+        return M._execute_result
+    end
+    -- os.remove: capture and really remove.
+    os.remove = function(path, ...)
+        table.insert(M.state.removed_files, path)
+        return saved.remove(path, ...)
+    end
+    -- util.removeFile: capture but do NOT really remove (the update flow removes
+    -- destination files as part of a virtual copy; really deleting would corrupt
+    -- the runtime plugin shim for later tests).
+    util.removeFile = function(path, ...)
+        table.insert(M.state.removed_files, path)
+        return true
+    end
+    -- ffi/util purgeDir: capture and really purge.
+    M.state.purged_dirs = {}
+    ffiUtil.purgeDir = function(dir, ...)
+        table.insert(M.state.purged_dirs, dir)
+        return saved.purgeDir(dir, ...)
+    end
+end
+
+function M.restore_spies()
+    if not spies_installed then
+        return
+    end
+    spies_installed = false
+    UIManager.show = saved.show
+    UIManager.close = saved.close
+    UIManager.scheduleIn = saved.scheduleIn
+    UIManager.unschedule = saved.unschedule
+    os.execute = saved.execute
+    os.remove = saved.remove
+    util.removeFile = saved.removeFile
+    ffiUtil.purgeDir = saved.purgeDir
+end
+
+-- Back-compat shims that the old helper exposed.
+function M.mock_os_execute(handler)
+    M.install_spies()
+    M._execute_handler = handler
+end
+
+function M.mock_os_remove()
+    M.install_spies()
+end
+
+-- =============================================================================
+-- Plugin runtime: binary shim + isolated settings
+-- =============================================================================
+local function shell_quote(path)
+    return "'" .. tostring(path):gsub("'", "'\\''") .. "'"
+end
+
+local function file_exists(path)
+    local f = io.open(path, "r")
+    if f then
+        f:close()
+        return true
+    end
+    return false
+end
+
+function M.runtime_plugin_dir()
+    return DataStorage:getFullDataDir() .. "/plugins/localsend.koplugin"
+end
+
+local function source_dir()
+    local dir = get_plugin_path and get_plugin_path() or "/opt/plugin/lua"
+    if not file_exists(dir .. "/_meta.lua") and file_exists(dir .. "/lua/_meta.lua") then
+        dir = dir .. "/lua"
+    end
+    return dir
+end
+
+--- Materialise the installed plugin layout main.lua expects (binary + metadata).
+-- main.lua computes its own install path from DataStorage and refuses to load
+-- when the binary is absent, so we drop a harmless shim binary there. Tests
+-- never actually run it (os.execute is spied).
+function M.prepare_runtime_plugin()
+    local plugin_dir = M.runtime_plugin_dir()
+    local src = source_dir()
+
+    _real_os_execute("rm -rf " .. shell_quote(plugin_dir) .. " && mkdir -p " .. shell_quote(plugin_dir))
+    _real_os_execute("cp " .. shell_quote(src .. "/_meta.lua") .. " " .. shell_quote(plugin_dir .. "/_meta.lua"))
+
+    local bin = assert(io.open(plugin_dir .. "/localsend", "w"))
+    bin:write("#!/bin/sh\n")
+    bin:write('case "$1" in\n')
+    bin:write("  --version) echo 'localsend test-shim v0.0.0/test' ; exit 0 ;;\n")
+    bin:write("  *) echo 'localsend test shim: not launching receiver' >&2 ; exit 1 ;;\n")
+    bin:write("esac\n")
+    bin:close()
+    _real_os_execute("chmod +x " .. shell_quote(plugin_dir .. "/localsend"))
+
+    -- Deterministic, side-effect-free defaults (do NOT pin save_dir — specs that
+    -- care about the default value need it unset).
+    G_reader_settings:saveSetting("LocalSend_auto_update_check", false)
+    G_reader_settings:saveSetting("LocalSend_autostart", false)
+
+    return plugin_dir
+end
+
+local plugin_prepared = false
+function M.prepare_plugin()
+    if plugin_prepared then
+        return
+    end
+    M.prepare_runtime_plugin()
+    plugin_prepared = true
+end
+
+-- Modules whose top-level state must be fresh per instance.
+local function reset_loaded_plugin_modules()
+    for _, name in ipairs({
+        "main",
+        "localsend_constants",
+        "localsend_update",
+        "localsend_routing",
+        "localsend_transfers",
+        "localsend_dialogs",
+        "localsend_firewall",
+        "localsend_server",
+        "localsend_discovery",
+        "localsend_sender",
+        "localsend_diagnostics",
+        "localsend_state",
+    }) do
+        package.loaded[name] = nil
+    end
+end
+
+function M.reset_localsend_state()
+    local ok, state = pcall(require, "localsend_state")
+    if not (ok and state and state.ServerState) then
+        return
+    end
+    local s = state.ServerState
+    s.user_stopped = false
+    s.was_running_before_suspend = false
+    s.was_running_before_disconnect = false
+    s.last_log_position = 0
+    s.transfer_count = 0
+    s.last_sentinel_value = nil
+    s.discovered_devices = {}
+    s.scan_in_progress = false
+    s.send_in_progress = false
+    s.scan_cancelled = false
+    s.send_cancelled = false
+    s.server_op_id = 0
+    s.stop_in_progress = false
+end
+
+local SETTING_PREFIX = "LocalSend_"
+function M.reset_settings()
+    -- G_reader_settings is a real LuaSettings; iterate its data table.
+    local data = G_reader_settings.data
+    if data then
+        for key in pairs(data) do
+            if type(key) == "string" and key:sub(1, #SETTING_PREFIX) == SETTING_PREFIX then
+                G_reader_settings:delSetting(key)
+            end
+        end
+    end
+    -- Re-apply the deterministic defaults prepare_plugin() sets.
+    G_reader_settings:saveSetting("LocalSend_auto_update_check", false)
+    G_reader_settings:saveSetting("LocalSend_autostart", false)
+end
+
+-- Back-compat: old helper exposed state.settings as the settings store.
+-- Specs that wrote helper.state.settings["LocalSend_x"] = v now use G_reader_settings.
+M.state.settings = setmetatable({}, {
+    __index = function(_, key)
+        return G_reader_settings:readSetting(key)
+    end,
+    __newindex = function(_, key, value)
+        G_reader_settings:saveSetting(key, value)
+    end,
+    __pairs = function()
+        return pairs(G_reader_settings.data)
+    end,
+})
+
+-- =============================================================================
+-- Instance creation
+-- =============================================================================
+--- Create a real plugin instance against live KOReader modules.
+-- Does NOT reset modules/state — specs often monkey-patch the class (e.g.
+-- LocalSend.start) between requiring it and creating an instance. Setup/before_each
+-- own the resets; create_instance just instantiates the currently-loaded module.
+function M.create_instance()
+    M.prepare_plugin()
+    local LocalSend = require("main")
+    return LocalSend:new({
+        ui = { menu = { registerToMainMenu = function() end } },
+    }), LocalSend
+end
+
+--- Load the plugin through the REAL PluginLoader + FileManager entry point
+-- (the way KOReader actually instantiates it). Returns (instance, filemanager).
+function M.load_via_filemanager()
+    M.prepare_plugin()
+    M.reset_localsend_state()
+    reset_loaded_plugin_modules()
+    disable_plugins()
+    load_plugin("localsend.koplugin")
+    local UIManager = require("ui/uimanager")
+    local Screen = require("device").screen
+    local DataStorage = require("datastorage")
+    local FileManager = require("apps/filemanager/filemanager")
+    local PluginLoader = require("pluginloader")
+    local fm = FileManager:new({ dimen = Screen:getSize(), root_path = DataStorage:getDataDir() })
+    UIManager:show(fm)
+    fastforward_ui_events()
+    return PluginLoader:getPluginInstance("localsend"), fm
+end
+
+function M.close_filemanager(fm)
+    local UIManager = require("ui/uimanager")
+    if fm and fm.onClose then
+        fm:onClose()
+    end
+    UIManager:quit()
+end
+
+-- =============================================================================
+-- One-call setup (replaces the old setup_complete)
+-- =============================================================================
+function M.setup_complete(opts)
+    opts = opts or {}
+    M.prepare_plugin()
+    M.reset_state()
+    M.reset_settings()
+    M.reset_localsend_state()
+    reset_loaded_plugin_modules()
+    M.install_spies(opts)
+    M._execute_handler = nil
+    M._execute_result = opts.execute_result or 0
+    if opts.capture_logs then
+        M.install_capture_logger()
+    else
+        local logger = require("logger")
+        if logger and logger.setLevel then
+            logger:setLevel(logger.levels and logger.levels.warn or 2)
+        end
+    end
+end
+
+function M.before_each()
+    M.reset_state()
+    M.reset_settings()
+    M.reset_localsend_state()
+    reset_loaded_plugin_modules()
+    M.install_spies()
+    M._execute_handler = nil
+    M._execute_result = 0
+end
+
+-- A recording logger installed when a spec asks for capture_logs. Records calls
+-- per level into .calls so specs can assert on emitted messages.
+local function new_capture_logger()
+    local calls = {}
+    return setmetatable({ calls = calls, levels = { err = 1, warn = 2, info = 3, dbg = 4 } }, {
+        __index = function(t, method)
+            return function(...)
+                local list = t.calls[method]
+                if not list then
+                    list = {}
+                    t.calls[method] = list
+                end
+                local parts = {}
+                for _, a in ipairs({ ... }) do
+                    table.insert(parts, tostring(a))
+                end
+                table.insert(list, table.concat(parts, "\t"))
+            end
+        end,
+    })
+end
+
+function M.install_capture_logger()
+    local cap = new_capture_logger()
+    cap.setLevel = function() end
+    package.loaded["logger"] = cap
+    M.capture_logger = cap
+    return cap
+end
+
+-- =============================================================================
+-- Finders (same API as the old helper)
+-- =============================================================================
+function M.find_notification(pattern)
+    for _, n in ipairs(M.state.notifications_shown) do
+        if n.text and n.text:match(pattern) then
+            return n
+        end
+    end
+    return nil
+end
+
+function M.find_execute_call(pattern)
+    for _, cmd in ipairs(M.state.os_execute_calls) do
+        if cmd:match(pattern) then
+            return cmd
+        end
+    end
+    return nil
+end
+
+function M.find_dialog(dialog_type)
+    for _, d in ipairs(M.state.dialogs_shown) do
+        if d._type == dialog_type then
+            return d
+        end
+    end
+    return nil
+end
+
+function M.find_dialog_with_title(dialog_type, title_pattern)
+    for _, d in ipairs(M.state.dialogs_shown) do
+        if d._type == dialog_type and d.title and d.title:match(title_pattern) then
+            return d
+        end
+    end
+    return nil
+end
+
+return M

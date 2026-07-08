@@ -1,24 +1,19 @@
-require 'busted.runner'()
+require("busted.runner")()
+local helper = require("spec.spec_helper")
+
+local UIManager = require("ui/uimanager")
+local InfoMessage = require("ui/widget/infomessage")
+local Notification = require("ui/widget/notification")
+local ButtonDialog = require("ui/widget/buttondialog")
+local util = require("util")
+local json = require("json")
+local logger = require("logger")
+local T = require("ffi/util").template
+local _ = require("gettext")
 
 describe("localsend_discovery", function()
-    local helper = require("spec.test_helper")
-
-    -- Setup before all tests in this file
     setup(function()
-        helper.setup_complete({
-            json = {
-                decode = function(s)
-                    -- Simple JSON parser for tests
-                    if not s or s == "" then return nil end
-                    -- Use loadstring to parse JSON-like Lua tables for testing
-                    local fn = loadstring("return " .. s:gsub('([%w_]+):', '["%1"]='):gsub('%[', '{'):gsub('%]', '}'))
-                    if fn then
-                        return fn()
-                    end
-                    return nil
-                end,
-            },
-        })
+        helper.setup_complete()
     end)
 
     before_each(function()
@@ -26,71 +21,62 @@ describe("localsend_discovery", function()
         helper.reset_localsend_state()
     end)
 
+    -- Load a fresh discovery module wired to real KOReader deps. json_dep lets a
+    -- test substitute a controlled decoder without clobbering the real json module.
+    local function init_discovery(json_dep)
+        package.loaded["localsend_discovery"] = nil
+        local discovery = require("localsend_discovery")
+        discovery.init({
+            UIManager = UIManager,
+            InfoMessage = InfoMessage,
+            Notification = Notification,
+            ButtonDialog = ButtonDialog,
+            util = util,
+            json = json_dep or json,
+            logger = logger,
+            T = T,
+            _ = _,
+        }, { binary_path = "/tmp/localsend" })
+        return discovery
+    end
+
     describe("parseDevices", function()
         local discovery
 
         before_each(function()
-            package.loaded["localsend_discovery"] = nil
-            discovery = require("localsend_discovery")
-            discovery.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                util = package.loaded["util"],
-                json = require("json"),
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
+            discovery = init_discovery()
         end)
 
         it("returns empty array for nil input", function()
-            local devices = discovery.parseDevices(nil)
-            assert.are.same({}, devices)
+            assert.are.same({}, discovery.parseDevices(nil))
         end)
 
         it("returns empty array for empty string", function()
-            local devices = discovery.parseDevices("")
-            assert.are.same({}, devices)
+            assert.are.same({}, discovery.parseDevices(""))
         end)
 
         it("returns empty array for invalid JSON", function()
-            local devices = discovery.parseDevices("not valid json")
-            assert.are.same({}, devices)
+            assert.are.same({}, discovery.parseDevices("not valid json"))
         end)
 
         it("parses LAN devices from JSON", function()
-            -- Mock proper JSON decode
             local json_mock = {
-                decode = function(s)
+                decode = function()
                     return {
                         lan = {
-                            { ip = "192.168.1.50", port = 53317, alias = "iPhone", version = "2.1", protocol = "https" },
+                            {
+                                ip = "192.168.1.50",
+                                port = 53317,
+                                alias = "iPhone",
+                                version = "2.1",
+                                protocol = "https",
+                            },
                         },
                         webrtc = {},
                     }
                 end,
             }
-            package.loaded["json"] = json_mock
-            package.loaded["localsend_discovery"] = nil
-            discovery = require("localsend_discovery")
-            discovery.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                util = package.loaded["util"],
-                json = json_mock,
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
-
+            discovery = init_discovery(json_mock)
             local devices = discovery.parseDevices('{"lan":[{"ip":"192.168.1.50"}]}')
             assert.equals(1, #devices)
             assert.equals("lan", devices[1].type)
@@ -102,7 +88,7 @@ describe("localsend_discovery", function()
 
         it("parses WebRTC devices from JSON", function()
             local json_mock = {
-                decode = function(s)
+                decode = function()
                     return {
                         lan = {},
                         webrtc = {
@@ -111,23 +97,7 @@ describe("localsend_discovery", function()
                     }
                 end,
             }
-            package.loaded["json"] = json_mock
-            package.loaded["localsend_discovery"] = nil
-            discovery = require("localsend_discovery")
-            discovery.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                util = package.loaded["util"],
-                json = json_mock,
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
-
+            discovery = init_discovery(json_mock)
             local devices = discovery.parseDevices('{"webrtc":[{"id":"abc-123"}]}')
             assert.equals(1, #devices)
             assert.equals("webrtc", devices[1].type)
@@ -137,7 +107,7 @@ describe("localsend_discovery", function()
 
         it("parses mixed LAN and WebRTC devices", function()
             local json_mock = {
-                decode = function(s)
+                decode = function()
                     return {
                         lan = {
                             { ip = "192.168.1.50", port = 53317, alias = "Phone", version = "2.1", protocol = "https" },
@@ -148,90 +118,37 @@ describe("localsend_discovery", function()
                     }
                 end,
             }
-            package.loaded["json"] = json_mock
-            package.loaded["localsend_discovery"] = nil
-            discovery = require("localsend_discovery")
-            discovery.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                util = package.loaded["util"],
-                json = json_mock,
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
-
-            local devices = discovery.parseDevices('{}')
+            discovery = init_discovery(json_mock)
+            local devices = discovery.parseDevices("{}")
             assert.equals(2, #devices)
-            -- LAN device first
             assert.equals("lan", devices[1].type)
-            -- WebRTC device second
             assert.equals("webrtc", devices[2].type)
         end)
     end)
 
     describe("getDeviceDisplayText", function()
         local discovery
-
         before_each(function()
-            package.loaded["localsend_discovery"] = nil
-            discovery = require("localsend_discovery")
-            discovery.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                util = package.loaded["util"],
-                json = package.loaded["json"],
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
+            discovery = init_discovery()
         end)
 
         it("formats LAN device with IP", function()
-            local device = { type = "lan", alias = "iPhone", ip = "192.168.1.50" }
-            local text = discovery.getDeviceDisplayText(device)
-            assert.equals("[LAN] iPhone (192.168.1.50)", text)
+            assert.equals("[LAN] iPhone (192.168.1.50)", discovery.getDeviceDisplayText({ type = "lan", alias = "iPhone", ip = "192.168.1.50" }))
         end)
 
         it("formats WebRTC device without IP", function()
-            local device = { type = "webrtc", alias = "Browser", id = "abc-123" }
-            local text = discovery.getDeviceDisplayText(device)
-            assert.equals("[WebRTC] Browser", text)
+            assert.equals("[WebRTC] Browser", discovery.getDeviceDisplayText({ type = "webrtc", alias = "Browser", id = "abc-123" }))
         end)
     end)
 
     describe("getCachedDevices", function()
         local discovery
-
         before_each(function()
-            package.loaded["localsend_discovery"] = nil
-            discovery = require("localsend_discovery")
-            discovery.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                util = package.loaded["util"],
-                json = package.loaded["json"],
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
+            discovery = init_discovery()
         end)
 
         it("returns empty array when no devices cached", function()
-            local devices = discovery.getCachedDevices()
-            assert.are.same({}, devices)
+            assert.are.same({}, discovery.getCachedDevices())
         end)
 
         it("returns cached devices from ServerState", function()
@@ -239,42 +156,24 @@ describe("localsend_discovery", function()
             state.ServerState.discovered_devices = {
                 { type = "lan", alias = "Phone", ip = "192.168.1.50" },
             }
-            local devices = discovery.getCachedDevices()
-            assert.equals(1, #devices)
-            assert.equals("Phone", devices[1].alias)
+            assert.equals(1, #discovery.getCachedDevices())
+            assert.equals("Phone", discovery.getCachedDevices()[1].alias)
         end)
     end)
 
     describe("showDeviceSelector", function()
         local discovery
-
         before_each(function()
-            package.loaded["localsend_discovery"] = nil
-            discovery = require("localsend_discovery")
-            discovery.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                util = package.loaded["util"],
-                json = package.loaded["json"],
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
+            discovery = init_discovery()
         end)
 
         it("shows info message when no devices found", function()
             local callback_called = false
             local callback_device = "not_nil"
-
             discovery.showDeviceSelector({}, function(device)
                 callback_called = true
                 callback_device = device
             end)
-
             assert.is_true(callback_called)
             assert.is_nil(callback_device)
             assert.equals(1, #helper.state.notifications_shown)
@@ -282,44 +181,23 @@ describe("localsend_discovery", function()
         end)
 
         it("shows button dialog for available devices", function()
-            local devices = {
+            discovery.showDeviceSelector({
                 { type = "lan", alias = "Phone", ip = "192.168.1.50" },
-            }
-
-            discovery.showDeviceSelector(devices, function(device) end)
-
+            }, function() end)
             local dialog = helper.find_dialog("ButtonDialog")
             assert.is_not_nil(dialog)
             assert.equals("Select target device", dialog.title)
         end)
     end)
 
-    -- =============================================================================
-    -- Scan Timeout Tests
-    -- =============================================================================
-
     describe("scan timeout behavior", function()
         local discovery
         local constants
 
         before_each(function()
-            package.loaded["localsend_discovery"] = nil
             package.loaded["localsend_constants"] = nil
-            discovery = require("localsend_discovery")
+            discovery = init_discovery()
             constants = require("localsend_constants")
-            discovery.init({
-                UIManager = package.loaded["ui/uimanager"],
-                InfoMessage = package.loaded["ui/widget/infomessage"],
-                Notification = package.loaded["ui/widget/notification"],
-                ButtonDialog = package.loaded["ui/widget/buttondialog"],
-                util = package.loaded["util"],
-                json = package.loaded["json"],
-                logger = package.loaded["logger"],
-                T = require("ffi/util").template,
-                _ = require("gettext"),
-            }, {
-                binary_path = "/tmp/localsend",
-            })
         end)
 
         it("SCAN_MAX_POLL_DURATION is defined", function()
@@ -328,7 +206,6 @@ describe("localsend_discovery", function()
         end)
 
         it("SCAN_MAX_POLL_DURATION has reasonable value (5-120 seconds)", function()
-            -- Scan should timeout within reasonable bounds
             assert.is_true(constants.SCAN_MAX_POLL_DURATION >= 5)
             assert.is_true(constants.SCAN_MAX_POLL_DURATION <= 120)
         end)

@@ -1,4 +1,4 @@
-require 'busted.runner'()
+require("busted.runner")()
 
 -- Tests for localsend_utils.lua - utility functions tested directly
 

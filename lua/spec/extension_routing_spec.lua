@@ -1,26 +1,12 @@
-require 'busted.runner'()
-local helper = require("spec.test_helper")
+require("busted.runner")()
+local helper = require("spec.spec_helper")
+local json = require("json")
 
 -- Tests for extension routing functionality
 
 describe("Extension Routing", function()
     setup(function()
-        helper.setup_complete({
-            json = {
-                encode = function(t)
-                    -- Simple but functional JSON encoder
-                    if type(t) ~= "table" then return tostring(t) end
-                    local parts = {}
-                    for k, v in pairs(t) do
-                        local val = type(v) == "string" and ('"' .. v .. '"') or tostring(v)
-                        table.insert(parts, '"' .. k .. '":' .. val)
-                    end
-                    table.sort(parts) -- For deterministic output
-                    return "{" .. table.concat(parts, ",") .. "}"
-                end,
-                decode = function(s) return {} end,
-            },
-        })
+        helper.setup_complete()
     end)
 
     before_each(function()
@@ -133,12 +119,16 @@ describe("Extension Routing", function()
             -- Mock io.open to capture what's written
             local written_content = nil
             local mock_file = {
-                write = function(self, content) written_content = content end,
+                write = function(self, content)
+                    written_content = content
+                end,
                 close = function() end,
             }
             local original_io_open = io.open
             io.open = function(path, mode)
-                if mode == "w" then return mock_file end
+                if mode == "w" then
+                    return mock_file
+                end
                 return original_io_open(path, mode)
             end
 
@@ -160,12 +150,16 @@ describe("Extension Routing", function()
 
             local written_content = nil
             local mock_file = {
-                write = function(self, content) written_content = content end,
+                write = function(self, content)
+                    written_content = content
+                end,
                 close = function() end,
             }
             local original_io_open = io.open
             io.open = function(path, mode)
-                if mode == "w" then return mock_file end
+                if mode == "w" then
+                    return mock_file
+                end
                 return original_io_open(path, mode)
             end
 
@@ -175,7 +169,7 @@ describe("Extension Routing", function()
 
             assert.is_not_nil(written_content)
             assert.is_not_nil(written_content:match('"default"'))
-            assert.is_not_nil(written_content:match('"/default"'))
+            assert.is_not_nil(written_content:match("/default"))
         end)
 
         it("returns nil when io.open fails", function()
@@ -187,7 +181,7 @@ describe("Extension Routing", function()
             local original_io_open = io.open
             io.open = function(path, mode)
                 if path:match("ext_routing%.json") then
-                    return nil  -- Simulate file open failure
+                    return nil -- Simulate file open failure
                 end
                 return original_io_open(path, mode)
             end
@@ -200,21 +194,17 @@ describe("Extension Routing", function()
         end)
 
         it("returns nil when json.encode throws error", function()
-            package.loaded["json"] = {
-                encode = function(t)
-                    error("JSON encoding error")
-                end,
-                decode = function(s) return {} end,
-            }
-            package.loaded["main"] = nil
+            local orig_encode = json.encode
+            json.encode = function(_t)
+                error("JSON encoding error")
+            end
 
             local instance = helper.create_instance()
-
             instance.routing_enabled = true
             instance.ext_dirs = { epub = "/books" }
 
             local mock_file = {
-                write = function(self, content)
+                write = function(_self, _content)
                     error("JSON error")
                 end,
                 close = function() end,
@@ -230,27 +220,24 @@ describe("Extension Routing", function()
             local result = instance:exportExtRouting()
 
             io.open = original_io_open
+            json.encode = orig_encode
 
             assert.is_nil(result)
         end)
 
         it("closes file even when write fails", function()
-            package.loaded["main"] = nil
-            package.loaded["json"] = {
-                encode = function(t)
-                    error("JSON encoding error")
-                end,
-                decode = function(s) return {} end,
-            }
+            local orig_encode = json.encode
+            json.encode = function(_t)
+                error("JSON encoding error")
+            end
 
             local instance = helper.create_instance()
-
             instance.routing_enabled = true
             instance.ext_dirs = { epub = "/books" }
 
             local close_called = false
             local mock_file = {
-                write = function(self, content)
+                write = function(_self, _content)
                     error("Write error")
                 end,
                 close = function()
@@ -268,6 +255,7 @@ describe("Extension Routing", function()
             instance:exportExtRouting()
 
             io.open = original_io_open
+            json.encode = orig_encode
 
             assert.is_true(close_called, "Should close file even on write failure")
         end)
@@ -373,13 +361,17 @@ describe("Extension Routing", function()
 
             -- Count routes before
             local count_before = 0
-            for _ in pairs(instance.ext_dirs) do count_before = count_before + 1 end
+            for _ in pairs(instance.ext_dirs) do
+                count_before = count_before + 1
+            end
 
             remove_button.callback()
 
             -- Count routes after
             local count_after = 0
-            for _ in pairs(instance.ext_dirs) do count_after = count_after + 1 end
+            for _ in pairs(instance.ext_dirs) do
+                count_after = count_after + 1
+            end
 
             -- Should have one less route
             assert.equal(count_before - 1, count_after, "Should remove one route")

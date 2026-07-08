@@ -1,5 +1,5 @@
-require 'busted.runner'()
-local helper = require("spec.test_helper")
+require("busted.runner")()
+local helper = require("spec.spec_helper")
 
 -- Tests for command building and effective extension calculation
 -- This tests the logic that determines what extensions are accepted

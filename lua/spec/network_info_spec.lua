@@ -1,236 +1,207 @@
-require 'busted.runner'()
-local helper = require("spec.test_helper")
+require("busted.runner")()
+local helper = require("spec.spec_helper")
+local util = require("util")
+local ffiUtil = require("ffi/util")
+local Device = require("device")
 
--- Tests for network info display in server start notification
+-- Tests for network info display in the server start notification.
+-- Wraps the real Device.retrieveNetworkInfo (save+restore) and uses a real
+-- temp save directory.
 
 describe("Network Info Display", function()
+    local SAVE
+    local orig_retrieveNetworkInfo
+
     setup(function()
         helper.setup_complete()
+        SAVE = get_test_data_dir() .. "/save"
+        util.makePath(SAVE)
+        orig_retrieveNetworkInfo = Device.retrieveNetworkInfo
+    end)
+
+    teardown(function()
+        pcall(ffiUtil.purgeDir, SAVE)
     end)
 
     before_each(function()
         helper.before_each()
-
-        -- Override pathExists for write test
-        local base_pathExists = package.loaded["util"].pathExists
-        package.loaded["util"].pathExists = function(path)
-            if path == "/mnt/us/documents" then return true end
-            return base_pathExists(path)
-        end
-
-        -- Mock io.open for write test
-        local original_io_open = io.open
-        _G.io.open = function(path, mode)
-            if mode == "w" and path:match("%.localsend_write_test$") then
-                return { close = function() end }
-            end
-            return original_io_open(path, mode)
-        end
-
-        package.loaded["device"] = nil
     end)
 
+    after_each(function()
+        Device.retrieveNetworkInfo = orig_retrieveNetworkInfo
+    end)
+
+    local function with_network_info(fn)
+        Device.retrieveNetworkInfo = fn
+    end
+
     local function create_instance_and_start()
-        local LocalSend = require("main")
         local instance = helper.create_instance()
-        instance.save_dir = "/mnt/us/documents"
+        instance.save_dir = SAVE
         instance.port = "53317"
         instance.clearTransferLog = function() end
         instance.openFirewall = function() end
-        instance.exportExtRouting = function() return nil end
+        instance.exportExtRouting = function()
+            return nil
+        end
 
         local check_count = 0
-        instance.isRunning = function(self)
+        instance.isRunning = function()
             check_count = check_count + 1
             return check_count > 1
         end
 
-        helper.state.notifications_shown = {}
+        helper.reset_state()
         instance:start()
         return instance
     end
 
     describe("when retrieveNetworkInfo is available", function()
         it("shows network info in success notification", function()
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = function() return "WiFi: 192.168.1.100" end,
-            }
-
+            with_network_info(function()
+                return "WiFi: 192.168.1.100"
+            end)
             create_instance_and_start()
-
-            local found_ip = false
+            local found = false
             for _, n in ipairs(helper.state.notifications_shown) do
                 if n.text and n.text:match("192%.168%.1%.100") then
-                    found_ip = true
+                    found = true
                     break
                 end
             end
-            assert.is_true(found_ip, "Should include IP address in notification")
+            assert.is_true(found)
         end)
 
         it("includes WiFi info when returned by device", function()
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = function() return "Interface: wlan0\nIP: 10.0.0.42\nSSID: MyNetwork" end,
-            }
-
+            with_network_info(function()
+                return "Interface: wlan0\nIP: 10.0.0.42\nSSID: MyNetwork"
+            end)
             create_instance_and_start()
-
-            local found_network = false
+            local found = false
             for _, n in ipairs(helper.state.notifications_shown) do
                 if n.text and (n.text:match("10%.0%.0%.42") or n.text:match("wlan0")) then
-                    found_network = true
+                    found = true
                     break
                 end
             end
-            assert.is_true(found_network, "Should include network info in notification")
+            assert.is_true(found)
         end)
     end)
 
     describe("when retrieveNetworkInfo is nil (old KOReader)", function()
         it("shows success message without network info", function()
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = nil,
-            }
-
+            with_network_info(nil)
             create_instance_and_start()
-
-            local found_success = false
+            local found = false
             for _, n in ipairs(helper.state.notifications_shown) do
                 if n.text and n.text:match("LocalSend Ready") then
-                    found_success = true
+                    found = true
                     break
                 end
             end
-            assert.is_true(found_success, "Should show success message even without network info")
+            assert.is_true(found)
         end)
 
         it("still shows device name", function()
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = nil,
-            }
-
+            with_network_info(nil)
             create_instance_and_start()
-
-            local found_device = false
+            local found = false
             for _, n in ipairs(helper.state.notifications_shown) do
                 if n.text and n.text:match("KOReader") then
-                    found_device = true
+                    found = true
                     break
                 end
             end
-            assert.is_true(found_device, "Should show device name in notification")
+            assert.is_true(found)
         end)
     end)
 
     describe("when retrieveNetworkInfo returns empty string", function()
         it("shows success notification without network section", function()
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = function() return "" end,
-            }
-
+            with_network_info(function()
+                return ""
+            end)
             create_instance_and_start()
-
-            local found_success = false
+            local found = false
             for _, n in ipairs(helper.state.notifications_shown) do
                 if n.text and n.text:match("LocalSend Ready") then
-                    found_success = true
+                    found = true
                     break
                 end
             end
-            assert.is_true(found_success, "Should still show success notification")
+            assert.is_true(found)
         end)
     end)
 
     describe("notification content structure", function()
         it("includes device name in notification", function()
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = function() return "WiFi" end,
-            }
-
+            with_network_info(function()
+                return "WiFi"
+            end)
             create_instance_and_start()
-
-            local found_device = false
+            local found = false
             for _, n in ipairs(helper.state.notifications_shown) do
                 if n.text and n.text:match("KOReader") then
-                    found_device = true
+                    found = true
                     break
                 end
             end
-            assert.is_true(found_device, "Should mention device name in notification")
+            assert.is_true(found)
         end)
 
         it("shows custom device name when configured", function()
             helper.state.settings["LocalSend_device_name"] = "My Kindle"
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = function() return "WiFi" end,
-            }
-
+            with_network_info(function()
+                return "WiFi"
+            end)
             create_instance_and_start()
-
-            local found_custom = false
+            local found = false
             for _, n in ipairs(helper.state.notifications_shown) do
                 if n.text and n.text:match("My Kindle") then
-                    found_custom = true
+                    found = true
                     break
                 end
             end
-            assert.is_true(found_custom, "Should show custom device name")
+            assert.is_true(found)
         end)
 
         it("has timeout on success notification", function()
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = function() return "WiFi" end,
-            }
-
+            with_network_info(function()
+                return "WiFi"
+            end)
             create_instance_and_start()
-
-            local found_timeout = false
+            local found = false
             for _, n in ipairs(helper.state.notifications_shown) do
                 if n.text and n.text:match("LocalSend Ready") and n.timeout then
-                    found_timeout = true
-                    assert.is_true(n.timeout > 0, "Timeout should be positive")
+                    found = true
+                    assert.is_true(n.timeout > 0)
                     break
                 end
             end
-            assert.is_true(found_timeout, "Success notification should have timeout")
+            assert.is_true(found)
         end)
 
         it("shows PIN status when PIN is configured", function()
             helper.state.settings["LocalSend_pin"] = "1234"
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = function() return "WiFi" end,
-            }
-
+            with_network_info(function()
+                return "WiFi"
+            end)
             create_instance_and_start()
-
-            local found_pin = false
+            local found = false
             for _, n in ipairs(helper.state.notifications_shown) do
                 if n.text and n.text:match("PIN") then
-                    found_pin = true
+                    found = true
                     break
                 end
             end
-            assert.is_true(found_pin, "Should show PIN status when PIN is set")
+            assert.is_true(found)
         end)
 
         it("does not show PIN status when PIN is not configured", function()
-            helper.state.settings["LocalSend_pin"] = nil
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = function() return "WiFi" end,
-            }
-
+            with_network_info(function()
+                return "WiFi"
+            end)
             create_instance_and_start()
-
             local found_pin = false
             for _, n in ipairs(helper.state.notifications_shown) do
                 if n.text and n.text:match("LocalSend Ready") then
@@ -240,7 +211,7 @@ describe("Network Info Display", function()
                     break
                 end
             end
-            assert.is_false(found_pin, "Should not show PIN status when PIN is not set")
+            assert.is_false(found_pin)
         end)
     end)
 end)

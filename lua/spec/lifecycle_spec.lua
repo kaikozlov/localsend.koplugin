@@ -1,5 +1,6 @@
-require 'busted.runner'()
-local helper = require("spec.test_helper")
+require("busted.runner")()
+local helper = require("spec.spec_helper")
+local NetworkMgr = require("ui/network/manager")
 
 -- Tests for LocalSend plugin lifecycle behavior
 -- These tests verify the plugin behaves correctly during KOReader events
@@ -20,7 +21,9 @@ describe("LocalSend Lifecycle", function()
             local instance = helper.create_instance()
 
             -- Mock isRunning to return true (server already running)
-            instance.isRunning = function() return true end
+            instance.isRunning = function()
+                return true
+            end
 
             -- Clear any notifications from init
             helper.reset_state()
@@ -29,8 +32,7 @@ describe("LocalSend Lifecycle", function()
             instance:start()
 
             -- Should NOT have shown any notification
-            assert.equal(0, #helper.state.notifications_shown,
-                "No notification should be shown when server is already running")
+            assert.equal(0, #helper.state.notifications_shown, "No notification should be shown when server is already running")
         end)
     end)
 
@@ -38,8 +40,7 @@ describe("LocalSend Lifecycle", function()
         it("should have onExit method defined", function()
             local instance = helper.create_instance()
 
-            assert.is_function(instance.onExit,
-                "onExit should be defined for cleanup on KOReader exit")
+            assert.is_function(instance.onExit, "onExit should be defined for cleanup on KOReader exit")
         end)
 
         it("should have onCloseWidget method that cleans up tasks but NOT server", function()
@@ -47,26 +48,34 @@ describe("LocalSend Lifecycle", function()
 
             -- onCloseWidget SHOULD exist to clean up scheduled Lua tasks
             -- But it should NOT stop the server (server persists across document switches)
-            assert.is_function(instance.onCloseWidget,
-                "onCloseWidget should be defined for task cleanup")
+            assert.is_function(instance.onCloseWidget, "onCloseWidget should be defined for task cleanup")
 
             -- Verify it doesn't stop the server
             local stop_called = false
-            instance.stopServer = function() stop_called = true; return true end
-            instance.isRunning = function() return true end
+            instance.stopServer = function()
+                stop_called = true
+                return true
+            end
+            instance.isRunning = function()
+                return true
+            end
 
             instance:onCloseWidget()
 
-            assert.is_false(stop_called,
-                "onCloseWidget should NOT stop the server - it fires on document switch!")
+            assert.is_false(stop_called, "onCloseWidget should NOT stop the server - it fires on document switch!")
         end)
 
         it("onExit should stop server if running", function()
             local instance = helper.create_instance()
 
             local stop_called = false
-            instance.isRunning = function() return true end
-            instance.stopServer = function() stop_called = true; return true end
+            instance.isRunning = function()
+                return true
+            end
+            instance.stopServer = function()
+                stop_called = true
+                return true
+            end
 
             instance:onExit()
 
@@ -76,7 +85,9 @@ describe("LocalSend Lifecycle", function()
         it("onExit should not error if server not running", function()
             local instance = helper.create_instance()
 
-            instance.isRunning = function() return false end
+            instance.isRunning = function()
+                return false
+            end
 
             -- Should not throw
             assert.has_no.errors(function()
@@ -135,24 +146,25 @@ describe("LocalSend Lifecycle", function()
                 start_count = start_count + 1
             end
 
-            local instance1 = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance1 = LocalSend:new({
+                ui = { menu = { registerToMainMenu = function() end } },
+            })
             assert.equal(1, start_count, "First init should autostart")
 
             -- User explicitly stops the server
-            instance1.stopServer = function() return true end
+            instance1.stopServer = function()
+                return true
+            end
             instance1:stop()
 
             -- Simulate opening a new document (new plugin instance)
             -- Note: ServerState persists because it's a module-local table
-            local instance2 = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance2 = LocalSend:new({
+                ui = { menu = { registerToMainMenu = function() end } },
+            })
 
             -- Should NOT have called start again because user explicitly stopped
-            assert.equal(1, start_count,
-                "Should NOT autostart after user explicitly stopped server")
+            assert.equal(1, start_count, "Should NOT autostart after user explicitly stopped server")
 
             -- Cleanup
             LocalSend._ServerState.user_stopped = false
@@ -164,14 +176,15 @@ describe("LocalSend Lifecycle", function()
 
             local instance = helper.create_instance()
 
-            instance.isRunning = function() return false end
+            instance.isRunning = function()
+                return false
+            end
             instance.start = function() end -- Mock start
 
             -- User manually starts via toggle
             instance:onToggleLocalSend()
 
-            assert.is_false(LocalSend._ServerState.user_stopped,
-                "Manual start should clear the user_stopped flag")
+            assert.is_false(LocalSend._ServerState.user_stopped, "Manual start should clear the user_stopped flag")
 
             -- Cleanup
             LocalSend._ServerState.user_stopped = false
@@ -183,13 +196,14 @@ describe("LocalSend Lifecycle", function()
 
             local instance = helper.create_instance()
 
-            instance.stopServer = function() return true end
+            instance.stopServer = function()
+                return true
+            end
 
             -- User manually stops
             instance:stop()
 
-            assert.is_true(LocalSend._ServerState.user_stopped,
-                "Manual stop should set the user_stopped flag")
+            assert.is_true(LocalSend._ServerState.user_stopped, "Manual stop should set the user_stopped flag")
 
             -- Cleanup
             LocalSend._ServerState.user_stopped = false
@@ -207,31 +221,34 @@ describe("LocalSend Lifecycle", function()
             end
 
             -- First instance
-            local instance1 = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance1 = LocalSend:new({
+                ui = { menu = { registerToMainMenu = function() end } },
+            })
             assert.equal(1, start_count, "First init should autostart")
 
             -- User stops
-            instance1.stopServer = function() return true end
+            instance1.stopServer = function()
+                return true
+            end
             instance1:stop()
             assert.is_true(LocalSend._ServerState.user_stopped)
 
             -- User manually restarts via toggle
-            instance1.isRunning = function() return false end
+            instance1.isRunning = function()
+                return false
+            end
             instance1:onToggleLocalSend()
             -- onToggleLocalSend calls start(), so count is now 2
             assert.equal(2, start_count, "Manual restart should call start")
             assert.is_false(LocalSend._ServerState.user_stopped, "Flag should be cleared")
 
             -- Simulate opening new document - ServerState persists across instances
-            local instance2 = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
+            local instance2 = LocalSend:new({
+                ui = { menu = { registerToMainMenu = function() end } },
+            })
 
             -- Should autostart again because user manually restarted (flag was cleared)
-            assert.equal(3, start_count,
-                "Should autostart after user manually restarted")
+            assert.equal(3, start_count, "Should autostart after user manually restarted")
 
             -- Cleanup
             LocalSend._ServerState.user_stopped = false
@@ -243,48 +260,45 @@ describe("LocalSend Lifecycle", function()
             -- when WiFi is disabled. Autostart now silently skips when offline.
             helper.state.settings["LocalSend_autostart"] = true
 
-            -- Simulate WiFi being OFF
-            package.loaded["ui/network/manager"] = {
-                isOnline = function() return false end,
-                isConnected = function() return false end,  -- WiFi OFF
-                runWhenOnline = function(self, callback) end,
-                runWhenConnected = function(self, callback) end,
-            }
+            -- Simulate WiFi being OFF by wrapping the real NetworkMgr methods.
+            local real_isConnected = NetworkMgr.isConnected
+            local real_runWhenConnected = NetworkMgr.runWhenConnected
+            NetworkMgr.isConnected = function()
+                return false
+            end
+            local runWhenConnected_count = 0
+            NetworkMgr.runWhenConnected = function()
+                runWhenConnected_count = runWhenConnected_count + 1
+            end
 
-            -- Force reload main.lua with new NetworkMgr mock
+            -- Force reload main.lua so it picks up the wrapped NetworkMgr.
             package.loaded["main"] = nil
             LocalSend = require("main")
             LocalSend._ServerState.user_stopped = false
 
-            local runWhenConnected_count = 0
-            package.loaded["ui/network/manager"].runWhenConnected = function(self, callback)
-                runWhenConnected_count = runWhenConnected_count + 1
-            end
-
             -- Create widget instances - none should call runWhenConnected
             -- because autostart is now silent (skips when offline)
-            local instance1 = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-            assert.equal(0, runWhenConnected_count,
-                "Autostart should NOT call runWhenConnected when WiFi is off (silent skip)")
+            local instance1 = LocalSend:new({
+                ui = { menu = { registerToMainMenu = function() end } },
+            })
+            assert.equal(0, runWhenConnected_count, "Autostart should NOT call runWhenConnected when WiFi is off (silent skip)")
 
             -- Simulate opening more books - still no calls
-            local instance2 = LocalSend:new{
-                ui = { menu = { registerToMainMenu = function() end } }
-            }
-            assert.equal(0, runWhenConnected_count,
-                "Second init should also NOT call runWhenConnected")
+            local instance2 = LocalSend:new({
+                ui = { menu = { registerToMainMenu = function() end } },
+            })
+            assert.equal(0, runWhenConnected_count, "Second init should also NOT call runWhenConnected")
 
             -- Cleanup
             LocalSend._ServerState.user_stopped = false
-            helper.mock_network_manager()
+            NetworkMgr.isConnected = real_isConnected
+            NetworkMgr.runWhenConnected = real_runWhenConnected
         end)
     end)
 
     describe("suspend/resume behavior", function()
         -- Parametrized method existence tests
-        local lifecycle_methods = {"_onSuspend", "_onResume", "_onEnterStandby", "_onLeaveStandby"}
+        local lifecycle_methods = { "_onSuspend", "_onResume", "_onEnterStandby", "_onLeaveStandby" }
         for _, method in ipairs(lifecycle_methods) do
             it("should have " .. method .. " implementation defined", function()
                 local instance = helper.create_instance()
@@ -294,7 +308,7 @@ describe("LocalSend Lifecycle", function()
 
         it("onSuspend should be registered when autostart is enabled", function()
             helper.state.settings["LocalSend_autostart"] = true
-            package.loaded["main"] = nil  -- Force reload
+            package.loaded["main"] = nil -- Force reload
             LocalSend = require("main")
             local instance = helper.create_instance()
             assert.is_function(instance.onSuspend, "onSuspend should be registered when autostart is enabled")
@@ -307,14 +321,18 @@ describe("LocalSend Lifecycle", function()
             local instance = helper.create_instance()
 
             local stop_called = false
-            instance.isRunning = function() return true end
-            instance.stopServer = function() stop_called = true; return true end
+            instance.isRunning = function()
+                return true
+            end
+            instance.stopServer = function()
+                stop_called = true
+                return true
+            end
 
             instance:_onSuspend()
 
             assert.is_true(stop_called, "_onSuspend should stop the server")
-            assert.is_true(LocalSend._ServerState.was_running_before_suspend,
-                "was_running_before_suspend should be true")
+            assert.is_true(LocalSend._ServerState.was_running_before_suspend, "was_running_before_suspend should be true")
 
             -- Cleanup
             LocalSend._ServerState.was_running_before_suspend = false
@@ -326,12 +344,13 @@ describe("LocalSend Lifecycle", function()
 
             local instance = helper.create_instance()
 
-            instance.isRunning = function() return false end
+            instance.isRunning = function()
+                return false
+            end
 
             instance:_onSuspend()
 
-            assert.is_false(LocalSend._ServerState.was_running_before_suspend,
-                "was_running_before_suspend should be false when server not running")
+            assert.is_false(LocalSend._ServerState.was_running_before_suspend, "was_running_before_suspend should be false when server not running")
         end)
 
         it("onResume should restart server if was_running_before_suspend is true", function()
@@ -374,8 +393,7 @@ describe("LocalSend Lifecycle", function()
 
             instance:_onResume()
 
-            assert.is_false(start_called,
-                "start should NOT be called when user_stopped is true")
+            assert.is_false(start_called, "start should NOT be called when user_stopped is true")
 
             -- Cleanup
             LocalSend._ServerState.was_running_before_suspend = false
@@ -396,8 +414,7 @@ describe("LocalSend Lifecycle", function()
 
             instance:_onResume()
 
-            assert.is_false(start_called,
-                "start should NOT be called when server was not running before suspend")
+            assert.is_false(start_called, "start should NOT be called when server was not running before suspend")
         end)
 
         it("onEnterStandby should stop server and set was_running_before_suspend", function()
@@ -407,14 +424,18 @@ describe("LocalSend Lifecycle", function()
             local instance = helper.create_instance()
 
             local stop_called = false
-            instance.isRunning = function() return true end
-            instance.stopServer = function() stop_called = true; return true end
+            instance.isRunning = function()
+                return true
+            end
+            instance.stopServer = function()
+                stop_called = true
+                return true
+            end
 
             instance:_onEnterStandby()
 
             assert.is_true(stop_called, "onEnterStandby should stop the server")
-            assert.is_true(LocalSend._ServerState.was_running_before_suspend,
-                "was_running_before_suspend should be true")
+            assert.is_true(LocalSend._ServerState.was_running_before_suspend, "was_running_before_suspend should be true")
 
             -- Cleanup
             LocalSend._ServerState.was_running_before_suspend = false
@@ -460,8 +481,7 @@ describe("LocalSend Lifecycle", function()
 
             instance:_onLeaveStandby()
 
-            assert.is_false(start_called,
-                "start should NOT be called when user_stopped is true")
+            assert.is_false(start_called, "start should NOT be called when user_stopped is true")
 
             -- Cleanup
             LocalSend._ServerState.was_running_before_suspend = false
@@ -478,16 +498,25 @@ describe("LocalSend Lifecycle", function()
             -- Mock necessary functions
             local is_running = false
             instance.save_dir = "/mnt/us/documents"
-            instance.validateSaveDir = function() return true end
+            instance.validateSaveDir = function()
+                return true
+            end
             instance.clearTransferLog = function() end
             instance.openFirewall = function() end
-            instance.exportExtRouting = function() return nil end
+            instance.exportExtRouting = function()
+                return nil
+            end
             -- isRunning returns false initially, then true after os.execute
-            instance.isRunning = function() return is_running end
+            instance.isRunning = function()
+                return is_running
+            end
 
             -- Make os.execute succeed and set server as running
             local original_execute = os.execute
-            os.execute = function() is_running = true; return 0 end
+            os.execute = function()
+                is_running = true
+                return 0
+            end
 
             -- Clear notifications
             helper.reset_state()
@@ -501,8 +530,7 @@ describe("LocalSend Lifecycle", function()
             -- Should NOT have shown the "LocalSend Ready" notification
             local found_ready_notification = helper.find_notification("LocalSend Ready")
 
-            assert.is_nil(found_ready_notification,
-                "start(true) should not show 'LocalSend Ready' notification")
+            assert.is_nil(found_ready_notification, "start(true) should not show 'LocalSend Ready' notification")
         end)
 
         it("start(true) should not clear transfer log", function()
@@ -513,23 +541,33 @@ describe("LocalSend Lifecycle", function()
             local clear_log_called = false
             local is_running = false
             instance.save_dir = "/mnt/us/documents"
-            instance.validateSaveDir = function() return true end
-            instance.clearTransferLog = function() clear_log_called = true end
+            instance.validateSaveDir = function()
+                return true
+            end
+            instance.clearTransferLog = function()
+                clear_log_called = true
+            end
             instance.openFirewall = function() end
-            instance.exportExtRouting = function() return nil end
+            instance.exportExtRouting = function()
+                return nil
+            end
             -- isRunning returns false initially, then true after os.execute
-            instance.isRunning = function() return is_running end
+            instance.isRunning = function()
+                return is_running
+            end
 
             local original_execute = os.execute
-            os.execute = function() is_running = true; return 0 end
+            os.execute = function()
+                is_running = true
+                return 0
+            end
 
             -- Start with silent=true
             instance:start(true)
 
             os.execute = original_execute
 
-            assert.is_false(clear_log_called,
-                "start(true) should not clear transfer log (preserve across sleep)")
+            assert.is_false(clear_log_called, "start(true) should not clear transfer log (preserve across sleep)")
         end)
 
         it("start(false) should clear transfer log", function()
@@ -540,23 +578,33 @@ describe("LocalSend Lifecycle", function()
             local clear_log_called = false
             local is_running = false
             instance.save_dir = "/mnt/us/documents"
-            instance.validateSaveDir = function() return true end
-            instance.clearTransferLog = function() clear_log_called = true end
+            instance.validateSaveDir = function()
+                return true
+            end
+            instance.clearTransferLog = function()
+                clear_log_called = true
+            end
             instance.openFirewall = function() end
-            instance.exportExtRouting = function() return nil end
+            instance.exportExtRouting = function()
+                return nil
+            end
             -- isRunning returns false initially, then true after os.execute
-            instance.isRunning = function() return is_running end
+            instance.isRunning = function()
+                return is_running
+            end
 
             local original_execute = os.execute
-            os.execute = function() is_running = true; return 0 end
+            os.execute = function()
+                is_running = true
+                return 0
+            end
 
             -- Start with silent=false (or nil)
             instance:start()
 
             os.execute = original_execute
 
-            assert.is_true(clear_log_called,
-                "start() without silent should clear transfer log")
+            assert.is_true(clear_log_called, "start() without silent should clear transfer log")
         end)
     end)
 
@@ -568,23 +616,20 @@ describe("LocalSend Lifecycle", function()
             LocalSend = require("main")
             local instance = helper.create_instance()
 
-            assert.is_function(instance._onNetworkDisconnected,
-                "_onNetworkDisconnected implementation should be defined to handle WiFi loss")
+            assert.is_function(instance._onNetworkDisconnected, "_onNetworkDisconnected implementation should be defined to handle WiFi loss")
         end)
 
         it("should have _onNetworkConnected implementation defined", function()
             LocalSend = require("main")
             local instance = helper.create_instance()
 
-            assert.is_function(instance._onNetworkConnected,
-                "_onNetworkConnected implementation should be defined to handle WiFi reconnection")
+            assert.is_function(instance._onNetworkConnected, "_onNetworkConnected implementation should be defined to handle WiFi reconnection")
         end)
 
         it("ServerState should have was_running_before_disconnect field", function()
             LocalSend = require("main")
 
-            assert.is_not_nil(LocalSend._ServerState.was_running_before_disconnect,
-                "ServerState should track was_running_before_disconnect")
+            assert.is_not_nil(LocalSend._ServerState.was_running_before_disconnect, "ServerState should track was_running_before_disconnect")
         end)
 
         it("onNetworkDisconnected should stop server if running", function()
@@ -594,15 +639,18 @@ describe("LocalSend Lifecycle", function()
             local instance = helper.create_instance()
 
             local stop_called = false
-            instance.isRunning = function() return true end
-            instance.stopServer = function() stop_called = true; return true end
+            instance.isRunning = function()
+                return true
+            end
+            instance.stopServer = function()
+                stop_called = true
+                return true
+            end
 
             instance:_onNetworkDisconnected()
 
-            assert.is_true(stop_called,
-                "onNetworkDisconnected should stop the server")
-            assert.is_true(LocalSend._ServerState.was_running_before_disconnect,
-                "should set was_running_before_disconnect for potential reconnect")
+            assert.is_true(stop_called, "onNetworkDisconnected should stop the server")
+            assert.is_true(LocalSend._ServerState.was_running_before_disconnect, "should set was_running_before_disconnect for potential reconnect")
 
             -- Cleanup
             LocalSend._ServerState.was_running_before_disconnect = false
@@ -614,12 +662,13 @@ describe("LocalSend Lifecycle", function()
 
             local instance = helper.create_instance()
 
-            instance.isRunning = function() return false end
+            instance.isRunning = function()
+                return false
+            end
 
             instance:_onNetworkDisconnected()
 
-            assert.is_false(LocalSend._ServerState.was_running_before_disconnect,
-                "should clear was_running_before_disconnect when server not running")
+            assert.is_false(LocalSend._ServerState.was_running_before_disconnect, "should clear was_running_before_disconnect when server not running")
         end)
 
         it("onNetworkConnected should restart server if was_running_before_disconnect", function()
@@ -638,10 +687,8 @@ describe("LocalSend Lifecycle", function()
 
             instance:_onNetworkConnected()
 
-            assert.is_true(start_called,
-                "onNetworkConnected should restart server if it was running before disconnect")
-            assert.is_true(start_silent,
-                "onNetworkConnected should call start with silent=true")
+            assert.is_true(start_called, "onNetworkConnected should restart server if it was running before disconnect")
+            assert.is_true(start_silent, "onNetworkConnected should call start with silent=true")
 
             -- Cleanup
             LocalSend._ServerState.was_running_before_disconnect = false
@@ -661,8 +708,7 @@ describe("LocalSend Lifecycle", function()
 
             instance:_onNetworkConnected()
 
-            assert.is_false(start_called,
-                "onNetworkConnected should NOT restart if user explicitly stopped")
+            assert.is_false(start_called, "onNetworkConnected should NOT restart if user explicitly stopped")
 
             -- Cleanup
             LocalSend._ServerState.user_stopped = false
@@ -683,8 +729,7 @@ describe("LocalSend Lifecycle", function()
 
             instance:_onNetworkConnected()
 
-            assert.is_false(start_called,
-                "onNetworkConnected should NOT restart if server was not running before disconnect")
+            assert.is_false(start_called, "onNetworkConnected should NOT restart if server was not running before disconnect")
         end)
     end)
 
@@ -696,8 +741,7 @@ describe("LocalSend Lifecycle", function()
             LocalSend = require("main")
             local instance = helper.create_instance()
 
-            assert.is_function(instance.onFlushSettings,
-                "onFlushSettings should be defined for proper KOReader lifecycle compliance")
+            assert.is_function(instance.onFlushSettings, "onFlushSettings should be defined for proper KOReader lifecycle compliance")
         end)
 
         it("onFlushSettings should not error when called", function()
@@ -734,14 +778,11 @@ describe("LocalSend Lifecycle", function()
             local instance = helper.create_instance()
 
             -- Should have called start with silent=true (like resume would)
-            assert.is_true(start_called,
-                "init() should start server when was_running_before_suspend is true")
-            assert.is_true(start_silent,
-                "init() should start with silent=true to avoid notification")
+            assert.is_true(start_called, "init() should start server when was_running_before_suspend is true")
+            assert.is_true(start_silent, "init() should start with silent=true to avoid notification")
 
             -- Flag should be cleared after handling
-            assert.is_false(LocalSend._ServerState.was_running_before_suspend,
-                "was_running_before_suspend should be cleared after init handles it")
+            assert.is_false(LocalSend._ServerState.was_running_before_suspend, "was_running_before_suspend should be cleared after init handles it")
 
             -- Cleanup
             LocalSend.start = original_start
@@ -761,8 +802,7 @@ describe("LocalSend Lifecycle", function()
 
             local instance = helper.create_instance()
 
-            assert.is_false(start_called,
-                "init() should NOT start if user explicitly stopped")
+            assert.is_false(start_called, "init() should NOT start if user explicitly stopped")
 
             -- Cleanup
             LocalSend.start = original_start
@@ -790,8 +830,7 @@ describe("LocalSend Lifecycle", function()
             -- Should start only once (was_running_before_suspend handled, autostart skipped)
             -- OR start twice but was_running_before_suspend uses silent=true
             -- The important thing is that the server gets started
-            assert.is_true(start_count >= 1,
-                "Server should be started")
+            assert.is_true(start_count >= 1, "Server should be started")
 
             -- Cleanup
             LocalSend.start = original_start

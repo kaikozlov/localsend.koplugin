@@ -1,5 +1,6 @@
-require 'busted.runner'()
-local helper = require("spec.test_helper")
+require("busted.runner")()
+local helper = require("spec.spec_helper")
+local Device = require("device")
 
 -- Tests for iptables firewall management functions
 
@@ -30,61 +31,64 @@ end
 describe("Firewall Management", function()
     local iptables_rules
     local os_execute_calls
+    local orig_isKindle, orig_retrieveNetworkInfo
+
+    -- Simulate iptables -C/-A/-D against an in-memory rule set.
+    local function simulator(cmd)
+        table.insert(os_execute_calls, cmd)
+        if cmd:match("'iptables' '%-C'") then
+            local rule = extract_rule_key(cmd)
+            if rule and iptables_rules[rule] then
+                return 0
+            end
+            return 1
+        end
+        if cmd:match("'iptables' '%-A'") then
+            local rule = extract_rule_key(cmd)
+            if rule then
+                iptables_rules[rule] = true
+            end
+            return 0
+        end
+        if cmd:match("'iptables' '%-D'") then
+            local rule = extract_rule_key(cmd)
+            if rule then
+                iptables_rules[rule] = nil
+            end
+            return 0
+        end
+        return 0
+    end
 
     setup(function()
         helper.setup_complete()
+        orig_isKindle = Device.isKindle
+        orig_retrieveNetworkInfo = Device.retrieveNetworkInfo
+    end)
+
+    teardown(function()
+        Device.isKindle = orig_isKindle
+        Device.retrieveNetworkInfo = orig_retrieveNetworkInfo
     end)
 
     before_each(function()
         helper.before_each()
         iptables_rules = {}
         os_execute_calls = {}
-
-        -- Simulate iptables behavior (handles shell-escaped commands)
-        _G.os.execute = function(cmd)
-            table.insert(os_execute_calls, cmd)
-
-            -- iptables -C (check): return 0 if rule exists, 1 if not
-            if cmd:match("'iptables' '%-C'") then
-                local rule = extract_rule_key(cmd)
-                if rule and iptables_rules[rule] then
-                    return 0
-                end
-                return 1
-            end
-
-            -- iptables -A (add): add rule
-            if cmd:match("'iptables' '%-A'") then
-                local rule = extract_rule_key(cmd)
-                if rule then
-                    iptables_rules[rule] = true
-                end
-                return 0
-            end
-
-            -- iptables -D (delete): remove rule
-            if cmd:match("'iptables' '%-D'") then
-                local rule = extract_rule_key(cmd)
-                if rule then
-                    iptables_rules[rule] = nil
-                end
-                return 0
-            end
-
-            return 0
+        Device.isKindle = function()
+            return false
         end
-
-        package.loaded["main"] = nil
-        -- Need to reload device to mock isKindle
-        package.loaded["device"] = nil
+        Device.retrieveNetworkInfo = function()
+            return "WiFi"
+        end
+        helper.mock_os_execute(simulator)
     end)
 
     describe("on Kindle devices", function()
         before_each(function()
-            package.loaded["device"] = {
-                isKindle = function() return true end,
-                retrieveNetworkInfo = function() return "WiFi" end,
-            }
+            Device.isKindle = function()
+                return true
+            end
         end)
 
         describe("openFirewall", function()
@@ -301,10 +305,9 @@ describe("Firewall Management", function()
 
     describe("on non-Kindle devices with iptables", function()
         before_each(function()
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = function() return "WiFi" end,
-            }
+            Device.isKindle = function()
+                return false
+            end
         end)
 
         it("openFirewall configures iptables", function()
@@ -330,10 +333,9 @@ describe("Firewall Management", function()
 
     describe("when iptables is unavailable", function()
         before_each(function()
-            package.loaded["device"] = {
-                isKindle = function() return false end,
-                retrieveNetworkInfo = function() return "WiFi" end,
-            }
+            Device.isKindle = function()
+                return false
+            end
         end)
 
         it("reports unmanaged without changing rules", function()
@@ -358,10 +360,9 @@ describe("Firewall Management", function()
 
     describe("iptables command injection protection", function()
         before_each(function()
-            package.loaded["device"] = {
-                isKindle = function() return true end,
-                retrieveNetworkInfo = function() return "WiFi" end,
-            }
+            Device.isKindle = function()
+                return true
+            end
             os_execute_calls = {}
         end)
 

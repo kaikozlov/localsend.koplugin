@@ -1,5 +1,5 @@
-require 'busted.runner'()
-local helper = require("spec.test_helper")
+require("busted.runner")()
+local helper = require("spec.spec_helper")
 
 -- Tests for caching isRunning() and getTransferCount()
 -- These tests verify cached values are used to avoid disk I/O on every menu render
@@ -17,29 +17,25 @@ describe("LocalSend State Caching", function()
         it("should have _cached_running field after init()", function()
             local instance = helper.create_instance()
 
-            assert.is_not_nil(instance._cached_running,
-                "_cached_running should be initialized in init()")
+            assert.is_not_nil(instance._cached_running, "_cached_running should be initialized in init()")
         end)
 
         it("should have _cached_transfer_count field after init()", function()
             local instance = helper.create_instance()
 
-            assert.is_not_nil(instance._cached_transfer_count,
-                "_cached_transfer_count should be initialized in init()")
+            assert.is_not_nil(instance._cached_transfer_count, "_cached_transfer_count should be initialized in init()")
         end)
 
         it("_cached_running should default to false", function()
             local instance = helper.create_instance()
 
-            assert.is_false(instance._cached_running,
-                "_cached_running should default to false")
+            assert.is_false(instance._cached_running, "_cached_running should default to false")
         end)
 
         it("_cached_transfer_count should default to 0", function()
             local instance = helper.create_instance()
 
-            assert.equal(0, instance._cached_transfer_count,
-                "_cached_transfer_count should default to 0")
+            assert.equal(0, instance._cached_transfer_count, "_cached_transfer_count should default to 0")
         end)
     end)
 
@@ -47,34 +43,39 @@ describe("LocalSend State Caching", function()
         it("should have _updateCache method", function()
             local instance = helper.create_instance()
 
-            assert.is_function(instance._updateCache,
-                "_updateCache helper should exist")
+            assert.is_function(instance._updateCache, "_updateCache helper should exist")
         end)
 
         it("_updateCache should update _cached_running from isRunning()", function()
             local instance = helper.create_instance()
 
             -- Mock isRunning to return true
-            instance.isRunning = function() return true end
-            instance.getTransferCount = function() return 0 end
+            instance.isRunning = function()
+                return true
+            end
+            instance.getTransferCount = function()
+                return 0
+            end
 
             instance:_updateCache()
 
-            assert.is_true(instance._cached_running,
-                "_updateCache should sync _cached_running with isRunning()")
+            assert.is_true(instance._cached_running, "_updateCache should sync _cached_running with isRunning()")
         end)
 
         it("_updateCache should update _cached_transfer_count from getTransferCount()", function()
             local instance = helper.create_instance()
 
             -- Mock getTransferCount to return 5
-            instance.isRunning = function() return false end
-            instance.getTransferCount = function() return 5 end
+            instance.isRunning = function()
+                return false
+            end
+            instance.getTransferCount = function()
+                return 5
+            end
 
             instance:_updateCache()
 
-            assert.equal(5, instance._cached_transfer_count,
-                "_updateCache should sync _cached_transfer_count with getTransferCount()")
+            assert.equal(5, instance._cached_transfer_count, "_updateCache should sync _cached_transfer_count with getTransferCount()")
         end)
     end)
 
@@ -95,7 +96,7 @@ describe("LocalSend State Caching", function()
             local isRunning_count = 0
             instance.isRunning = function()
                 isRunning_count = isRunning_count + 1
-                return true  -- Server already running
+                return true -- Server already running
             end
 
             -- Reset counter before test
@@ -106,8 +107,7 @@ describe("LocalSend State Caching", function()
             -- When server is already running, start() should take over polling
             -- but doesn't call _updateCache (only on fresh start)
             -- Let's test the cache values are correct instead
-            assert.is_true(instance._cached_running,
-                "Cache should reflect running state after start()")
+            assert.is_true(instance._cached_running, "Cache should reflect running state after start()")
         end)
 
         it("stopServer() should update cache after stopping", function()
@@ -129,10 +129,10 @@ describe("LocalSend State Caching", function()
             local original_pathExists = package.loaded["util"].pathExists
             package.loaded["util"].pathExists = function(path)
                 if path:match("localsend_koreader%.pid$") then
-                    return true  -- PID file exists
+                    return true -- PID file exists
                 end
                 if path:match("^/proc/%d+$") then
-                    return false  -- Process not alive
+                    return false -- Process not alive
                 end
                 return original_pathExists(path)
             end
@@ -141,14 +141,16 @@ describe("LocalSend State Caching", function()
             local original_readFromFile = package.loaded["util"].readFromFile
             package.loaded["util"].readFromFile = function(path)
                 if path:match("localsend_koreader%.pid$") then
-                    return "12345"  -- Fake PID
+                    return "12345" -- Fake PID
                 end
                 return original_readFromFile and original_readFromFile(path) or nil
             end
 
             -- Mock os.remove to avoid actual file operations
             local original_remove = os.remove
-            os.remove = function() return true end
+            os.remove = function()
+                return true
+            end
 
             update_cache_calls = 0
             instance:stopServer()
@@ -159,8 +161,7 @@ describe("LocalSend State Caching", function()
             os.remove = original_remove
 
             -- stopServer should call _updateCache when process stopped
-            assert.is_true(update_cache_calls > 0,
-                "stopServer() should call _updateCache after stopping")
+            assert.is_true(update_cache_calls > 0, "stopServer() should call _updateCache after stopping")
         end)
 
         it("_checkForNewTransfers should update cache when transfers found", function()
@@ -171,13 +172,16 @@ describe("LocalSend State Caching", function()
                 update_cache_called = true
             end
 
-            instance.isRunning = function() return true end
-            instance.getNewTransfers = function() return { "file1.pdf", "file2.epub" } end
+            instance.isRunning = function()
+                return true
+            end
+            instance.getNewTransfers = function()
+                return { "file1.pdf", "file2.epub" }
+            end
 
             instance:_checkForNewTransfers()
 
-            assert.is_true(update_cache_called,
-                "_checkForNewTransfers should call _updateCache when new files detected")
+            assert.is_true(update_cache_called, "_checkForNewTransfers should call _updateCache when new files detected")
         end)
     end)
 
@@ -207,10 +211,8 @@ describe("LocalSend State Caching", function()
             -- Call the main menu item's text_func
             local text = menu_items.localsend.text_func()
 
-            assert.equal(0, isRunning_calls_in_text_func,
-                "text_func should use _cached_running, not call isRunning()")
-            assert.equal("LocalSend (3 received)", text,
-                "text_func should show cached transfer count")
+            assert.equal(0, isRunning_calls_in_text_func, "text_func should use _cached_running, not call isRunning()")
+            assert.equal("LocalSend (3 received)", text, "text_func should show cached transfer count")
         end)
 
         it("text_func should use _cached_transfer_count instead of getTransferCount()", function()
@@ -238,8 +240,7 @@ describe("LocalSend State Caching", function()
             -- Call text_func
             local text = menu_items.localsend.text_func()
 
-            assert.equal(0, getTransferCount_calls_in_text_func,
-                "text_func should use _cached_transfer_count, not call getTransferCount()")
+            assert.equal(0, getTransferCount_calls_in_text_func, "text_func should use _cached_transfer_count, not call getTransferCount()")
         end)
 
         it("sub-menu Start/Stop text_func should use _cached_running", function()
@@ -262,10 +263,8 @@ describe("LocalSend State Caching", function()
             -- First sub-item is Start/Stop toggle
             local text = menu_items.localsend.sub_item_table[1].text_func()
 
-            assert.equal(0, isRunning_calls,
-                "Start/Stop text_func should use _cached_running")
-            assert.equal("Stop server", text,
-                "Should show 'Stop server' when _cached_running is true")
+            assert.equal(0, isRunning_calls, "Start/Stop text_func should use _cached_running")
+            assert.equal("Stop server", text, "Should show 'Stop server' when _cached_running is true")
         end)
 
         it("Recent transfers text_func should use _cached_transfer_count", function()
@@ -288,10 +287,8 @@ describe("LocalSend State Caching", function()
             -- Second sub-item is Recent transfers
             local text = menu_items.localsend.sub_item_table[2].text_func()
 
-            assert.equal(0, getTransferCount_calls,
-                "Recent transfers text_func should use _cached_transfer_count")
-            assert.equal("Recent transfers (5)", text,
-                "Should show cached count")
+            assert.equal(0, getTransferCount_calls, "Recent transfers text_func should use _cached_transfer_count")
+            assert.equal("Recent transfers (5)", text, "Should show cached count")
         end)
 
         it("Recent transfers enabled_func should use _cached_transfer_count", function()
@@ -314,10 +311,8 @@ describe("LocalSend State Caching", function()
             -- Second sub-item is Recent transfers
             local enabled = menu_items.localsend.sub_item_table[2].enabled_func()
 
-            assert.equal(0, getTransferCount_calls,
-                "Recent transfers enabled_func should use _cached_transfer_count")
-            assert.is_true(enabled,
-                "Should be enabled when _cached_transfer_count > 0")
+            assert.equal(0, getTransferCount_calls, "Recent transfers enabled_func should use _cached_transfer_count")
+            assert.is_true(enabled, "Should be enabled when _cached_transfer_count > 0")
         end)
     end)
 
@@ -327,8 +322,12 @@ describe("LocalSend State Caching", function()
 
             -- Temporarily make isRunning return true
             local orig_isRunning = LocalSend.isRunning
-            LocalSend.isRunning = function() return true end
-            LocalSend.getTransferCount = function() return 2 end
+            LocalSend.isRunning = function()
+                return true
+            end
+            LocalSend.getTransferCount = function()
+                return 2
+            end
 
             local instance = helper.create_instance()
 
@@ -336,10 +335,8 @@ describe("LocalSend State Caching", function()
             LocalSend.isRunning = orig_isRunning
 
             -- Cache should reflect the running state
-            assert.is_true(instance._cached_running,
-                "Cache should sync to running state during init")
-            assert.equal(2, instance._cached_transfer_count,
-                "Cache should sync transfer count during init")
+            assert.is_true(instance._cached_running, "Cache should sync to running state during init")
+            assert.equal(2, instance._cached_transfer_count, "Cache should sync transfer count during init")
         end)
     end)
 
@@ -349,8 +346,7 @@ describe("LocalSend State Caching", function()
     describe("ServerState transfer_count optimization", function()
         it("ServerState should have transfer_count field", function()
             local LocalSend = require("main")
-            assert.is_not_nil(LocalSend._ServerState.transfer_count,
-                "ServerState should have transfer_count field for caching")
+            assert.is_not_nil(LocalSend._ServerState.transfer_count, "ServerState should have transfer_count field for caching")
         end)
 
         it("clearTransferLog should reset ServerState.transfer_count to 0", function()
@@ -361,8 +357,7 @@ describe("LocalSend State Caching", function()
 
             instance:clearTransferLog()
 
-            assert.equal(0, LocalSend._ServerState.transfer_count,
-                "clearTransferLog should reset transfer_count to 0")
+            assert.equal(0, LocalSend._ServerState.transfer_count, "clearTransferLog should reset transfer_count to 0")
         end)
 
         it("getTransferCount should return ServerState.transfer_count", function()
@@ -373,8 +368,7 @@ describe("LocalSend State Caching", function()
 
             local count = instance:getTransferCount()
 
-            assert.equal(42, count,
-                "getTransferCount should return cached ServerState.transfer_count")
+            assert.equal(42, count, "getTransferCount should return cached ServerState.transfer_count")
         end)
 
         it("getTransferCount should NOT read file when using ServerState cache", function()
@@ -397,15 +391,13 @@ describe("LocalSend State Caching", function()
 
             io.open = original_io_open
 
-            assert.is_false(io_open_called_for_log,
-                "getTransferCount should NOT read file when using ServerState cache")
+            assert.is_false(io_open_called_for_log, "getTransferCount should NOT read file when using ServerState cache")
         end)
 
         it("ServerState should NOT have deprecated polling_generation field", function()
             local LocalSend = require("main")
 
-            assert.is_nil(LocalSend._ServerState.polling_generation,
-                "polling_generation is deprecated and should be removed")
+            assert.is_nil(LocalSend._ServerState.polling_generation, "polling_generation is deprecated and should be removed")
         end)
     end)
 end)

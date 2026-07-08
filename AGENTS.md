@@ -142,25 +142,35 @@ type RecvSession struct {
 
 ## Testing
 
-Lua tests run inside the koplugin-dev Docker container against a real KOReader runtime.
-Tests currently use `lua/spec/test_helper.lua` which mocks KOReader deps — this will be
-gradually migrated to use real modules as the test infrastructure matures.
+Lua tests run inside the koplugin-dev Docker container against a **real, headless
+KOReader** — no KOReader module is mocked. Specs `require()` the real `UIManager`,
+`Device`, `util`, `NetworkMgr`, widgets, `G_reader_settings`, etc. directly.
 
+`lua/spec/spec_helper.lua` is the single shared helper. It provides:
+- `setup_complete()` / `before_each()` — materialises the installed plugin layout
+  (binary shim + isolated settings) so `require("main")` loads exactly as on-device,
+  and installs transparent **spies** (call-through) on `UIManager.show/close/scheduleIn`,
+  `os.execute`, `os.remove`, `util.removeFile`, and `ffi/util.purgeDir`.
+- `create_instance()` — a real plugin instance against live modules.
+- `load_via_filemanager()` — load through the real `PluginLoader` + `FileManager`.
+- `state.*` capture tables and `find_notification` / `find_dialog` / `find_execute_call`.
+
+`os.execute` is the only spy that does **not** call through (it is captured, not run,
+so tests never launch the receiver or touch iptables). For boundary conditions a spec
+can't reproduce on the real filesystem (offline network, a broken binary, a malformed
+transfer log), wrap the specific function with save/restore — never stub a whole
+KOReader module.
+
+Available globals from `commonrequire.lua` (container environment):
 ```lua
-helper.setup_complete()      -- Mock all KOReader deps
-helper.create_instance()     -- Create plugin instance
+load_plugin("localsend.koplugin") -- Load plugin via real PluginLoader
+fastforward_ui_events()           -- Run scheduled UI tasks immediately
+disable_plugins()                 -- Clear all plugins for isolated testing
+get_test_data_dir()               -- Isolated temp directory
+get_plugin_path()                 -- Path to plugin source under test
 ```
 
-Available helpers from `commonrequire.lua` (container environment):
-```lua
-load_plugin("localsend")     -- Load plugin via real PluginLoader
-fastforward_ui_events()      -- Run scheduled UI tasks immediately
-disable_plugins()            -- Clear all plugins for isolated testing
-get_test_data_dir()          -- Isolated temp directory
-get_plugin_path()            -- Path to plugin under test
-```
-
-Go integration tests: `//go:build integration` tag, run with `-tags=integration`
+Go integration tests: `//go:build integration` tag, run with `-tags=integration` via Makefile targets.
 
 ## Writing Tests
 

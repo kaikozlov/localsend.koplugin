@@ -1,7 +1,10 @@
-require 'busted.runner'()
-local helper = require("spec.test_helper")
+require("busted.runner")()
+local helper = require("spec.spec_helper")
+local util = require("util")
 
 -- Tests for process management: isRunning, stopServer
+-- Simulates process state (PID file, /proc, kill) by wrapping util + os with
+-- save/restore so the real modules are not permanently mutated.
 
 describe("Process Management", function()
     local pid_file_content
@@ -9,6 +12,8 @@ describe("Process Management", function()
     local proc_exists_map
     local proc_cmdline_map
     local kill_calls
+
+    local orig_pathExists, orig_readFromFile, orig_execute, orig_remove
 
     local function flushScheduledTasks(limit)
         limit = limit or 100
@@ -26,6 +31,17 @@ describe("Process Management", function()
 
     setup(function()
         helper.setup_complete()
+        orig_pathExists = util.pathExists
+        orig_readFromFile = util.readFromFile
+        orig_execute = os.execute
+        orig_remove = os.remove
+    end)
+
+    after_each(function()
+        util.pathExists = orig_pathExists
+        util.readFromFile = orig_readFromFile
+        os.execute = orig_execute
+        os.remove = orig_remove
     end)
 
     before_each(function()
@@ -36,20 +52,22 @@ describe("Process Management", function()
         proc_cmdline_map = {}
         kill_calls = {}
 
-        -- Override pathExists for PID file and /proc checks
-        local base_pathExists = package.loaded["util"].pathExists
-        package.loaded["util"].pathExists = function(path)
-            if path == "/tmp/localsend_koreader.pid" then return pid_file_exists end
+        util.pathExists = function(path)
+            if path == "/tmp/localsend_koreader.pid" then
+                return pid_file_exists
+            end
             local pid = path:match("^/proc/(%d+)$")
             if pid then
                 return proc_exists_map[tonumber(pid)] or false
             end
-            return base_pathExists(path)
+            return orig_pathExists(path)
         end
 
-        package.loaded["util"].readFromFile = function(path)
+        util.readFromFile = function(path)
             if path == "/tmp/localsend_koreader.pid" then
-                if not pid_file_exists then return nil end
+                if not pid_file_exists then
+                    return nil
+                end
                 return pid_file_content
             end
             local pid = path:match("^/proc/(%d+)/cmdline$")
@@ -59,12 +77,10 @@ describe("Process Management", function()
             return nil
         end
 
-        -- Mock os.execute for kill commands
-        _G.os.execute = function(cmd)
+        os.execute = function(cmd)
             table.insert(kill_calls, cmd)
             local sig, pid = cmd:match("'kill' '%-(%w+)' '(%d+)'")
             if not sig then
-                -- Also match "kill -9 12345" format
                 sig, pid = cmd:match("kill %-(%d+)%s+(%d+)")
             end
             if sig and pid then
@@ -76,8 +92,7 @@ describe("Process Management", function()
             return 0
         end
 
-        -- Mock os.remove
-        _G.os.remove = function(path)
+        os.remove = function(path)
             table.insert(helper.state.removed_files, path)
             if path == "/tmp/localsend_koreader.pid" then
                 pid_file_exists = false
@@ -273,7 +288,9 @@ describe("Process Management", function()
             local instance = helper.create_instance()
 
             local firewall_closed = false
-            instance.closeFirewall = function() firewall_closed = true end
+            instance.closeFirewall = function()
+                firewall_closed = true
+            end
 
             instance:stopServer()
             flushScheduledTasks()

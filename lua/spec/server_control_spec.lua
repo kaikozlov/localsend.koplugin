@@ -1,11 +1,21 @@
-require 'busted.runner'()
-local helper = require("spec.test_helper")
+require("busted.runner")()
+local helper = require("spec.spec_helper")
+local util = require("util")
 
 -- Tests for server control: toggle, stop(), and stopServer()
 
 describe("Server Control", function()
+    local orig_pathExists, orig_readFromFile
+
     setup(function()
         helper.setup_complete()
+        orig_pathExists = util.pathExists
+        orig_readFromFile = util.readFromFile
+    end)
+
+    after_each(function()
+        util.pathExists = orig_pathExists
+        util.readFromFile = orig_readFromFile
     end)
 
     before_each(function()
@@ -19,8 +29,12 @@ describe("Server Control", function()
                 local instance = helper.create_instance()
 
                 local stop_called = false
-                instance.isRunning = function() return true end
-                instance.stop = function() stop_called = true end
+                instance.isRunning = function()
+                    return true
+                end
+                instance.stop = function()
+                    stop_called = true
+                end
 
                 instance:onToggleLocalSend()
 
@@ -31,9 +45,13 @@ describe("Server Control", function()
                 local instance = helper.create_instance()
 
                 local start_called = false
-                instance.isRunning = function() return true end
+                instance.isRunning = function()
+                    return true
+                end
                 instance.stop = function() end
-                instance.start = function() start_called = true end
+                instance.start = function()
+                    start_called = true
+                end
 
                 instance:onToggleLocalSend()
 
@@ -47,7 +65,9 @@ describe("Server Control", function()
 
                 local start_when_connected_called = false
                 local start_when_connected_silent = nil
-                instance.isRunning = function() return false end
+                instance.isRunning = function()
+                    return false
+                end
                 instance._startWhenConnected = function(self, silent)
                     start_when_connected_called = true
                     start_when_connected_silent = silent
@@ -65,13 +85,14 @@ describe("Server Control", function()
 
                 local instance = helper.create_instance()
 
-                instance.isRunning = function() return false end
+                instance.isRunning = function()
+                    return false
+                end
                 instance._startWhenConnected = function() end
 
                 instance:onToggleLocalSend()
 
-                assert.is_false(LocalSend._ServerState.user_stopped,
-                    "Should clear user_stopped flag when starting")
+                assert.is_false(LocalSend._ServerState.user_stopped, "Should clear user_stopped flag when starting")
             end)
         end)
 
@@ -80,9 +101,15 @@ describe("Server Control", function()
                 local instance = helper.create_instance()
 
                 local actions = {}
-                instance.isRunning = function() return true end
-                instance.stop = function() table.insert(actions, "stop") end
-                instance.start = function() table.insert(actions, "start") end
+                instance.isRunning = function()
+                    return true
+                end
+                instance.stop = function()
+                    table.insert(actions, "stop")
+                end
+                instance.start = function()
+                    table.insert(actions, "start")
+                end
 
                 instance:onToggleLocalSend()
 
@@ -93,8 +120,12 @@ describe("Server Control", function()
                 local instance = helper.create_instance()
 
                 local actions = {}
-                instance.isRunning = function() return false end
-                instance.stop = function() table.insert(actions, "stop") end
+                instance.isRunning = function()
+                    return false
+                end
+                instance.stop = function()
+                    table.insert(actions, "stop")
+                end
                 instance._startWhenConnected = function(self, silent)
                     table.insert(actions, "start")
                 end
@@ -120,8 +151,7 @@ describe("Server Control", function()
 
                 instance:stop()
 
-                assert.is_true(LocalSend._ServerState.user_stopped,
-                    "Should set user_stopped flag")
+                assert.is_true(LocalSend._ServerState.user_stopped, "Should set user_stopped flag")
             end)
 
             it("should set flag before attempting stop", function()
@@ -138,8 +168,7 @@ describe("Server Control", function()
 
                 instance:stop()
 
-                assert.is_true(flag_was_set,
-                    "Flag should be set before stopServer is called")
+                assert.is_true(flag_was_set, "Flag should be set before stopServer is called")
             end)
         end)
 
@@ -205,17 +234,23 @@ describe("Server Control", function()
         it("should use SIGTERM first for graceful termination", function()
             local term_signal_used = false
 
-            package.loaded["util"].pathExists = function(path)
-                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                if path == "/tmp/localsend_koreader.pid" then return true end
-                if path == "/proc/12345" then return true end
-                return false
+            util.pathExists = function(path)
+                if path == "/tmp/localsend_koreader.pid" then
+                    return true
+                end
+                if path == "/proc/12345" then
+                    return true
+                end
+                return orig_pathExists(path)
             end
-            package.loaded["util"].readFromFile = function(path)
-                if path == "/tmp/localsend_koreader.pid" then return "12345" end
-                if path == "/proc/12345/cmdline" then return "/tmp/localsend\0recv\0" end
-                return nil
+            util.readFromFile = function(path)
+                if path == "/tmp/localsend_koreader.pid" then
+                    return "12345"
+                end
+                if path == "/proc/12345/cmdline" then
+                    return "/tmp/localsend\0recv\0"
+                end
+                return orig_readFromFile(path)
             end
 
             local original_execute = os.execute
@@ -243,9 +278,13 @@ describe("Server Control", function()
             LocalSend._ServerState.stop_in_progress = true
 
             local start_proceeded = false
-            instance.validateSaveDir = function() return true end
+            instance.validateSaveDir = function()
+                return true
+            end
             instance.openFirewall = function() end
-            instance.isRunning = function() return false end
+            instance.isRunning = function()
+                return false
+            end
             instance._unschedulePolling = function() end
 
             instance:start(false)
@@ -259,9 +298,13 @@ describe("Server Control", function()
             local instance, LocalSend = helper.create_instance()
             LocalSend._ServerState.stop_in_progress = true
 
-            instance.validateSaveDir = function() return true end
+            instance.validateSaveDir = function()
+                return true
+            end
             instance.openFirewall = function() end
-            instance.isRunning = function() return false end
+            instance.isRunning = function()
+                return false
+            end
             instance._unschedulePolling = function() end
 
             instance:start(true)
@@ -273,10 +316,14 @@ describe("Server Control", function()
         it("should block toggle() while stop is in progress", function()
             local instance, LocalSend = helper.create_instance()
             LocalSend._ServerState.stop_in_progress = true
-            instance.isRunning = function() return false end
+            instance.isRunning = function()
+                return false
+            end
 
             local start_called = false
-            instance._startWhenConnected = function() start_called = true end
+            instance._startWhenConnected = function()
+                start_called = true
+            end
 
             instance:onToggleLocalSend()
 
@@ -288,7 +335,9 @@ describe("Server Control", function()
         it("restart() should queue start after stop completes", function()
             local instance, LocalSend = helper.create_instance()
             LocalSend._ServerState.stop_in_progress = true
-            instance.isRunning = function() return true end
+            instance.isRunning = function()
+                return true
+            end
 
             local stop_options = nil
             instance.stopServer = function(self, options)
@@ -307,10 +356,8 @@ describe("Server Control", function()
             local instance, LocalSend = helper.create_instance()
             LocalSend._ServerState.server_op_id = 1
 
-            package.loaded["util"].pathExists = function(path)
-                if path == "/tmp/koreader/plugins/localsend.koplugin" then return true end
-                if path == "/tmp/koreader/plugins/localsend.koplugin/localsend" then return true end
-                return false
+            util.pathExists = function(path)
+                return orig_pathExists(path)
             end
 
             local original_execute = os.execute
@@ -321,9 +368,13 @@ describe("Server Control", function()
                 return 0
             end
 
-            instance.validateSaveDir = function() return true end
+            instance.validateSaveDir = function()
+                return true
+            end
             instance.openFirewall = function() end
-            instance.exportExtRouting = function() return nil end
+            instance.exportExtRouting = function()
+                return nil
+            end
             instance._unschedulePolling = function() end
             instance._checkSentinelFile = function() end
             instance.check_sentinel_task = function() end
@@ -352,15 +403,23 @@ describe("Server Control", function()
             local instance, LocalSend = helper.create_instance()
             local callback_invoked = false
 
-            package.loaded["util"].pathExists = function(path)
-                if path == "/tmp/localsend_koreader.pid" then return true end
-                if path == "/proc/12345" then return true end
-                return false
+            util.pathExists = function(path)
+                if path == "/tmp/localsend_koreader.pid" then
+                    return true
+                end
+                if path == "/proc/12345" then
+                    return true
+                end
+                return orig_pathExists(path)
             end
-            package.loaded["util"].readFromFile = function(path)
-                if path == "/tmp/localsend_koreader.pid" then return "12345" end
-                if path == "/proc/12345/cmdline" then return "/tmp/localsend\0recv\0" end
-                return nil
+            util.readFromFile = function(path)
+                if path == "/tmp/localsend_koreader.pid" then
+                    return "12345"
+                end
+                if path == "/proc/12345/cmdline" then
+                    return "/tmp/localsend\0recv\0"
+                end
+                return orig_readFromFile(path)
             end
 
             local kill_count = 0
@@ -382,7 +441,7 @@ describe("Server Control", function()
             instance:stopServer({
                 callback = function(success, message)
                     callback_invoked = true
-                end
+                end,
             })
 
             LocalSend._ServerState.server_op_id = 99

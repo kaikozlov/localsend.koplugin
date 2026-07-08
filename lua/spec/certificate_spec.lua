@@ -1,5 +1,5 @@
-require 'busted.runner'()
-local helper = require("spec.test_helper")
+require("busted.runner")()
+local helper = require("spec.spec_helper")
 
 -- Tests for certificate management and restart functionality
 -- Note: setupCertificates and saveCertificates have been removed.
@@ -139,15 +139,21 @@ describe("Certificate Management", function()
             local start_called = false
             local stop_called_first = false
 
-            instance.isRunning = function() return true end
+            instance.isRunning = function()
+                return true
+            end
             instance.stopServer = function(self, options)
                 stop_called = true
-                if not start_called then stop_called_first = true end
+                if not start_called then
+                    stop_called_first = true
+                end
                 if options and options.callback then
                     options.callback(true)
                 end
             end
-            instance.start = function() start_called = true end
+            instance.start = function()
+                start_called = true
+            end
 
             instance:restart()
 
@@ -162,9 +168,15 @@ describe("Certificate Management", function()
             local stop_called = false
             local start_called = false
 
-            instance.isRunning = function() return false end
-            instance.stopServer = function(self, silent) stop_called = true end
-            instance.start = function() start_called = true end
+            instance.isRunning = function()
+                return false
+            end
+            instance.stopServer = function(self, silent)
+                stop_called = true
+            end
+            instance.start = function()
+                start_called = true
+            end
 
             instance:restart()
 
