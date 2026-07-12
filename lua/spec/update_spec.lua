@@ -213,7 +213,7 @@ describe("Self-Update", function()
                 file_contents["/tmp/koreader-test-data/cache/localsend/update_check.json"] = string.format('{"tag_name":"%s","body":"Release notes"}', tc[1])
 
                 local instance = helper.create_instance()
-                instance:checkForUpdates()
+                instance:doCheckForUpdates()
 
                 assert.is_truthy(helper.find_notification("up to date"))
             end)
@@ -230,7 +230,7 @@ describe("Self-Update", function()
                 http_responses.code = tc[1]
 
                 local instance = helper.create_instance()
-                instance:checkForUpdates()
+                instance:doCheckForUpdates()
 
                 local err = helper.find_notification("Failed to check") or helper.find_notification("HTTP status")
                 assert.is_truthy(err, "Should show error for HTTP " .. tc[1])
@@ -256,7 +256,7 @@ describe("Self-Update", function()
             }
 
             local instance = helper.create_instance()
-            instance:checkForUpdates()
+            instance:doCheckForUpdates()
 
             assert.is_true(viewer_shown, "Should show release notes viewer")
         end)
@@ -281,7 +281,7 @@ describe("Self-Update", function()
             }
 
             local instance = helper.create_instance()
-            instance:checkForUpdates()
+            instance:doCheckForUpdates()
 
             assert.truthy(shown_text:match("END"), "Release notes should not be truncated")
             assert.is_nil(shown_text:match("%.%.%.$"), "Release notes should not have truncation ellipsis")
@@ -295,7 +295,7 @@ describe("Self-Update", function()
             ]]
 
             local instance = helper.create_instance()
-            instance:checkForUpdates()
+            instance:doCheckForUpdates()
 
             local info = helper.find_notification("no package")
                 or helper.find_notification("Update available")
@@ -314,7 +314,7 @@ describe("Self-Update", function()
             end
 
             local instance = helper.create_instance()
-            instance:checkForUpdates()
+            instance:doCheckForUpdates()
 
             assert.is_truthy(helper.find_notification("Failed to read update information"))
         end)
@@ -326,7 +326,7 @@ describe("Self-Update", function()
             end
 
             local instance = helper.create_instance()
-            instance:checkForUpdates()
+            instance:doCheckForUpdates()
 
             assert.is_truthy(helper.find_notification("Failed to parse"))
         end)
@@ -338,7 +338,7 @@ describe("Self-Update", function()
             end
 
             local instance = helper.create_instance()
-            instance:checkForUpdates()
+            instance:doCheckForUpdates()
 
             assert.is_truthy(helper.find_notification("Failed to parse"))
         end)
@@ -347,7 +347,7 @@ describe("Self-Update", function()
             http_responses.code = "500"
 
             local instance = helper.create_instance()
-            instance:checkForUpdates()
+            instance:doCheckForUpdates()
 
             local cleaned = false
             for _, path in ipairs(helper.state.removed_files) do
@@ -383,6 +383,16 @@ describe("Self-Update", function()
 
             assert.is_nil(helper.find_notification("No network connection"))
         end)
+
+        it("runs curl in the background so the KOReader UI thread stays responsive", function()
+            local instance = helper.create_instance()
+            instance:checkForUpdates()
+
+            local command = helper.find_execute_call("update_check%.status")
+            assert.is_truthy(command)
+            assert.matches("&$", command)
+            assert.is_true(#helper.state.scheduled_tasks > 0)
+        end)
     end)
 
     -- =======================================================================
@@ -404,6 +414,51 @@ describe("Self-Update", function()
             instance:performUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
 
             assert.is_true(stop_called)
+        end)
+
+        it("waits for asynchronous server shutdown before replacing files", function()
+            local update = require("localsend_update")
+            local original_do = update.doPerformUpdate
+            local stop_callback
+            local update_started = false
+            update.doPerformUpdate = function()
+                update_started = true
+            end
+            local instance = helper.create_instance()
+            instance.isRunning = function()
+                return true
+            end
+            instance.stopServer = function(self, options)
+                stop_callback = options and options.callback
+                return true
+            end
+
+            instance:performUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
+            assert.is_false(update_started, "update must not begin while the old binary can still be running")
+
+            assert.is_function(stop_callback)
+            stop_callback(true)
+            local scheduled = helper.state.scheduled_tasks[#helper.state.scheduled_tasks]
+            assert.equal(0, scheduled.delay)
+            scheduled.callback()
+            update.doPerformUpdate = original_do
+            assert.is_true(update_started)
+        end)
+    end)
+
+    describe("network timeouts", function()
+        it("caps total curl runtime as well as connection setup", function()
+            local update = require("localsend_update")
+            helper.create_instance()
+            local command = update.buildCurlCommand("/tmp/update.json", "https://example.com/latest")
+            assert.matches("%-%-max%-time", command)
+        end)
+    end)
+
+    describe("atomic installation", function()
+        it("provides a checked atomic replacement helper", function()
+            local update = require("localsend_update")
+            assert.is_function(update.copyFileAtomically)
         end)
     end)
 
@@ -755,7 +810,7 @@ describe("Self-Update", function()
             }
 
             local instance = helper.create_instance()
-            instance:checkForUpdates()
+            instance:doCheckForUpdates()
 
             _G.dofile = orig_dofile
             assert.is_true(viewer_shown, "Should offer update from 1.0.0 to 1.1.0")
@@ -794,7 +849,7 @@ describe("Self-Update", function()
             ]]
 
             local instance = helper.create_instance()
-            instance:_autoCheckForUpdates()
+            require("localsend_update").doAutoCheckForUpdates(instance, "v1.1.1", function() end)
 
             assert.equals("v2.0.0", instance.update_available_tag)
             assert.equals("v2.0.0", helper.state.settings["LocalSend_update_available_tag"])
@@ -807,7 +862,7 @@ describe("Self-Update", function()
             ]]
 
             local instance = helper.create_instance()
-            instance:_autoCheckForUpdates()
+            require("localsend_update").doAutoCheckForUpdates(instance, "v1.1.1", function() end)
 
             assert.equals("", instance.update_available_tag)
             assert.equals("", helper.state.settings["LocalSend_update_available_tag"])

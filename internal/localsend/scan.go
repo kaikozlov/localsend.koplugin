@@ -30,6 +30,7 @@ const (
 	discoveryTTL = 5 * time.Minute
 	// discoveryCleanupInterval is how often stale discoveries are cleaned up
 	discoveryCleanupInterval = 1 * time.Minute
+	maxDiscoveredDevices     = 512
 )
 
 var multicastDiscoveryAddr = &net.UDPAddr{
@@ -349,6 +350,16 @@ func (mcs *Discoverer) PutDiscovered(ip string, anno models.Announcement) {
 
 	// Normalize deviceType per protocol spec Section 7.1
 	anno.DeviceType = normalizeDeviceType(anno.DeviceType)
+	if _, exists := mcs.discovered[ip]; !exists && len(mcs.discovered) >= maxDiscoveredDevices {
+		var oldestIP string
+		var oldest time.Time
+		for candidateIP, entry := range mcs.discovered {
+			if oldestIP == "" || entry.lastSeen.Before(oldest) {
+				oldestIP, oldest = candidateIP, entry.lastSeen
+			}
+		}
+		delete(mcs.discovered, oldestIP)
+	}
 	mcs.discovered[ip] = discoveryEntry{
 		anno:     anno,
 		lastSeen: time.Now(),

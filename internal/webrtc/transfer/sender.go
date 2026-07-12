@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -98,11 +99,13 @@ type RTCSender struct {
 	acceptedIDs []string
 
 	// Channels
-	accepted  chan map[string]string // fileId -> token
-	declined  chan struct{}
-	errors    chan error
-	closed    bool      // Set to true when Close() is called
-	closeOnce sync.Once // Ensures channels are closed only once
+	accepted      chan map[string]string // fileId -> token
+	declined      chan struct{}
+	errors        chan error
+	fileResults   chan RTCSendFileResponse
+	controlBuffer []byte
+	closed        bool      // Set to true when Close() is called
+	closeOnce     sync.Once // Ensures channels are closed only once
 
 	// Custom STUN servers (if empty, uses DefaultSTUNServers)
 	stunServers []string
@@ -111,15 +114,16 @@ type RTCSender struct {
 // NewRTCSender creates a new WebRTC sender.
 func NewRTCSender(sig *signaling.SignalingClient, key *crypto.SigningKey, pin string) *RTCSender {
 	return &RTCSender{
-		signaling:  sig,
-		signingKey: key,
-		pin:        pin,
-		sessionID:  uuid.New().String()[:11], // Short session ID like official
-		state:      senderStateInit,
-		fileTokens: make(map[string]string),
-		accepted:   make(chan map[string]string, 1),
-		declined:   make(chan struct{}, 1),
-		errors:     make(chan error, 1),
+		signaling:   sig,
+		signingKey:  key,
+		pin:         pin,
+		sessionID:   uuid.New().String()[:11], // Short session ID like official
+		state:       senderStateInit,
+		fileTokens:  make(map[string]string),
+		accepted:    make(chan map[string]string, 1),
+		declined:    make(chan struct{}, 1),
+		errors:      make(chan error, 1),
+		fileResults: make(chan RTCSendFileResponse, 1),
 	}
 }
 
@@ -194,7 +198,7 @@ func (s *RTCSender) Send(target uuid.UUID, files []FileMeta) error {
 	s.peer = peer
 
 	// Set up message handler
-	peer.OnMessage(s.handleMessage)
+	peer.OnDataMessage(s.handleDataMessage)
 	peer.OnOpen(func() {
 		slog.Info("Data channel opened, starting nonce exchange")
 		s.startNonceExchange()
@@ -301,14 +305,30 @@ func (s *RTCSender) startNonceExchange() {
 
 // handleMessage processes incoming data channel messages.
 func (s *RTCSender) handleMessage(data []byte) {
+	isString := bytes.Equal(data, []byte("0")) || json.Valid(data)
+	s.handleDataMessage(data, isString)
+}
+
+func (s *RTCSender) handleDataMessage(data []byte, isString bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	slog.Debug("Message received", "state", s.state, "len", len(data))
 
-	// Check for delimiter
-	if len(data) <= 1 {
-		slog.Debug("Delimiter received")
+	if isString && bytes.Equal(data, []byte("0")) {
+		if len(s.controlBuffer) == 0 {
+			return
+		}
+		data = append([]byte(nil), s.controlBuffer...)
+		s.controlBuffer = nil
+		isString = true
+	}
+	if !isString {
+		if len(s.controlBuffer)+len(data) > maxControlMessageBytes {
+			s.controlBuffer = nil
+			return
+		}
+		s.controlBuffer = append(s.controlBuffer, data...)
 		return
 	}
 
@@ -320,6 +340,30 @@ func (s *RTCSender) handleMessage(data []byte) {
 	}
 
 	slog.Debug("Parsed RTC message", "type", msgType)
+	if msgType == "file_response" {
+		resp, ok := msg.(*RTCSendFileResponse)
+		if !ok {
+			return
+		}
+		if s.closed {
+			return
+		}
+		select {
+		case s.fileResults <- *resp:
+		default:
+		}
+		if !resp.Success && !s.closed {
+			message := "receiver failed to save file"
+			if resp.Error != nil {
+				message = *resp.Error
+			}
+			select {
+			case s.errors <- fmt.Errorf("file %s: %s", resp.ID, message):
+			default:
+			}
+		}
+		return
+	}
 
 	switch s.state {
 	case senderStateWaitNonce:
@@ -655,7 +699,8 @@ func (s *RTCSender) SendFiles() error {
 	defer chunkPool.Put(bufPtr)
 	buf := *bufPtr
 
-	for _, id := range s.acceptedIDs {
+	headerAlreadySent := false
+	for index, id := range s.acceptedIDs {
 		token, ok := s.fileTokens[id]
 		if !ok {
 			continue
@@ -682,11 +727,14 @@ func (s *RTCSender) SendFiles() error {
 		}
 
 		// Send file header
-		header := RTCSendFileHeader{ID: id, Token: token}
-		if err := s.peer.SendJSON(header); err != nil {
-			_ = f.Close()
-			return fmt.Errorf("failed to send file header: %w", err)
+		if !headerAlreadySent {
+			header := RTCSendFileHeader{ID: id, Token: token}
+			if err := s.peer.SendJSON(header); err != nil {
+				_ = f.Close()
+				return fmt.Errorf("failed to send file header: %w", err)
+			}
 		}
+		headerAlreadySent = false
 
 		// Send file data
 		for {
@@ -706,12 +754,34 @@ func (s *RTCSender) SendFiles() error {
 		}
 		_ = f.Close()
 
-		slog.Info("File sent", "id", id, "name", file.FileName)
-	}
+		if index+1 < len(s.acceptedIDs) {
+			nextID := s.acceptedIDs[index+1]
+			nextHeader := RTCSendFileHeader{ID: nextID, Token: s.fileTokens[nextID]}
+			if err := s.peer.SendJSON(nextHeader); err != nil {
+				return fmt.Errorf("failed to send next file header: %w", err)
+			}
+			headerAlreadySent = true
+		} else if err := s.peer.SendDelimiter(); err != nil {
+			return fmt.Errorf("failed to send final delimiter: %w", err)
+		}
 
-	// Send final delimiter to signal end of all files
-	if err := s.peer.SendDelimiter(); err != nil {
-		return fmt.Errorf("failed to send final delimiter: %w", err)
+		select {
+		case result := <-s.fileResults:
+			if result.ID != id {
+				return fmt.Errorf("unexpected file acknowledgement for %s", result.ID)
+			}
+			if !result.Success {
+				message := "receiver failed to save file"
+				if result.Error != nil {
+					message = *result.Error
+				}
+				return fmt.Errorf("file %s: %s", id, message)
+			}
+		case <-time.After(fileAcceptTimeout):
+			return fmt.Errorf("timeout waiting for acknowledgement for file %s", id)
+		}
+
+		slog.Info("File sent", "id", id, "name", file.FileName)
 	}
 
 	// Wait for buffer to actually flush instead of fixed sleep
@@ -739,6 +809,7 @@ func (s *RTCSender) Close() error {
 		close(s.accepted)
 		close(s.declined)
 		close(s.errors)
+		close(s.fileResults)
 	})
 	s.mu.Unlock()
 

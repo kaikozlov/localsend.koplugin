@@ -94,6 +94,43 @@ describe("LocalSend Lifecycle", function()
                 instance:onExit()
             end)
         end)
+
+        it("provides stopPlugin and stops a running receiver when disabled", function()
+            local instance = helper.create_instance()
+            local stop_called = false
+            instance.isRunning = function()
+                return true
+            end
+            instance.stopServer = function()
+                stop_called = true
+                return true
+            end
+
+            assert.is_function(instance.stopPlugin)
+            instance:stopPlugin()
+            assert.is_true(stop_called)
+        end)
+    end)
+
+    describe("widget recreation while server is running", function()
+        it("takes over sentinel polling from the destroyed widget", function()
+            LocalSend = require("main")
+            local original_isRunning = LocalSend.isRunning
+            local original_schedulePolling = LocalSend._schedulePolling
+            local scheduled = false
+            LocalSend.isRunning = function()
+                return true
+            end
+            LocalSend._schedulePolling = function()
+                scheduled = true
+            end
+
+            helper.create_instance()
+
+            LocalSend.isRunning = original_isRunning
+            LocalSend._schedulePolling = original_schedulePolling
+            assert.is_true(scheduled, "a new widget must resume polling an already-running server")
+        end)
     end)
 
     describe("autostart behavior", function()
@@ -758,6 +795,23 @@ describe("LocalSend Lifecycle", function()
     -- Bug 2: New widget should check was_running_before_suspend in init()
     -- =========================================================================
     describe("new widget instance after missed resume event", function()
+
+        it("keeps the restart flag and network handler while still offline", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_suspend = true
+            LocalSend._ServerState.user_stopped = false
+            local original_isConnected = NetworkMgr.isConnected
+            NetworkMgr.isConnected = function()
+                return false
+            end
+
+            local instance = helper.create_instance()
+
+            NetworkMgr.isConnected = original_isConnected
+            assert.is_true(LocalSend._ServerState.was_running_before_suspend)
+            assert.is_function(instance.onNetworkConnected)
+            LocalSend._ServerState.was_running_before_suspend = false
+        end)
         it("init() should start server if was_running_before_suspend is true", function()
             -- Scenario: Device resumes, but widget was destroyed and recreated AFTER
             -- the resume event was dispatched. The new widget should detect

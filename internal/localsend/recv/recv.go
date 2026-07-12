@@ -51,7 +51,9 @@ type FileReceiver struct {
 	generatedNonceCache *localsend.NonceCache // nonces generated for clients
 
 	// cmdWg tracks running transfer command goroutines for graceful shutdown
-	cmdWg sync.WaitGroup
+	cmdWg    sync.WaitGroup
+	cmdSlots chan struct{}
+	stopped  bool
 }
 
 // PIN rate limiting constants - use shared constants from constants package
@@ -81,6 +83,7 @@ func NewFileReceiver(devname string, saveToDir string, supportHttps bool) *FileR
 		pinRateLimiter:      utils.NewRateLimiter(maxPINAttempts, pinBlockDuration),
 		receivedNonceCache:  localsend.NewNonceCache(200),
 		generatedNonceCache: localsend.NewNonceCache(200),
+		cmdSlots:            make(chan struct{}, 4),
 	}
 }
 
@@ -152,10 +155,22 @@ func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) 
 
 	// Always run callback, even if logging is disabled
 	cmd := fr.onTransferCmd
+	if fr.stopped {
+		cmd = ""
+	}
+	if cmd != "" && !fr.stopped {
+		select {
+		case fr.cmdSlots <- struct{}{}:
+		default:
+			slog.Warn("on-transfer callback limit reached; dropping callback")
+			cmd = ""
+		}
+	}
 	if cmd != "" {
 		fr.cmdWg.Add(1)
 		go func() {
 			defer fr.cmdWg.Done()
+			defer func() { <-fr.cmdSlots }()
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if err := exec.CommandContext(ctx, "sh", "-c", cmd).Run(); err != nil {
@@ -352,23 +367,7 @@ func (fr *FileReceiver) Init() error {
 
 func (fr *FileReceiver) Start(ctx context.Context) error {
 	server := fr.webServer
-
-	// V2 routes
-	server.Post(constants.PreuploadPath, fr.preUploadHandler)
-	server.Post(constants.UploadPath, fr.uploadHandler)
-	server.Post(constants.CancelPath, fr.cancelHandler)
-	server.Get(constants.InfoPath, fr.infoHandler)
-	server.Get(constants.InfoPathV1, fr.infoHandler)
-	server.Post(constants.RegisterPath, fr.registerHandler)
-	server.Post(constants.RegisterPathV1, fr.registerHandler)
-
-	// V3 routes
-	server.Post(constants.NoncePathV3, fr.nonceExchangeHandler)
-	server.Post(constants.RegisterPathV3, fr.registerV3Handler)
-	server.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
-	server.Post(constants.UploadPathV3, fr.uploadHandler) // Same logic as v2
-	server.Post(constants.CancelPathV3, fr.cancelHandler) // Same logic as v2
-	server.Get(constants.InfoPathV3, fr.infoV3Handler)
+	fr.registerRoutes(server)
 
 	slog.Info("Waiting for files (Ctrl-C to terminate)")
 
@@ -385,6 +384,23 @@ func (fr *FileReceiver) Start(ctx context.Context) error {
 	}()
 
 	return lsutils.ListenWithTLS(fr.webServer, fr.listenAddr, fr.cert, fr.supportHttps)
+}
+
+func (fr *FileReceiver) registerRoutes(server *fiber.App) {
+
+	// V2 routes
+	server.Post(constants.PreuploadPath, fr.preUploadHandler)
+	server.Post(constants.UploadPath, fr.uploadHandler)
+	server.Post(constants.CancelPath, fr.cancelHandler)
+	server.Get(constants.InfoPath, fr.infoHandler)
+	server.Get(constants.InfoPathV1, fr.infoHandler)
+	server.Post(constants.RegisterPath, fr.registerHandler)
+	server.Post(constants.RegisterPathV1, fr.registerHandler)
+
+	// V3 routes
+	server.Post(constants.NoncePathV3, fr.nonceExchangeHandler)
+	server.Post(constants.RegisterPathV3, fr.registerV3Handler)
+	server.Get(constants.InfoPathV3, fr.infoV3Handler)
 }
 
 // startDiscoveryWithRetry starts the discovery/advertisement loop.
@@ -431,6 +447,9 @@ func (fr *FileReceiver) startDiscoveryWithRetry(ctx context.Context) {
 
 func (fr *FileReceiver) Stop() error {
 	slog.Info("Stop receiving")
+	fr.configMu.Lock()
+	fr.stopped = true
+	fr.configMu.Unlock()
 
 	fr.sessman.Stop()
 	if fr.discoverier != nil {

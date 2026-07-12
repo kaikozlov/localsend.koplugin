@@ -52,7 +52,7 @@ func NewClientInfo(alias, token string) ClientInfoWithoutID {
 		Alias:       alias,
 		Version:     "2.3",
 		DeviceModel: "LocalSend-CLI",
-		DeviceType:  "headless",
+		DeviceType:  "HEADLESS",
 		Token:       token,
 	}
 }

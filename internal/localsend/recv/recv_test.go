@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -467,5 +468,38 @@ func TestLogTransferRunsCallbackWithLogFile(t *testing.T) {
 	// Verify callback ran
 	if _, err := os.Stat(callbackFile); os.IsNotExist(err) {
 		t.Error("callback should have run and created the temp file")
+	}
+}
+
+func TestLogTransfer_BoundsConcurrentCallbacks(t *testing.T) {
+	fr := NewFileReceiver("test", t.TempDir(), false)
+	fr.SetOnTransferCmd("sleep 0.2")
+	baseline := runtime.NumGoroutine()
+
+	for i := 0; i < 40; i++ {
+		fr.LogTransfer("test.pdf", 100, "sender")
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if added := runtime.NumGoroutine() - baseline; added > 10 {
+		t.Fatalf("on-transfer callbacks are unbounded: added %d goroutines", added)
+	}
+	_ = fr.Stop()
+}
+
+func TestLogTransfer_DoesNotStartCallbackAfterStop(t *testing.T) {
+	fr := NewFileReceiver("test", t.TempDir(), false)
+	marker := filepath.Join(t.TempDir(), "ran-after-stop")
+	fr.SetOnTransferCmd("touch " + marker)
+	if err := fr.Stop(); err != nil {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	fr.LogTransfer("test.pdf", 100, "sender")
+	time.Sleep(100 * time.Millisecond)
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("on-transfer callback started after receiver was stopped")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat marker: %v", err)
 	}
 }

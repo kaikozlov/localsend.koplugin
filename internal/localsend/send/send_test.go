@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -364,7 +365,7 @@ func TestForwardSender_Init(t *testing.T) {
 
 	target := &models.DeviceInfo{
 		Alias:       "TestDevice",
-		IP:          "192.168.1.100",
+		IP:          "127.0.0.1",
 		Fingerprint: "abc123",
 	}
 
@@ -641,7 +642,7 @@ func TestForwardSender_SendFile_RejectsOversizedFiles(t *testing.T) {
 	sender := NewForwardSender()
 	target := &models.DeviceInfo{
 		Alias:       "TestDevice",
-		IP:          "192.168.1.100",
+		IP:          "127.0.0.1",
 		Fingerprint: "abc123",
 	}
 	_ = sender.Init(target, false)
@@ -1043,6 +1044,74 @@ func TestReverseSender_DownloadHandler(t *testing.T) {
 			t.Errorf("expected status 404 for unknown file, got %d", resp.StatusCode)
 		}
 	})
+}
+
+func TestReverseSender_DownloadHandlerRequiresConfiguredPIN(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(path, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	sender := NewReverseSender()
+	if err := sender.Init(&models.DeviceInfo{Alias: "Test", IP: "127.0.0.1"}, false); err != nil {
+		t.Fatal(err)
+	}
+	sender.SetPIN("1234")
+	sender.files["f"] = models.FileMeta{Id: "f", Filename: "secret.txt", FullPath: path, Size: 6}
+	app := fiber.New()
+	app.Get(constants.DownloadPath, sender.downloadHandler)
+
+	req := httptest.NewRequest("GET", fmt.Sprintf("%s?sessionId=%s&fileId=f", constants.DownloadPath, sender.session), nil)
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != fiber.StatusUnauthorized {
+		t.Fatalf("status without PIN = %d; want 401", resp.StatusCode)
+	}
+
+	req = httptest.NewRequest("GET", fmt.Sprintf("%s?sessionId=%s&fileId=f&pin=1234", constants.DownloadPath, sender.session), nil)
+	resp, err = app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("status with PIN = %d; want 200", resp.StatusCode)
+	}
+}
+
+func TestReverseSender_DownloadListRequiresConfiguredPIN(t *testing.T) {
+	sender := NewReverseSender()
+	sender.SetPIN("1234")
+	app := fiber.New()
+	app.Get("/", sender.downloadListHandler)
+
+	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != fiber.StatusUnauthorized {
+		t.Fatalf("status = %d; want %d", resp.StatusCode, fiber.StatusUnauthorized)
+	}
+}
+
+func TestForwardSender_PreUploadRejectsOversizedResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(strings.Repeat(" ", 2<<20) + `{"sessionId":"s","files":{}}`))
+	}))
+	defer server.Close()
+	host, port, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := NewForwardSender()
+	if err := sender.Init(&models.DeviceInfo{Alias: "Test", IP: host}, false); err != nil {
+		t.Fatal(err)
+	}
+	sender.SetRemotePort(port)
+	if err := sender.preUploadReq(); err == nil {
+		t.Fatal("oversized pre-upload response was accepted")
+	}
 }
 
 // =============================================================================

@@ -188,7 +188,9 @@ func (fr *FileReceiver) cancelHandler(c *fiber.Ctx) error {
 		return c.SendStatus(400)
 	}
 
-	fr.sessman.KillSession(sessionId)
+	if err := fr.sessman.KillSessionForClient(sessionId, c.IP()); err != nil {
+		return c.SendStatus(constants.Status(err))
+	}
 	return c.SendStatus(200)
 }
 

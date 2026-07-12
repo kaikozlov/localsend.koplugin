@@ -91,12 +91,31 @@ func (rsm *RecvSessManager) NewSession(reqFiles models.FileMetas, clientIP strin
 func (rsm *RecvSessManager) CreateSessionIfAllowed(reqFiles models.FileMetas, clientIP string) (string, error) {
 	rsm.admissionMu.Lock()
 	defer rsm.admissionMu.Unlock()
+	if len(reqFiles) == 0 {
+		return "", constants.ErrInvalidBody
+	}
 
 	if rsm.hasActiveSessionsLocked() {
 		return "", constants.ErrBlockedByOthers
 	}
 
 	return rsm.newSessionLocked(reqFiles, clientIP)
+}
+
+// KillSessionForClient cancels a session only for the client that created it.
+func (rsm *RecvSessManager) KillSessionForClient(sessionID, clientIP string) error {
+	sess, err := rsm.GetSession(sessionID)
+	if err != nil {
+		if err == constants.ErrNotFound {
+			return nil
+		}
+		return err
+	}
+	if sess.clientIP != "" && sess.clientIP != clientIP {
+		return constants.ErrRejected
+	}
+	rsm.KillSession(sessionID)
+	return nil
 }
 
 func (rsm *RecvSessManager) newSessionLocked(reqFiles models.FileMetas, clientIP string) (string, error) {

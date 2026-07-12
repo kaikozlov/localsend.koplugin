@@ -29,12 +29,13 @@ var DefaultSTUNServers = []string{
 
 // PeerConnection wraps a pion/webrtc PeerConnection for file transfer.
 type PeerConnection struct {
-	pc          *webrtc.PeerConnection
-	dataChannel *webrtc.DataChannel
-	mu          sync.Mutex
-	onMessage   func([]byte)
-	onOpen      func()
-	onClose     func()
+	pc            *webrtc.PeerConnection
+	dataChannel   *webrtc.DataChannel
+	mu            sync.Mutex
+	onMessage     func([]byte)
+	onDataMessage func([]byte, bool)
+	onOpen        func()
+	onClose       func()
 }
 
 // PeerConfig configures a new peer connection.
@@ -177,8 +178,11 @@ func (p *PeerConnection) setupDataChannel(dc *webrtc.DataChannel) {
 		slog.Debug("Data channel message received", "isString", msg.IsString, "len", len(msg.Data))
 		p.mu.Lock()
 		handler := p.onMessage
+		typedHandler := p.onDataMessage
 		p.mu.Unlock()
-		if handler != nil {
+		if typedHandler != nil {
+			typedHandler(msg.Data, msg.IsString)
+		} else if handler != nil {
 			handler(msg.Data)
 		}
 	})
@@ -265,6 +269,13 @@ func (p *PeerConnection) OnMessage(handler func([]byte)) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.onMessage = handler
+}
+
+// OnDataMessage preserves whether the WebRTC frame was text or binary.
+func (p *PeerConnection) OnDataMessage(handler func([]byte, bool)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.onDataMessage = handler
 }
 
 // OnOpen sets the handler for when the data channel opens.
@@ -405,7 +416,16 @@ func (p *PeerConnection) SendJSONBinary(v interface{}) error {
 	if err != nil {
 		return err
 	}
-	return p.Send(data)
+	for start := 0; start < len(data); start += ChunkSize {
+		end := start + ChunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		if err := p.Send(data[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SendDelimiter sends the "0" delimiter to signal end of a chunked message.

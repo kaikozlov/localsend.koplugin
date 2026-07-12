@@ -92,6 +92,19 @@ describe("Firewall Management", function()
         end)
 
         describe("openFirewall", function()
+
+            it("onExit removes rules opened for sender-only use", function()
+                local instance = helper.create_instance()
+                instance.port = "53317"
+                instance:openFirewall()
+                instance.isRunning = function()
+                    return false
+                end
+
+                instance:onExit()
+
+                assert.same({}, iptables_rules)
+            end)
             it("adds TCP rules for the configured port", function()
                 local instance = helper.create_instance()
                 instance.port = "53317"

@@ -5,7 +5,9 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"net"
 	"strings"
+	"time"
 )
 
 func SHA256ofCert(cert *x509.Certificate) string {
@@ -20,7 +22,8 @@ func FetchX509Cert(addr string) ([]*x509.Certificate, error) {
 		InsecureSkipVerify: true,
 	}
 
-	conn, err := tls.Dial("tcp", addr, conf)
+	dialer := &net.Dialer{Timeout: 10 * time.Second}
+	conn, err := tls.DialWithDialer(dialer, "tcp", addr, conf)
 	if err != nil {
 		return nil, err
 	}

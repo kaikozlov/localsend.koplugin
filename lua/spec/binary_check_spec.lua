@@ -34,22 +34,22 @@ describe("Binary Existence Check", function()
             set_binary(false)
         end)
 
-        it("returns disabled module", function()
+        it("returns a recovery-capable module", function()
             local result = require("main")
 
             assert.is_table(result)
-            assert.is_true(result.disabled, "Module should be disabled when binary missing")
+            assert.is_nil(result.disabled, "Missing binary must not disable the updater needed for recovery")
+            assert.is_function(result.init)
+            assert.is_function(result.checkForUpdates)
         end)
 
-        it("has only disabled field when binary missing", function()
+        it("marks instances as recovery mode when binary is missing", function()
             local result = require("main")
-
-            local count = 0
-            for _ in pairs(result) do
-                count = count + 1
-            end
-            assert.equal(1, count, "Should have exactly 1 field (disabled)")
-            assert.is_true(result.disabled)
+            assert.is_function(result.new)
+            local instance = result:new({
+                ui = { menu = { registerToMainMenu = function() end } },
+            })
+            assert.is_true(instance.recovery_mode)
         end)
     end)
 

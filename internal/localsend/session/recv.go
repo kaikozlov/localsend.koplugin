@@ -238,9 +238,13 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 	activeReader := &activityReader{r: fileData, lastActivity: &sess.lastActivity}
 
 	writer := io.MultiWriter(file, hasher)
-	_, err = io.Copy(writer, activeReader)
+	expectedSize := expectedMeta.Size.Int64()
+	written, err := io.Copy(writer, io.LimitReader(activeReader, expectedSize+1))
 	if err != nil {
 		return "", lserrors.ErrFileIO
+	}
+	if written != expectedSize {
+		return "", lserrors.ErrInvalidBody
 	}
 
 	// calculate checksum if it's provided

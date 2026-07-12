@@ -95,7 +95,8 @@ end
 
 -- Check if binary exists
 if not util.pathExists(binary_path) then
-    return { disabled = true }
+    RECOVERY_MODE = true
+    logger.warn("[LocalSend] Binary missing; entering recovery mode so updates remain available")
 end
 
 -- Helper function to initialize the update module (used in both normal and recovery mode)
@@ -119,6 +120,7 @@ end
 local LocalSend = WidgetContainer:extend({
     name = "LocalSend",
     is_doc_only = false,
+    recovery_mode = RECOVERY_MODE,
 })
 
 -- =============================================================================
@@ -318,14 +320,20 @@ function LocalSend:init()
         tostring(ServerState.was_running_before_suspend)
     )
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
-        ServerState.was_running_before_suspend = false
-        self:_startWhenConnected(true) -- silent - no notification, no WiFi prompt
+        if NetworkMgr:isConnected() then
+            ServerState.was_running_before_suspend = false
+            self:start(true)
+        end
     elseif self.autostart and not ServerState.user_stopped then
         self:_startWhenConnected(true) -- silent - no WiFi prompt (will start silently if connected)
     end
 
     -- Sync cache with actual state (server may be running from previous widget instance)
     self:_updateCache()
+
+    if self:isRunning() then
+        self:_schedulePolling()
+    end
 
     -- Register event handlers based on current state
     self:registerEvents()
@@ -342,6 +350,7 @@ end
 -- Recovery mode initialization - minimal setup for reinstall capability
 function LocalSend:_initRecoveryMode()
     logger.warn("[LocalSend] Initializing in recovery mode")
+    self.recovery_mode = true
 
     -- Initialize only the update module (critical for recovery)
     initUpdateModule()
@@ -368,7 +377,14 @@ function LocalSend:onExit()
     if self:isRunning() then
         self:stopServer()
         logger.dbg("[LocalSend] Server stopped on KOReader exit")
+    else
+        self:closeFirewall()
     end
+end
+
+-- Called by PluginLoader when the plugin is disabled or unloaded.
+function LocalSend:stopPlugin()
+    self:onExit()
 end
 
 -- Dynamic event registration (KOSync pattern)
@@ -613,6 +629,16 @@ function LocalSend:_unschedulePolling()
     end
 end
 
+function LocalSend:_schedulePolling()
+    if not self.check_sentinel_task then
+        self.check_sentinel_task = function()
+            self:_checkSentinelFile()
+        end
+    end
+    self:_unschedulePolling()
+    UIManager:scheduleIn(constants.SENTINEL_POLL_INTERVAL, self.check_sentinel_task)
+end
+
 function LocalSend:_unscheduleResume()
     if self.resume_start_task then
         UIManager:unschedule(self.resume_start_task)
@@ -678,6 +704,10 @@ function LocalSend:onCloseWidget()
     -- Unschedule update check task
     self:_unscheduleUpdateCheck()
     self.check_update_task = nil
+    if self.update_check_poll_task then
+        UIManager:unschedule(self.update_check_poll_task)
+        self.update_check_poll_task = nil
+    end
 
     -- Note: Server process continues running - new widget instance
     -- will take over polling responsibility in init() if server is running
@@ -1022,11 +1052,15 @@ function LocalSend:_autoCheckForUpdates()
         self:_scheduleUpdateCheck()
     end
 
-    lsupdate.doAutoCheckForUpdates(self, PLUGIN_VERSION, schedule_next)
+    lsupdate.autoCheckForUpdates(self, PLUGIN_VERSION, schedule_next)
 end
 
 function LocalSend:checkForUpdates()
     lsupdate.checkForUpdates(self, PLUGIN_VERSION, plugin_path)
+end
+
+function LocalSend:doCheckForUpdates()
+    lsupdate.doCheckForUpdates(self, PLUGIN_VERSION, plugin_path)
 end
 
 function LocalSend:_openProjectPage()

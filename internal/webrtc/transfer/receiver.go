@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -35,9 +36,10 @@ const (
 
 // Configuration constants
 const (
-	maxPINAttempts     = constants.MaxPINAttempts   // Maximum incorrect PIN attempts before closing connection
-	tokenPreviewLength = 30                         // Max characters to show in token preview logs
-	pinBlockDuration   = constants.PINBlockDuration // How long a peer is blocked after max PIN attempts
+	maxPINAttempts         = constants.MaxPINAttempts   // Maximum incorrect PIN attempts before closing connection
+	tokenPreviewLength     = 30                         // Max characters to show in token preview logs
+	pinBlockDuration       = constants.PINBlockDuration // How long a peer is blocked after max PIN attempts
+	maxControlMessageBytes = 2 * 1024 * 1024
 )
 
 // Package-level blocked peers map (persists across receiver instances)
@@ -86,6 +88,8 @@ type RTCReceiver struct {
 	fileWriters   map[string]*os.File
 	filePaths     map[string]string // fileId -> actual saved path
 	fileHashers   map[string]hash.Hash
+	currentBytes  int64
+	controlBuffer []byte
 
 	// Callbacks
 	onSelectFiles  func([]RTCFileDto) []string
@@ -107,23 +111,16 @@ type RTCReceiver struct {
 // isPeerBlocked checks if a peer is currently blocked due to too many PIN attempts.
 // Thread-safe: uses package-level mutex.
 func isPeerBlocked(peerID string) bool {
-	blockedPeersMu.RLock()
-	blockedUntil, exists := blockedPeers[peerID]
-	blockedPeersMu.RUnlock()
-
-	if !exists {
-		return false
+	now := time.Now()
+	blockedPeersMu.Lock()
+	defer blockedPeersMu.Unlock()
+	for id, until := range blockedPeers {
+		if now.After(until) {
+			delete(blockedPeers, id)
+		}
 	}
-
-	if time.Now().After(blockedUntil) {
-		// Block expired, clean it up
-		blockedPeersMu.Lock()
-		delete(blockedPeers, peerID)
-		blockedPeersMu.Unlock()
-		return false
-	}
-
-	return true
+	until, exists := blockedPeers[peerID]
+	return exists && now.Before(until)
 }
 
 // blockPeer blocks a peer for pinBlockDuration.
@@ -233,8 +230,14 @@ func (r *RTCReceiver) SetSTUNServers(servers []string) {
 func (r *RTCReceiver) prepareFolderRemap() {
 	// Collect filenames from files
 	filenames := make([]string, len(r.files))
-	for i, f := range r.files {
-		filenames[i] = f.FileName
+	filenames = filenames[:0]
+	for _, f := range r.files {
+		if strings.ContainsRune(f.FileName, '\x00') {
+			continue
+		}
+		if sanitized, err := utils.SanitizePathWithFallback(f.FileName); err == nil {
+			filenames = append(filenames, sanitized)
+		}
 	}
 
 	remapper, err := utils.NewFolderRemapper(r.saveDir, filenames)
@@ -259,7 +262,8 @@ func (r *RTCReceiver) applyFolderRemap(sanitizedPath string) string {
 	return r.folderRemapper.Apply(sanitizedPath)
 }
 
-// prepareFilesForReceive creates files and generates tokens for accepted file IDs.
+// prepareFilesForReceive validates files and generates tokens. It opens each
+// destination lazily when the corresponding file header arrives.
 // Returns a map of fileId -> token for successfully prepared files.
 func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]string {
 	// Prepare folder remap for unique folder names (computed once)
@@ -279,61 +283,36 @@ func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]st
 			slog.Warn("File ID not found in file list", "id", id)
 			continue
 		}
+		if strings.ContainsRune(targetFile.FileName, '\x00') {
+			slog.Warn("Filename contains NUL byte", "id", id)
+			continue
+		}
 
 		// Sanitize filename to allow subdirectories but prevent path traversal attacks.
 		// A malicious sender could send "../../../etc/passwd" to write outside saveDir.
-		sanitizedPath, sanitizeErr := utils.SanitizePathWithFallback(targetFile.FileName)
+		_, sanitizeErr := utils.SanitizePathWithFallback(targetFile.FileName)
 		if sanitizeErr != nil {
 			slog.Warn("Invalid filename rejected", "filename", targetFile.FileName, "id", id, "error", sanitizeErr)
 			continue
 		}
 
-		// Apply folder remap if the root folder was renamed for uniqueness
-		sanitizedPath = r.applyFolderRemap(sanitizedPath)
-
-		// Split into directory and filename components
-		subDir := filepath.Dir(sanitizedPath)
-		baseName := filepath.Base(sanitizedPath)
-
-		// Determine save directory (with extension routing) and add any subdirectories
-		saveDir := r.getSaveDir(targetFile.FileName)
-		if subDir != "." && subDir != "" {
-			saveDir = filepath.Join(saveDir, subDir)
-		}
-
-		// Create save directory (including any subdirectories)
-		if err := os.MkdirAll(saveDir, 0755); err != nil {
-			slog.Error("Failed to create save directory", "dir", saveDir, "error", err)
-			continue
-		}
-
-		// Atomically create file with unique name (prevents race conditions)
-		file, path, err := utils.CreateUniqueFile(saveDir, baseName)
-		if err != nil {
-			slog.Error("Failed to create unique file", "error", err)
-			continue
-		}
-
-		// Only add the token since file was created successfully
 		// Use crypto/rand for unpredictable tokens instead of time-based
 		token := crypto.GenerateSecureToken()
 		fileTokens[id] = token
 		r.fileTokens[id] = token
-		r.fileWriters[id] = file
-		r.filePaths[id] = path
-		r.fileHashers[id] = sha256.New()
-		slog.Info("Ready to receive", "file", filepath.Base(path))
 	}
 	return fileTokens
 }
 
-// sendError sends an error response to the peer.
-// Thread-safe: uses mutex to access peer.
 func (r *RTCReceiver) sendError(message string) {
 	r.mu.Lock()
-	peer := r.peer
-	r.mu.Unlock()
+	defer r.mu.Unlock()
+	r.sendErrorLocked(message)
+}
 
+// sendErrorLocked sends an error response while the receiver mutex is held.
+func (r *RTCReceiver) sendErrorLocked(message string) {
+	peer := r.peer
 	if peer == nil {
 		return
 	}
@@ -414,10 +393,16 @@ func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 	r.files = nil
 	r.acceptedIDs = nil
 	r.currentFileID = ""
+	r.currentBytes = 0
+	r.controlBuffer = nil
 	r.remoteNonce = nil
 	r.localNonce = nil
 	r.finalNonce = nil
 	r.pinAttempts = 0
+	r.senderPublicKey = nil
+	r.senderPublicPEM = ""
+	r.senderToken = ""
+	r.pendingFiles = nil
 	r.senderSignalingID = peerID // Store for rate limiting
 	r.mu.Unlock()
 
@@ -446,7 +431,7 @@ func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 	r.peer = peer
 	r.state = stateWaitNonce
 
-	peer.OnMessage(r.handleMessage)
+	peer.OnDataMessage(r.handleDataMessage)
 
 	answer, err := peer.AcceptOffer(sdp)
 	if err != nil {
@@ -465,36 +450,48 @@ func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 
 // handleMessage processes incoming data channel messages.
 func (r *RTCReceiver) handleMessage(data []byte) {
+	isString := bytes.Equal(data, []byte("0")) || json.Valid(data)
+	r.handleDataMessage(data, isString)
+}
+
+func (r *RTCReceiver) handleDataMessage(data []byte, isString bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	slog.Debug("Message received", "state", r.state, "len", len(data))
 
-	// Check for delimiter (string message with len <= 1, like "0")
-	if len(data) <= 1 {
-		slog.Debug("Delimiter received")
-		// If we were receiving a file, this signals end of all transfers
-		if r.state == stateReceivingFiles && r.currentFileID != "" {
-			r.finishCurrentFile()
-			slog.Info("All files received, transfer complete")
-			// Close the peer connection after transfer (like official impl)
-			// Capture and clear peer reference to prevent double-close
-			peer := r.peer
-			r.peer = nil
-			if peer != nil {
-				go func(p *PeerConnection) {
-					time.Sleep(100 * time.Millisecond) // Brief delay to ensure response is sent
-					_ = p.Close()
-				}(peer)
+	// A delimiter is specifically the text frame "0". A one-byte binary frame
+	// is valid file content and must never be discarded.
+	if isString && bytes.Equal(data, []byte("0")) {
+		if len(r.controlBuffer) > 0 && r.state != stateReceivingFiles {
+			data = append([]byte(nil), r.controlBuffer...)
+			r.controlBuffer = nil
+			isString = true
+		} else {
+			slog.Debug("Delimiter received")
+			// If we were receiving a file, this signals end of all transfers
+			if r.state == stateReceivingFiles && r.currentFileID != "" {
+				r.finishCurrentFile()
+				slog.Info("All files received, transfer complete")
+				// Close the peer connection after transfer (like official impl)
+				// Capture and clear peer reference to prevent double-close
+				peer := r.peer
+				r.peer = nil
+				if peer != nil {
+					go func(p *PeerConnection) {
+						time.Sleep(100 * time.Millisecond) // Brief delay to ensure response is sent
+						_ = p.Close()
+					}(peer)
+				}
 			}
+			return
 		}
-		return
 	}
 
 	// If we're receiving file binary data (non-JSON)
 	if r.state == stateReceivingFiles && r.currentFileID != "" {
 		// Check if this is a new file header (JSON) or binary data
-		if data[0] == '{' {
+		if isString {
 			// This might be a file header for next file
 			var header RTCSendFileHeader
 			if err := json.Unmarshal(data, &header); err == nil && header.ID != "" {
@@ -505,6 +502,17 @@ func (r *RTCReceiver) handleMessage(data []byte) {
 			}
 		}
 		r.handleBinaryData(data)
+		return
+	}
+
+	// Chunked control messages are binary frames terminated by a text "0".
+	if !isString {
+		if len(r.controlBuffer)+len(data) > maxControlMessageBytes {
+			r.controlBuffer = nil
+			slog.Warn("Chunked control message exceeds limit")
+			return
+		}
+		r.controlBuffer = append(r.controlBuffer, data...)
 		return
 	}
 
@@ -550,13 +558,13 @@ func (r *RTCReceiver) handleNonce(msg interface{}, msgType string) {
 	nonceMsg, ok := msg.(*RTCNonceMessage)
 	if !ok {
 		slog.Error("Invalid message type for nonce", "got", fmt.Sprintf("%T", msg))
-		r.sendError("internal error: message type mismatch")
+		r.sendErrorLocked("internal error: message type mismatch")
 		return
 	}
 	remoteNonce, err := crypto.DecodeNonce(nonceMsg.Nonce)
 	if err != nil {
 		slog.Error("Failed to decode remote nonce", "error", err)
-		r.sendError("invalid nonce format")
+		r.sendErrorLocked("invalid nonce format")
 		return
 	}
 	r.remoteNonce = remoteNonce
@@ -565,7 +573,7 @@ func (r *RTCReceiver) handleNonce(msg interface{}, msgType string) {
 	localNonce, err := crypto.GenerateNonce()
 	if err != nil {
 		slog.Error("Failed to generate nonce", "error", err)
-		r.sendError("internal error: nonce generation failed")
+		r.sendErrorLocked("internal error: nonce generation failed")
 		return
 	}
 	r.localNonce = localNonce
@@ -595,7 +603,7 @@ func (r *RTCReceiver) handleToken(msg interface{}, msgType string) {
 	tokenReq, ok := msg.(*RTCTokenRequest)
 	if !ok {
 		slog.Error("Invalid message type for token_request", "got", fmt.Sprintf("%T", msg))
-		r.sendError("internal error: message type mismatch")
+		r.sendErrorLocked("internal error: message type mismatch")
 		return
 	}
 	tokenPreview := tokenReq.Token
@@ -637,7 +645,7 @@ func (r *RTCReceiver) handleToken(msg interface{}, msgType string) {
 	token, err := r.signingKey.GenerateTokenWithNonce(r.finalNonce)
 	if err != nil {
 		slog.Error("Failed to generate token", "error", err)
-		r.sendError("internal error: token generation failed")
+		r.sendErrorLocked("internal error: token generation failed")
 		return
 	}
 
@@ -669,7 +677,7 @@ func (r *RTCReceiver) handlePin(msg interface{}, msgType string) {
 	pinMsg, ok := msg.(*RTCPinMessage)
 	if !ok {
 		slog.Error("Invalid message type for pin", "got", fmt.Sprintf("%T", msg))
-		r.sendError("internal error: message type mismatch")
+		r.sendErrorLocked("internal error: message type mismatch")
 		return
 	}
 	slog.Info("Received PIN challenge")
@@ -757,6 +765,9 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 		}
 	}
 	r.acceptedIDs = acceptedIDs
+	if r.peer == nil {
+		return
+	}
 
 	if len(acceptedIDs) == 0 {
 		response := RTCFileListResponse{Status: "DECLINED"}
@@ -880,7 +891,12 @@ func (r *RTCReceiver) handlePairResponse(_ interface{}, msgType string, data []b
 
 	case "PAIR_DECLINED":
 		slog.Warn("PAIR declined by sender")
-		// Fall back to normal acceptance without pairing
+		if r.requirePairing {
+			if r.peer != nil {
+				_ = r.peer.SendJSON(RTCErrorResponse{Error: "pairing is required"})
+			}
+			return
+		}
 		r.acceptFilesAfterPair()
 
 	case "INVALID_SIGNATURE":
@@ -935,8 +951,43 @@ func (r *RTCReceiver) startReceivingFile(header *RTCSendFileHeader) bool {
 		r.rejectFileTransfer(err.Error())
 		return false
 	}
+	var meta *RTCFileDto
+	for i := range r.files {
+		if r.files[i].ID == header.ID {
+			meta = &r.files[i]
+			break
+		}
+	}
+	if meta == nil {
+		r.rejectFileTransfer("unknown file ID")
+		return false
+	}
+	sanitizedPath, err := utils.SanitizePathWithFallback(meta.FileName)
+	if err != nil {
+		r.rejectFileTransfer("invalid filename")
+		return false
+	}
+	sanitizedPath = r.applyFolderRemap(sanitizedPath)
+	subDir, baseName := filepath.Dir(sanitizedPath), filepath.Base(sanitizedPath)
+	saveDir := r.getSaveDir(meta.FileName)
+	if subDir != "." && subDir != "" {
+		saveDir = filepath.Join(saveDir, subDir)
+	}
+	if err := os.MkdirAll(saveDir, 0755); err != nil {
+		r.rejectFileTransfer("failed to create destination")
+		return false
+	}
+	file, path, err := utils.CreateUniqueFile(saveDir, baseName)
+	if err != nil {
+		r.rejectFileTransfer("failed to create file")
+		return false
+	}
+	r.fileWriters[header.ID] = file
+	r.filePaths[header.ID] = path
+	r.fileHashers[header.ID] = sha256.New()
 
 	r.currentFileID = header.ID
+	r.currentBytes = 0
 	r.state = stateReceivingFiles
 	slog.Info("Receiving file", "id", header.ID)
 	return true
@@ -950,10 +1001,6 @@ func (r *RTCReceiver) validateFileHeader(header *RTCSendFileHeader) error {
 
 	if subtle.ConstantTimeCompare([]byte(header.Token), []byte(expectedToken)) != 1 {
 		return fmt.Errorf("invalid file token")
-	}
-
-	if _, ok := r.fileWriters[header.ID]; !ok {
-		return fmt.Errorf("file not prepared for receive")
 	}
 
 	return nil
@@ -973,11 +1020,25 @@ func (r *RTCReceiver) rejectFileTransfer(reason string) {
 
 // handleBinaryData writes received file data.
 func (r *RTCReceiver) handleBinaryData(data []byte) {
+	var expectedSize int64 = -1
+	for _, meta := range r.files {
+		if meta.ID == r.currentFileID {
+			expectedSize = meta.Size.Int64()
+			break
+		}
+	}
+	if expectedSize < 0 || int64(len(data)) > expectedSize-r.currentBytes {
+		slog.Error("Received more data than declared", "fileId", r.currentFileID)
+		r.cleanupCurrentFile()
+		r.rejectFileTransfer("file exceeds declared size")
+		return
+	}
 	if f, ok := r.fileWriters[r.currentFileID]; ok {
 		n, err := f.Write(data)
 		if err != nil {
 			slog.Error("Failed to write data", "error", err)
 		} else {
+			r.currentBytes += int64(n)
 			slog.Debug("Wrote file data", "fileId", r.currentFileID, "bytes", n)
 			// Also write to hasher for checksum verification
 			if h, ok := r.fileHashers[r.currentFileID]; ok {
@@ -987,6 +1048,21 @@ func (r *RTCReceiver) handleBinaryData(data []byte) {
 	} else {
 		slog.Warn("No file writer for current file", "fileId", r.currentFileID)
 	}
+}
+
+func (r *RTCReceiver) cleanupCurrentFile() {
+	id := r.currentFileID
+	if f := r.fileWriters[id]; f != nil {
+		_ = f.Close()
+	}
+	if path := r.filePaths[id]; path != "" {
+		_ = os.Remove(path)
+	}
+	delete(r.fileWriters, id)
+	delete(r.filePaths, id)
+	delete(r.fileHashers, id)
+	r.currentFileID = ""
+	r.currentBytes = 0
 }
 
 // finishCurrentFile closes the current file and sends a success response to the sender.
@@ -999,6 +1075,18 @@ func (r *RTCReceiver) finishCurrentFile() {
 	success := true
 	var errorMsg *string
 
+	var expectedSize int64
+	for _, meta := range r.files {
+		if meta.ID == fileID {
+			expectedSize = meta.Size.Int64()
+			break
+		}
+	}
+	if r.currentBytes != expectedSize {
+		success = false
+		msg := "file size does not match declaration"
+		errorMsg = &msg
+	}
 	// Close and sync the file
 	if f, ok := r.fileWriters[fileID]; ok {
 		_ = f.Sync()
@@ -1022,11 +1110,13 @@ func (r *RTCReceiver) finishCurrentFile() {
 				}
 			}
 
-			if expectedChecksum != "" && checksum != expectedChecksum {
+			if !success || (expectedChecksum != "" && checksum != expectedChecksum) {
 				slog.Error("Checksum mismatch", "file", filepath.Base(path), "expected", expectedChecksum, "got", checksum)
 				success = false
-				msg := "checksum mismatch"
-				errorMsg = &msg
+				if errorMsg == nil {
+					msg := "checksum mismatch"
+					errorMsg = &msg
+				}
 				// Delete corrupted file
 				if pathOk {
 					_ = os.Remove(path)
@@ -1041,6 +1131,7 @@ func (r *RTCReceiver) finishCurrentFile() {
 				}
 			}
 		}
+		delete(r.filePaths, fileID)
 	}
 
 	// Send response to sender (required by protocol)
@@ -1049,17 +1140,21 @@ func (r *RTCReceiver) finishCurrentFile() {
 		Success: success,
 		Error:   errorMsg,
 	}
-	if err := r.peer.SendJSON(response); err != nil {
-		slog.Error("Failed to send file response", "error", err)
+	if r.peer != nil {
+		if err := r.peer.SendJSON(response); err != nil {
+			slog.Error("Failed to send file response", "error", err)
+		}
 	}
 
 	r.currentFileID = ""
+	r.currentBytes = 0
 }
 
 // Close closes the receiver.
 func (r *RTCReceiver) Close() error {
 	r.mu.Lock()
 	fileWriters := r.fileWriters
+	filePaths := r.filePaths
 	peer := r.peer
 	r.fileWriters = nil
 	r.peer = nil
@@ -1067,6 +1162,9 @@ func (r *RTCReceiver) Close() error {
 
 	for _, f := range fileWriters {
 		_ = f.Close()
+	}
+	for _, path := range filePaths {
+		_ = os.Remove(path)
 	}
 	if peer != nil {
 		return peer.Close()

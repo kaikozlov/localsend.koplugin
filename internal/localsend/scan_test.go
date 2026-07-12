@@ -1,6 +1,7 @@
 package localsend
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"testing"
@@ -323,5 +324,18 @@ func TestDiscoverer_PutDiscovered_UpdatesLastSeen(t *testing.T) {
 
 	if !secondSeen.After(firstSeen) {
 		t.Error("Second PutDiscovered should have updated lastSeen timestamp")
+	}
+}
+
+func TestDiscoverer_PutDiscovered_BoundsRetainedDevices(t *testing.T) {
+	d := &Discoverer{
+		discovered: make(map[string]discoveryEntry),
+		mu:         &sync.RWMutex{},
+	}
+	for i := 0; i < 5000; i++ {
+		d.PutDiscovered(fmt.Sprintf("198.51.%d.%d", i/256, i%256), models.Announcement{})
+	}
+	if got := len(d.discovered); got > 512 {
+		t.Fatalf("retained %d discovered devices; want at most 512", got)
 	}
 }

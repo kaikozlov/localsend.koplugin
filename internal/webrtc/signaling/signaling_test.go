@@ -5,12 +5,51 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 )
+
+func TestConnectWithContext_CancelInterruptsHelloWait(t *testing.T) {
+	upgraded := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		close(upgraded)
+		<-release
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := ConnectWithContext(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), ClientInfoWithoutID{Alias: "test"})
+		done <- err
+	}()
+	<-upgraded
+	cancel()
+
+	select {
+	case err := <-done:
+		close(release)
+		if err == nil {
+			t.Fatal("ConnectWithContext returned nil after cancellation")
+		}
+	case <-time.After(250 * time.Millisecond):
+		close(release)
+		<-done
+		t.Fatal("context cancellation did not interrupt the HELLO read")
+	}
+}
 
 func TestSdpCompressDecompress(t *testing.T) {
 	original := `v=0

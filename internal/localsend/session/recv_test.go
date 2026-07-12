@@ -622,6 +622,54 @@ func TestSaveFileChecksumValidation(t *testing.T) {
 	}
 }
 
+func TestSaveFile_RejectsBodyLargerThanDeclaredSize(t *testing.T) {
+	dir := t.TempDir()
+	sess, err := NewRecvSession("size-overrun", "192.0.2.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := models.FileMeta{Id: "f", Filename: "overrun.bin", Size: 1}
+	if err := sess.AcceptFile("f", meta); err != nil {
+		t.Fatal(err)
+	}
+	sess.Start()
+	_, err = sess.SaveFile(dir, "f", sess.FileTokens()["f"], "192.0.2.1", bytes.NewReader([]byte("too large")))
+	if err == nil {
+		t.Fatal("oversized body was accepted")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("oversized body left %d partial files", len(entries))
+	}
+}
+
+func TestSaveFile_RejectsBodySmallerThanDeclaredSize(t *testing.T) {
+	dir := t.TempDir()
+	sess, err := NewRecvSession("size-underrun", "192.0.2.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := models.FileMeta{Id: "f", Filename: "underrun.bin", Size: 10}
+	if err := sess.AcceptFile("f", meta); err != nil {
+		t.Fatal(err)
+	}
+	sess.Start()
+	_, err = sess.SaveFile(dir, "f", sess.FileTokens()["f"], "192.0.2.1", bytes.NewReader([]byte("short")))
+	if err == nil {
+		t.Fatal("undersized body was accepted")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("undersized body left %d partial files", len(entries))
+	}
+}
+
 // TestSaveFileCreatesUniqueNames tests that SaveFile handles filename conflicts
 func TestSaveFileCreatesUniqueNames(t *testing.T) {
 	dir := t.TempDir()

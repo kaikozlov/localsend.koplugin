@@ -126,10 +126,33 @@ function M.buildCurlCommand(output_file, url)
         "%{http_code}",
         "--connect-timeout",
         "10",
+        "--max-time",
+        "30",
         "-H",
         "Accept: application/vnd.github.v3+json",
         url,
     })
+end
+
+local function commandSucceeded(result)
+    return result == true or result == 0
+end
+
+-- Copy to a sibling temporary file and rename only after a checked copy.
+-- Rename on the same filesystem is atomic, so a failed update leaves the
+-- previously working plugin file intact.
+function M.copyFileAtomically(src, dst)
+    local tmp = dst .. ".localsend-update-tmp"
+    deps.util.removeFile(tmp)
+    if not commandSucceeded(os.execute(deps.util.shell_escape({ "cp", src, tmp }))) then
+        deps.util.removeFile(tmp)
+        return false
+    end
+    if not commandSucceeded(os.execute(deps.util.shell_escape({ "mv", "-f", tmp, dst }))) then
+        deps.util.removeFile(tmp)
+        return false
+    end
+    return deps.util.pathExists(dst)
 end
 
 -- Detect device architecture for selecting the right binary
@@ -282,11 +305,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
         local dst = plugin_path .. "/" .. file
 
         if deps.util.pathExists(src) then
-            -- Delete destination first so we can verify copy actually worked
-            deps.util.removeFile(dst)
-            os.execute(deps.util.shell_escape({ "cp", src, dst }))
-            -- Verify copy succeeded by checking destination exists
-            if not deps.util.pathExists(dst) then
+            if not M.copyFileAtomically(src, dst) then
                 copy_failed = true
                 deps.logger.err("[LocalSend] Failed to copy:", file)
             end
@@ -306,11 +325,7 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
                 -- Skip files we already copied
                 if filename and filename ~= "main.lua" and filename ~= "_meta.lua" then
                     local dst = plugin_path .. "/" .. filename
-                    -- Delete destination first so we can verify copy actually worked
-                    deps.util.removeFile(dst)
-                    os.execute(deps.util.shell_escape({ "cp", lua_file, dst }))
-                    -- Verify copy succeeded
-                    if not deps.util.pathExists(dst) then
+                    if not M.copyFileAtomically(lua_file, dst) then
                         deps.logger.warn("[LocalSend] Failed to copy additional lua file:", filename)
                     else
                         deps.logger.dbg("[LocalSend] Copied additional lua file:", filename)
@@ -358,20 +373,34 @@ end
 -- @param new_version string Version string
 -- @param plugin_path string Path to plugin directory
 function M.performUpdate(instance, download_url, asset_name, new_version, plugin_path)
-    -- Stop server if running
-    if instance:isRunning() then
-        instance:stopServer()
-    end
-
     deps.UIManager:show(deps.InfoMessage:new({
         text = deps._("Downloading update..."),
         timeout = 2,
     }))
 
-    -- Give UI time to show the message
-    deps.UIManager:scheduleIn(0.5, function()
+    local function startUpdate()
+        -- Give UI time to render without racing a still-running binary.
+        deps.UIManager:scheduleIn(0, function()
         M.doPerformUpdate(instance, download_url, asset_name, new_version, plugin_path)
-    end)
+        end)
+    end
+
+    if instance:isRunning() then
+        instance:stopServer({
+            callback = function(success, message)
+                if success then
+                    startUpdate()
+                else
+                    deps.UIManager:show(deps.InfoMessage:new({
+                        icon = "notice-warning",
+                        text = message or deps._("Failed to stop LocalSend before update."),
+                    }))
+                end
+            end,
+        })
+    else
+        startUpdate()
+    end
 end
 
 -- Remove lua files from plugin_path that aren't part of the update package
@@ -439,23 +468,26 @@ end
 -- @param instance table LocalSend instance
 -- @param plugin_version string Current plugin version
 -- @param schedule_next function Callback to schedule next check
-function M.doAutoCheckForUpdates(instance, plugin_version, schedule_next)
+function M.doAutoCheckForUpdates(instance, plugin_version, schedule_next, supplied_http_code, supplied_tmp_file)
     local update_cache = getUpdateCacheDir()
-    local tmp_file = update_cache .. "/update_check.json"
-    local cmd = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL)
-
-    local handle = io.popen(cmd)
-    if not handle then
-        deps.logger.dbg("[LocalSend] Auto update check failed: io.popen returned nil")
-        schedule_next()
-        return
-    end
-    local ok, http_code = pcall(handle.read, handle, "*a")
-    handle:close()
-    if not ok then
-        deps.logger.dbg("[LocalSend] Auto update check failed: read error")
-        schedule_next()
-        return
+    local tmp_file = supplied_tmp_file or (update_cache .. "/update_check.json")
+    local http_code = supplied_http_code
+    if not http_code then
+        local cmd = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL)
+        local handle = io.popen(cmd)
+        if not handle then
+            deps.logger.dbg("[LocalSend] Auto update check failed: io.popen returned nil")
+            schedule_next()
+            return
+        end
+        local ok
+        ok, http_code = pcall(handle.read, handle, "*a")
+        handle:close()
+        if not ok then
+            deps.logger.dbg("[LocalSend] Auto update check failed: read error")
+            schedule_next()
+            return
+        end
     end
 
     -- Update last check time regardless of result
@@ -505,36 +537,75 @@ function M.doAutoCheckForUpdates(instance, plugin_version, schedule_next)
     schedule_next()
 end
 
+function M.autoCheckForUpdates(instance, plugin_version, schedule_next)
+    local update_cache = getUpdateCacheDir()
+    deps.util.makePath(update_cache)
+    local tmp_file = update_cache .. "/auto_update_check.json"
+    local status_file = update_cache .. "/auto_update_check.status"
+    deps.util.removeFile(status_file)
+    local command = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL)
+        .. " > "
+        .. deps.util.shell_escape({ status_file })
+        .. " 2>/dev/null &"
+    if not commandSucceeded(os.execute(command)) then
+        schedule_next()
+        return
+    end
+    local attempts = 124
+    local function poll()
+        if deps.util.pathExists(status_file) then
+            instance.update_check_poll_task = nil
+            local http_code = deps.util.readFromFile(status_file)
+            deps.util.removeFile(status_file)
+            M.doAutoCheckForUpdates(instance, plugin_version, schedule_next, http_code, tmp_file)
+            return
+        end
+        attempts = attempts - 1
+        if attempts <= 0 then
+            instance.update_check_poll_task = nil
+            schedule_next()
+            return
+        end
+        deps.UIManager:scheduleIn(0.25, poll)
+    end
+    instance.update_check_poll_task = poll
+    deps.UIManager:scheduleIn(0.25, poll)
+end
+
 -- Perform manual check for updates with UI feedback
 -- @param instance table LocalSend instance
 -- @param plugin_version string Current plugin version
 -- @param plugin_path string Path to plugin directory
-function M.doCheckForUpdates(instance, plugin_version, plugin_path)
-    deps.UIManager:show(deps.InfoMessage:new({
-        text = deps._("Checking for updates..."),
-        timeout = 2,
-    }))
-
-    local update_cache = getUpdateCacheDir()
-    local tmp_file = update_cache .. "/update_check.json"
-    local cmd = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL)
-
-    local handle = io.popen(cmd)
-    if not handle then
+function M.doCheckForUpdates(instance, plugin_version, plugin_path, supplied_http_code, supplied_tmp_file, suppress_progress)
+    if not suppress_progress then
         deps.UIManager:show(deps.InfoMessage:new({
-            icon = "notice-warning",
-            text = deps._("Failed to execute update check command."),
+            text = deps._("Checking for updates..."),
+            timeout = 2,
         }))
-        return
     end
-    local ok, http_code = pcall(handle.read, handle, "*a")
-    handle:close()
-    if not ok then
-        deps.UIManager:show(deps.InfoMessage:new({
-            icon = "notice-warning",
-            text = deps._("Failed to read update check response."),
-        }))
-        return
+    local update_cache = getUpdateCacheDir()
+    local tmp_file = supplied_tmp_file or (update_cache .. "/update_check.json")
+    local http_code = supplied_http_code
+    if not http_code then
+        local cmd = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL)
+        local handle = io.popen(cmd)
+        if not handle then
+            deps.UIManager:show(deps.InfoMessage:new({
+                icon = "notice-warning",
+                text = deps._("Failed to execute update check command."),
+            }))
+            return
+        end
+        local ok
+        ok, http_code = pcall(handle.read, handle, "*a")
+        handle:close()
+        if not ok then
+            deps.UIManager:show(deps.InfoMessage:new({
+                icon = "notice-warning",
+                text = deps._("Failed to read update check response."),
+            }))
+            return
+        end
     end
 
     if http_code ~= "200" then
@@ -660,7 +731,50 @@ end
 -- @param plugin_path string Path to plugin directory
 function M.checkForUpdates(instance, plugin_version, plugin_path)
     deps.NetworkMgr:runWhenOnline(function()
-        M.doCheckForUpdates(instance, plugin_version, plugin_path)
+        deps.UIManager:show(deps.InfoMessage:new({
+            text = deps._("Checking for updates..."),
+            timeout = 2,
+        }))
+        local update_cache = getUpdateCacheDir()
+        deps.util.makePath(update_cache)
+        local tmp_file = update_cache .. "/update_check.json"
+        local status_file = update_cache .. "/update_check.status"
+        deps.util.removeFile(status_file)
+        local command = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL)
+            .. " > "
+            .. deps.util.shell_escape({ status_file })
+            .. " 2>/dev/null &"
+        local launched = os.execute(command)
+        if not commandSucceeded(launched) then
+            deps.UIManager:show(deps.InfoMessage:new({
+                icon = "notice-warning",
+                text = deps._("Failed to execute update check command."),
+            }))
+            return
+        end
+
+        local attempts = 124 -- 31 seconds at 250 ms, just beyond curl --max-time.
+        local function poll()
+            if deps.util.pathExists(status_file) then
+                instance.update_check_poll_task = nil
+                local http_code = deps.util.readFromFile(status_file)
+                deps.util.removeFile(status_file)
+                M.doCheckForUpdates(instance, plugin_version, plugin_path, http_code, tmp_file, true)
+                return
+            end
+            attempts = attempts - 1
+            if attempts <= 0 then
+                instance.update_check_poll_task = nil
+                deps.UIManager:show(deps.InfoMessage:new({
+                    icon = "notice-warning",
+                    text = deps._("Update check timed out."),
+                }))
+                return
+            end
+            deps.UIManager:scheduleIn(0.25, poll)
+        end
+        instance.update_check_poll_task = poll
+        deps.UIManager:scheduleIn(0.25, poll)
     end)
 end
 

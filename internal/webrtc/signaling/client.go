@@ -120,7 +120,7 @@ func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutI
 	}
 
 	// Wait for HELLO message
-	if err := client.waitForHello(); err != nil {
+	if err := client.waitForHello(ctx); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -137,12 +137,24 @@ func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutI
 }
 
 // waitForHello waits for the initial HELLO message from the server.
-func (c *SignalingClient) waitForHello() error {
+func (c *SignalingClient) waitForHello(ctx context.Context) error {
 	_ = c.conn.SetReadDeadline(time.Now().Add(readTimeout))
 	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
+	readDone := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = c.conn.SetReadDeadline(time.Now())
+		case <-readDone:
+		}
+	}()
+	defer close(readDone)
 
 	_, msgBytes, err := c.conn.ReadMessage()
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("HELLO wait canceled: %w", ctx.Err())
+		}
 		return fmt.Errorf("failed to read HELLO: %w", err)
 	}
 

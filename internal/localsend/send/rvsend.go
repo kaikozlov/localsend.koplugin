@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"mime"
 	"net"
+	"net/url"
 	"os"
 
 	"localsend-cli/internal/localsend/constants"
@@ -105,6 +106,9 @@ func (rs *ReverseSender) predownloadHandler(c *fiber.Ctx) error {
 }
 
 func (rs *ReverseSender) downloadHandler(c *fiber.Ctx) error {
+	if rs.pin != "" && subtle.ConstantTimeCompare([]byte(c.Query("pin")), []byte(rs.pin)) != 1 {
+		return c.SendStatus(fiber.StatusUnauthorized)
+	}
 	sessionId := c.Query("sessionId")
 	fileId := c.Query("fileId")
 
@@ -139,15 +143,27 @@ func (rs *ReverseSender) downloadHandler(c *fiber.Ctx) error {
 	return nil
 }
 
+func (rs *ReverseSender) downloadListHandler(c *fiber.Ctx) error {
+	pin := c.Query("pin")
+	if rs.pin != "" && subtle.ConstantTimeCompare([]byte(pin), []byte(rs.pin)) != 1 {
+		return c.SendStatus(fiber.StatusUnauthorized)
+	}
+	downloads := rs.downloads
+	if pin != "" {
+		downloads = make([]DownloadEntry, len(rs.downloads))
+		for i, entry := range rs.downloads {
+			entry.Url += "&pin=" + url.QueryEscape(pin)
+			downloads[i] = entry
+		}
+	}
+	return c.Render(templates.DownloadListTemp, fiber.Map{"Files": downloads})
+}
+
 func (rs *ReverseSender) Start() error {
 	server := rs.webServer
 	server.Post(constants.PreDownloadPath, rs.predownloadHandler)
 	server.Get(constants.DownloadPath, rs.downloadHandler)
-	server.Get("/", func(c *fiber.Ctx) error {
-		return c.Render(templates.DownloadListTemp, fiber.Map{
-			"Files": rs.downloads,
-		})
-	})
+	server.Get("/", rs.downloadListHandler)
 
 	ip, err := utils.GetMyIPv4Addr()
 	if err != nil {

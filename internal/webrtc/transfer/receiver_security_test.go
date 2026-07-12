@@ -116,6 +116,9 @@ func TestPrepareFilesForReceive_PathTraversal(t *testing.T) {
 
 			// Call prepareFilesForReceive with the malicious file
 			tokens := receiver.prepareFilesForReceive([]string{"malicious-file"})
+			if token := tokens["malicious-file"]; token != "" {
+				receiver.startReceivingFile(&RTCSendFileHeader{ID: "malicious-file", Token: token})
+			}
 
 			// If a file was created, verify it's inside the save directory
 			if len(tokens) > 0 {
@@ -325,6 +328,9 @@ func TestRTCReceiver_FilenameIsSanitized(t *testing.T) {
 			}
 
 			tokens := receiver.prepareFilesForReceive([]string{"test-file"})
+			if token := tokens["test-file"]; token != "" {
+				receiver.startReceivingFile(&RTCSendFileHeader{ID: "test-file", Token: token})
+			}
 
 			if len(tokens) > 0 {
 				createdPath := receiver.filePaths["test-file"]
@@ -435,6 +441,9 @@ func TestRTCReceiver_SubdirectoryPreservation(t *testing.T) {
 			}
 
 			tokens := receiver.prepareFilesForReceive([]string{"test-file"})
+			if token := tokens["test-file"]; token != "" {
+				receiver.startReceivingFile(&RTCSendFileHeader{ID: "test-file", Token: token})
+			}
 
 			if len(tokens) == 0 {
 				t.Fatalf("prepareFilesForReceive returned no tokens")
@@ -532,6 +541,9 @@ func TestRTCReceiver_SubdirectoryTraversalRejected(t *testing.T) {
 			}
 
 			tokens := receiver.prepareFilesForReceive([]string{"malicious-file"})
+			if token := tokens["malicious-file"]; token != "" {
+				receiver.startReceivingFile(&RTCSendFileHeader{ID: "malicious-file", Token: token})
+			}
 
 			if len(tokens) > 0 {
 				createdPath := receiver.filePaths["malicious-file"]
@@ -581,9 +593,11 @@ func TestRTCReceiver_HandleFileHeader_ValidTokenTransitionsToReceiving(t *testin
 
 	r := &RTCReceiver{
 		state:       stateWaitFiles,
+		saveDir:     tmpDir,
+		files:       []RTCFileDto{{ID: "file-1", FileName: "file-1.bin", Size: 1}},
 		fileTokens:  map[string]string{"file-1": "valid-token"},
-		fileWriters: map[string]*os.File{"file-1": f},
-		filePaths:   map[string]string{"file-1": f.Name()},
+		fileWriters: map[string]*os.File{},
+		filePaths:   map[string]string{},
 		fileHashers: makeHasherMap(),
 	}
 

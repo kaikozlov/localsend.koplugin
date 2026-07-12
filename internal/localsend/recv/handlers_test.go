@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -376,7 +378,7 @@ func TestPreUploadV3Handler_BlockedBySession(t *testing.T) {
 	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
 	performNonceExchange(t, app)
 
-	body := []byte(`{"info":{"alias":"Sender"},"files":{}}`)
+	body := []byte(`{"info":{"alias":"Sender"},"files":{"new":{"id":"new","fileName":"new.txt","size":1,"fileType":"text/plain"}}}`)
 	req := httptest.NewRequest("POST", constants.PreuploadPathV3, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 
@@ -527,7 +529,7 @@ func TestUploadHandler_UnknownFileId(t *testing.T) {
 		},
 	}
 	// NewSession accepts all files and starts the session automatically
-	sessionId, err := fr.sessman.NewSession(testFiles, "127.0.0.1")
+	sessionId, err := fr.sessman.NewSession(testFiles, "0.0.0.0")
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -1007,7 +1009,7 @@ func TestCancelHandler_ValidSessionId_KillsSession(t *testing.T) {
 	testFiles := models.FileMetas{
 		"file1": {Id: "file1", Filename: "test.txt", Size: 100},
 	}
-	sessionId, err := fr.sessman.NewSession(testFiles, "127.0.0.1")
+	sessionId, err := fr.sessman.NewSession(testFiles, "0.0.0.0")
 	if err != nil {
 		t.Fatalf("Failed to create session: %v", err)
 	}
@@ -1061,10 +1063,9 @@ func TestCancelHandler_NonexistentSessionId_Returns200(t *testing.T) {
 	}
 }
 
-// TestCancelHandler_NoAuthCheck_AllowsAnyClientToCancel documents the security gap
-// where any network client can cancel ANY session by guessing session IDs.
-// This test serves as documentation that this is known behavior.
-func TestCancelHandler_NoAuthCheck_AllowsAnyClientToCancel(t *testing.T) {
+// TestCancelHandler_DifferentClientCannotCancel verifies cancellation is bound
+// to the client that created the receive session.
+func TestCancelHandler_DifferentClientCannotCancel(t *testing.T) {
 	fr := newTestReceiver()
 
 	// Create a session from "original client" IP
@@ -1083,15 +1084,44 @@ func TestCancelHandler_NoAuthCheck_AllowsAnyClientToCancel(t *testing.T) {
 
 	resp, _ := app.Test(req)
 
-	// SECURITY NOTE: This succeeds because there's no IP validation on cancel
-	// The cancelHandler only checks for sessionId presence, not ownership.
-	if resp.StatusCode != 200 {
-		t.Errorf("Status = %d; expected 200 (no auth check)", resp.StatusCode)
+	if resp.StatusCode != fiber.StatusForbidden {
+		t.Errorf("Status = %d; want 403", resp.StatusCode)
 	}
 
-	// Session was killed despite being from a different client
-	if fr.sessman.HasActiveSessions() {
-		t.Log("SECURITY NOTE: Cancel from different IP was rejected (if this fails, auth was added)")
+	if !fr.sessman.HasActiveSessions() {
+		t.Fatal("session was killed by a different client")
+	}
+}
+
+func TestPreUploadHandler_EmptyFileListReturnsBadRequest(t *testing.T) {
+	fr := newTestReceiver()
+	app := fiber.New()
+	app.Post(constants.PreuploadPath, fr.preUploadHandler)
+	req := httptest.NewRequest("POST", constants.PreuploadPath, strings.NewReader(`{"info":null,"files":{}}`))
+	req.Header.Set(fiber.HeaderContentType, fiber.MIMEApplicationJSON)
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != fiber.StatusBadRequest {
+		t.Fatalf("status = %d; want 400", resp.StatusCode)
+	}
+}
+
+func TestRegisterRoutes_DoesNotExposeUnsupportedV3TransferEndpoints(t *testing.T) {
+	fr := newTestReceiver()
+	app := fiber.New()
+	fr.registerRoutes(app)
+
+	for _, path := range []string{constants.PreuploadPathV3, constants.UploadPathV3, constants.CancelPathV3} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+		resp, err := app.Test(req)
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		if resp.StatusCode != fiber.StatusNotFound {
+			t.Errorf("POST %s status = %d; want 404", path, resp.StatusCode)
+		}
 	}
 }
 
