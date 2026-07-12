@@ -30,8 +30,7 @@ machine-specific toolchains hide bugs.
 just setup              # One-time: install hooks + pull koplugin-dev image
 just test               # All Lua + Go tests (quiet; failures + summaries)
 V=1 just test           # Same, with full busted/go -v output
-just test-lua           # Lua tests via busted-koreader (real KOReader)
-just test-lua-filter "pattern"  # Focused Lua run in Docker
+just test-filter "pattern"  # Focused Lua run in Docker
 just test-go            # Go tests in Docker
 just test-go-race       # Go tests with race detector in Docker
 just test-go-integration # Go integration tests in Docker
@@ -44,6 +43,9 @@ just                    # List all recipes
 
 Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.03_4` — contains real KOReader Linux runtime.
 Bump `koplugin_dev_version` in `justfile` when the image updates.
+
+Shared recipes are imported from a sibling `../koplugin-dev/shared.just` checkout.
+Product packaging stays local: `just release`.
 
 ## Architecture
 
