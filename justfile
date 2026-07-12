@@ -340,8 +340,9 @@ release *args='':
     fi
     mkdir -p "$stage"
 
-    # Stage Lua plugin source (shared by every zip)
+    # Stage Lua plugin source and license (shared by every zip)
     cp lua/*.lua "$stage/"
+    cp LICENSE "$stage/"
 
     if ! $package_only; then
         echo "Cross-compiling ARM binaries..."
