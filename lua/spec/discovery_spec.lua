@@ -188,6 +188,28 @@ describe("localsend_discovery", function()
             assert.is_not_nil(dialog)
             assert.equals("Select target device", dialog.title)
         end)
+
+        it("allows scanning again when devices were found", function()
+            local retry_called = false
+            discovery.showDeviceSelector({
+                { type = "lan", alias = "Phone", ip = "192.168.1.50" },
+            }, function() end, function()
+                retry_called = true
+            end)
+
+            local dialog = helper.find_dialog("ButtonDialog")
+            local scan_again
+            for _, row in ipairs(dialog.buttons) do
+                for _, button in ipairs(row) do
+                    if button.text == "Scan again" then
+                        scan_again = button
+                    end
+                end
+            end
+            assert.is_not_nil(scan_again)
+            scan_again.callback()
+            assert.is_true(retry_called)
+        end)
     end)
 
     describe("scan timeout behavior", function()

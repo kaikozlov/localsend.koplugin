@@ -306,19 +306,29 @@ function M.showDeviceSelector(devices, onSelect, onRetry)
         })
     end
 
-    -- Add cancel button
-    table.insert(buttons, {
-        {
-            text = deps._("Cancel"),
+    -- Add scan/cancel actions below the discovered devices.
+    local actions = {}
+    if onRetry then
+        table.insert(actions, {
+            text = deps._("Scan again"),
             callback = function()
                 deps.UIManager:close(dialog)
                 M._current_dialog = nil
-                if onSelect then
-                    onSelect(nil)
-                end
+                onRetry()
             end,
-        },
+        })
+    end
+    table.insert(actions, {
+        text = deps._("Cancel"),
+        callback = function()
+            deps.UIManager:close(dialog)
+            M._current_dialog = nil
+            if onSelect then
+                onSelect(nil)
+            end
+        end,
     })
+    table.insert(buttons, actions)
 
     dialog = deps.ButtonDialog:new({
         title = deps._("Select target device"),
