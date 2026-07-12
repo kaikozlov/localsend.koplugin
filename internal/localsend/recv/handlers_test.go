@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/localsend"
 	"localsend-cli/internal/localsend/constants"

@@ -20,7 +20,7 @@ import (
 	"localsend-cli/internal/models"
 	"localsend-cli/internal/utils"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 type FileReceiver struct {
@@ -278,7 +278,7 @@ func (fr *FileReceiver) clearPINAttempts(ip string) {
 
 // validatePIN checks PIN authentication and rate limiting.
 // Returns HTTP status code: 0 = success, 401 = wrong PIN, 429 = rate limited.
-func (fr *FileReceiver) validatePIN(c *fiber.Ctx) int {
+func (fr *FileReceiver) validatePIN(c fiber.Ctx) int {
 	expectedPin := fr.getExpectedPIN()
 	if expectedPin == "" {
 		return 0 // No PIN required

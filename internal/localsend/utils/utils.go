@@ -18,8 +18,8 @@ import (
 	"localsend-cli/internal/utils"
 	"localsend-cli/templates"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/template/html/v2"
+	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/template/html/v3"
 	"github.com/google/uuid"
 )
 
@@ -214,9 +214,7 @@ func GenFingerprint() string {
 
 func NewWebServer(withTemplateEngine ...bool) *fiber.App {
 	config := fiber.Config{
-		Prefork:               false,
-		DisableStartupMessage: true,
-		StreamRequestBody:     true,
+		StreamRequestBody: true,
 		//	BodyLimit:             100 * 1024 * 1024 * 1024, // 100G
 		BodyLimit: 1 * 1024 * 1024 * 1024, // 1G (for 32-bit)
 	}
@@ -230,11 +228,11 @@ func NewWebServer(withTemplateEngine ...bool) *fiber.App {
 	return fiber.New(config)
 }
 
-// ListenWithTLS starts the fiber server with optional TLS support.
-// If useHTTPS is true, it uses ListenTLSWithCertificate, otherwise Listen.
+// ListenWithTLS starts the Fiber server with optional TLS support.
 func ListenWithTLS(server *fiber.App, addr string, cert tls.Certificate, useHTTPS bool) error {
+	config := fiber.ListenConfig{DisableStartupMessage: true}
 	if useHTTPS {
-		return server.ListenTLSWithCertificate(addr, cert)
+		config.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 	}
-	return server.Listen(addr)
+	return server.Listen(addr, config)
 }

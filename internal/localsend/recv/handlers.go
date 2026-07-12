@@ -7,7 +7,7 @@ import (
 	"io"
 	"log/slog"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
@@ -23,12 +23,12 @@ var errRequestBodyTooLarge = errors.New("request body too large")
 
 // parseJSONBodyLimited parses JSON with a hard size cap to prevent oversized
 // metadata requests from exhausting memory.
-func parseJSONBodyLimited(c *fiber.Ctx, dst interface{}, maxBytes int64) error {
-	if c.Context().Request.Header.ContentLength() > int(maxBytes) {
+func parseJSONBodyLimited(c fiber.Ctx, dst interface{}, maxBytes int64) error {
+	if c.RequestCtx().Request.Header.ContentLength() > int(maxBytes) {
 		return errRequestBodyTooLarge
 	}
 
-	body := c.Context().RequestBodyStream()
+	body := c.RequestCtx().RequestBodyStream()
 	if body == nil {
 		body = bytes.NewReader(c.Body())
 	}
@@ -88,7 +88,7 @@ func (fr *FileReceiver) filterFilesByExtension(files models.FileMetas, remoteIP 
 	return filteredFiles, 0
 }
 
-func (fr *FileReceiver) preUploadHandler(c *fiber.Ctx) error {
+func (fr *FileReceiver) preUploadHandler(c fiber.Ctx) error {
 	// Check PIN authentication and rate limiting
 	if status := fr.validatePIN(c); status != 0 {
 		return c.SendStatus(status)
@@ -158,7 +158,7 @@ func (fr *FileReceiver) preUploadHandler(c *fiber.Ctx) error {
 	return c.JSON(&resp)
 }
 
-func (fr *FileReceiver) uploadHandler(c *fiber.Ctx) error {
+func (fr *FileReceiver) uploadHandler(c fiber.Ctx) error {
 	sessionId := c.Query("sessionId")
 	fileId := c.Query("fileId")
 	token := c.Query("token")
@@ -190,7 +190,7 @@ func (fr *FileReceiver) uploadHandler(c *fiber.Ctx) error {
 	// Note: RequestBodyStream() may return nil for small requests that were already buffered,
 	// so we fall back to c.Body() in that case.
 	var bodyReader io.Reader
-	if stream := c.Context().RequestBodyStream(); stream != nil {
+	if stream := c.RequestCtx().RequestBodyStream(); stream != nil {
 		bodyReader = stream
 	} else {
 		bodyReader = bytes.NewReader(c.Body())
@@ -217,7 +217,7 @@ func (fr *FileReceiver) uploadHandler(c *fiber.Ctx) error {
 	return c.SendStatus(200)
 }
 
-func (fr *FileReceiver) cancelHandler(c *fiber.Ctx) error {
+func (fr *FileReceiver) cancelHandler(c fiber.Ctx) error {
 	sessionId := c.Query("sessionId")
 	if sessionId == "" {
 		return c.SendStatus(400)
@@ -229,11 +229,11 @@ func (fr *FileReceiver) cancelHandler(c *fiber.Ctx) error {
 	return c.SendStatus(200)
 }
 
-func (fr *FileReceiver) infoHandler(c *fiber.Ctx) error {
+func (fr *FileReceiver) infoHandler(c fiber.Ctx) error {
 	return c.JSON(&fr.identity)
 }
 
-func (fr *FileReceiver) registerHandler(c *fiber.Ctx) error {
+func (fr *FileReceiver) registerHandler(c fiber.Ctx) error {
 	var announcement models.Announcement
 	if err := parseJSONBodyLimited(c, &announcement, maxRegisterBodyBytes); err != nil {
 		if errors.Is(err, errRequestBodyTooLarge) {
@@ -254,7 +254,7 @@ func (fr *FileReceiver) registerHandler(c *fiber.Ctx) error {
 
 // nonceExchangeHandler implements POST /api/localsend/v3/nonce
 // This exchanges nonces for secure token verification in v3 protocol.
-func (fr *FileReceiver) nonceExchangeHandler(c *fiber.Ctx) error {
+func (fr *FileReceiver) nonceExchangeHandler(c fiber.Ctx) error {
 	var req models.NonceRequest
 	if err := parseJSONBodyLimited(c, &req, maxNonceBodyBytes); err != nil {
 		if errors.Is(err, errRequestBodyTooLarge) {
@@ -308,7 +308,7 @@ func (fr *FileReceiver) nonceExchangeHandler(c *fiber.Ctx) error {
 
 // registerV3Handler implements POST /api/localsend/v3/register
 // This handles device registration with v3 protocol fields.
-func (fr *FileReceiver) registerV3Handler(c *fiber.Ctx) error {
+func (fr *FileReceiver) registerV3Handler(c fiber.Ctx) error {
 	var req models.RegisterRequestV3
 	if err := parseJSONBodyLimited(c, &req, maxRegisterBodyBytes); err != nil {
 		if errors.Is(err, errRequestBodyTooLarge) {
@@ -335,7 +335,7 @@ func (fr *FileReceiver) registerV3Handler(c *fiber.Ctx) error {
 
 // preUploadV3Handler implements POST /api/localsend/v3/prepare-upload
 // This handles v3 prepare-upload with optional token verification using exchanged nonces.
-func (fr *FileReceiver) preUploadV3Handler(c *fiber.Ctx) error {
+func (fr *FileReceiver) preUploadV3Handler(c fiber.Ctx) error {
 	// Check PIN authentication and rate limiting
 	if status := fr.validatePIN(c); status != 0 {
 		return c.SendStatus(status)
@@ -397,7 +397,7 @@ func (fr *FileReceiver) preUploadV3Handler(c *fiber.Ctx) error {
 
 // infoV3Handler implements GET /api/localsend/v3/info
 // Returns device info in v3 format with SCREAMING_SNAKE_CASE device type.
-func (fr *FileReceiver) infoV3Handler(c *fiber.Ctx) error {
+func (fr *FileReceiver) infoV3Handler(c fiber.Ctx) error {
 	resp := models.RegisterResponseV3{
 		Alias:           fr.identity.Alias,
 		Version:         fr.identity.Version,

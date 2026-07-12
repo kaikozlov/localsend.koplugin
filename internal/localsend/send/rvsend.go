@@ -16,7 +16,7 @@ import (
 	"localsend-cli/internal/utils"
 	"localsend-cli/templates"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 )
 
@@ -81,7 +81,7 @@ func (rs *ReverseSender) Init(target *models.DeviceInfo, https bool) error {
 	return nil
 }
 
-func (rs *ReverseSender) predownloadHandler(c *fiber.Ctx) error {
+func (rs *ReverseSender) predownloadHandler(c fiber.Ctx) error {
 	// Check PIN if set (constant-time comparison to prevent timing attacks)
 	if rs.pin != "" {
 		pin := c.Query("pin")
@@ -105,7 +105,7 @@ func (rs *ReverseSender) predownloadHandler(c *fiber.Ctx) error {
 	return c.JSON(&resp)
 }
 
-func (rs *ReverseSender) downloadHandler(c *fiber.Ctx) error {
+func (rs *ReverseSender) downloadHandler(c fiber.Ctx) error {
 	if rs.pin != "" && subtle.ConstantTimeCompare([]byte(c.Query("pin")), []byte(rs.pin)) != 1 {
 		return c.SendStatus(fiber.StatusUnauthorized)
 	}
@@ -143,7 +143,7 @@ func (rs *ReverseSender) downloadHandler(c *fiber.Ctx) error {
 	return nil
 }
 
-func (rs *ReverseSender) downloadListHandler(c *fiber.Ctx) error {
+func (rs *ReverseSender) downloadListHandler(c fiber.Ctx) error {
 	pin := c.Query("pin")
 	if rs.pin != "" && subtle.ConstantTimeCompare([]byte(pin), []byte(rs.pin)) != 1 {
 		return c.SendStatus(fiber.StatusUnauthorized)

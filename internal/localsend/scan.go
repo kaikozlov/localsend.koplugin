@@ -14,7 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
+	"github.com/valyala/fasthttp"
 	"golang.org/x/net/ipv4"
 	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
@@ -41,6 +42,11 @@ const (
 var multicastDiscoveryAddr = &net.UDPAddr{
 	IP:   net.ParseIP("224.0.0.167"),
 	Port: constants.DefaultPort,
+}
+
+var discoveryResponseHTTPClient = &fasthttp.Client{
+	// #nosec G402 -- LocalSend authenticates self-signed certificates by fingerprint.
+	TLSConfig: &tls.Config{InsecureSkipVerify: true},
 }
 
 // discoveryEntry wraps an Announcement with last-seen timestamp for TTL cleanup.
@@ -406,10 +412,8 @@ func (mcs *Discoverer) sendHTTPResponse(ip string, anno models.Announcement) {
 
 	remoteAddr := fmt.Sprintf("%s:%d", ip, port)
 
-	agent := fiber.AcquireAgent()
-	defer fiber.ReleaseAgent(agent)
-
-	req := agent.Request()
+	req := fasthttp.AcquireRequest()
+	defer fasthttp.ReleaseRequest(req)
 	req.URI().SetScheme(scheme)
 	req.URI().SetHost(remoteAddr)
 	req.URI().SetPath(constants.RegisterPath)
@@ -417,15 +421,12 @@ func (mcs *Discoverer) sendHTTPResponse(ip string, anno models.Announcement) {
 	req.Header.SetContentType(fiber.MIMEApplicationJSON)
 	req.SetBody(bodyBytes)
 
-	if err := agent.Parse(); err != nil {
-		slog.Debug("Failed to parse HTTP register request", "error", err)
-		return
-	}
-
 	// Skip TLS verification for self-signed certs
-	_, _, errs := agent.InsecureSkipVerify().Timeout(2 * time.Second).Bytes()
-	if len(errs) > 0 {
-		slog.Debug("Failed to send HTTP register response", "remote", remoteAddr, "error", errs[0])
+	resp := fasthttp.AcquireResponse()
+	resp.SkipBody = true
+	defer fasthttp.ReleaseResponse(resp)
+	if err := discoveryResponseHTTPClient.DoTimeout(req, resp, 2*time.Second); err != nil {
+		slog.Debug("Failed to send HTTP register response", "remote", remoteAddr, "error", err)
 		return
 	}
 

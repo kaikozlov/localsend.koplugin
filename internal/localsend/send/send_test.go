@@ -22,7 +22,7 @@ import (
 	"localsend-cli/internal/models"
 	coreutils "localsend-cli/internal/utils"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/valyala/fasthttp"
 )
 
@@ -719,12 +719,12 @@ func TestForwardSender_Start_PropagatesFileErrors(t *testing.T) {
 	app := fiber.New()
 
 	// Pre-upload handler - returns tokens for whatever files are requested
-	app.Post("/api/localsend/v2/prepare-upload", func(c *fiber.Ctx) error {
+	app.Post("/api/localsend/v2/prepare-upload", func(c fiber.Ctx) error {
 		// Parse the request to get file IDs
 		var req struct {
 			Files map[string]interface{} `json:"files"`
 		}
-		if err := c.BodyParser(&req); err != nil {
+		if err := c.Bind().Body(&req); err != nil {
 			return c.SendStatus(400)
 		}
 
@@ -741,7 +741,7 @@ func TestForwardSender_Start_PropagatesFileErrors(t *testing.T) {
 	})
 
 	// Upload handler - reject all uploads to simulate failure
-	app.Post("/api/localsend/v2/upload", func(c *fiber.Ctx) error {
+	app.Post("/api/localsend/v2/upload", func(c fiber.Ctx) error {
 		return c.SendStatus(500) // Simulate server error
 	})
 
@@ -793,12 +793,12 @@ func TestForwardSender_Start_ReturnsNilOnSuccess(t *testing.T) {
 	app := fiber.New()
 
 	// Pre-upload handler - returns tokens for whatever files are requested
-	app.Post("/api/localsend/v2/prepare-upload", func(c *fiber.Ctx) error {
+	app.Post("/api/localsend/v2/prepare-upload", func(c fiber.Ctx) error {
 		// Parse the request to get file IDs
 		var req struct {
 			Files map[string]interface{} `json:"files"`
 		}
-		if err := c.BodyParser(&req); err != nil {
+		if err := c.Bind().Body(&req); err != nil {
 			return c.SendStatus(400)
 		}
 
@@ -815,7 +815,7 @@ func TestForwardSender_Start_ReturnsNilOnSuccess(t *testing.T) {
 	})
 
 	// Upload handler - accept all uploads
-	app.Post("/api/localsend/v2/upload", func(c *fiber.Ctx) error {
+	app.Post("/api/localsend/v2/upload", func(c fiber.Ctx) error {
 		return c.SendStatus(200)
 	})
 
@@ -860,11 +860,11 @@ func TestForwardSender_Start_ReturnsNilOnSuccess(t *testing.T) {
 func TestForwardSender_Start_HTTPSCustomPort_UsesConfiguredPortForFingerprint(t *testing.T) {
 	app := fiber.New()
 
-	app.Post(constants.PreuploadPath, func(c *fiber.Ctx) error {
+	app.Post(constants.PreuploadPath, func(c fiber.Ctx) error {
 		var req struct {
 			Files map[string]interface{} `json:"files"`
 		}
-		if err := c.BodyParser(&req); err != nil {
+		if err := c.Bind().Body(&req); err != nil {
 			return c.SendStatus(400)
 		}
 
@@ -879,7 +879,7 @@ func TestForwardSender_Start_HTTPSCustomPort_UsesConfiguredPortForFingerprint(t 
 		})
 	})
 
-	app.Post(constants.UploadPath, func(c *fiber.Ctx) error {
+	app.Post(constants.UploadPath, func(c fiber.Ctx) error {
 		return c.SendStatus(200)
 	})
 
