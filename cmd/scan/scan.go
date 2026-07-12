@@ -20,6 +20,7 @@ import (
 
 var (
 	timeout       int64
+	legacyTimeout int64
 	legacy        bool
 	webrtc        bool
 	lan           bool
@@ -75,6 +76,12 @@ var Cmd = &cobra.Command{
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeout))
 		defer cancel()
+		legacyDuration := timeout
+		if legacyTimeout > 0 {
+			legacyDuration = legacyTimeout
+		}
+		legacyCtx, cancelLegacy := context.WithTimeout(context.Background(), time.Second*time.Duration(legacyDuration))
+		defer cancelLegacy()
 
 		// If no protocol flags are set, enable all discovery methods
 		if !cmd.Flags().Changed("lan") && !cmd.Flags().Changed("legacy") && !cmd.Flags().Changed("webrtc") {
@@ -102,7 +109,7 @@ var Cmd = &cobra.Command{
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				scanner.ScanSubnet(ctx)
+				scanner.ScanSubnet(legacyCtx)
 			}()
 		}
 
@@ -235,9 +242,10 @@ func discoverViaSignaling(ctx context.Context, silent bool, alias string) []sign
 
 func init() {
 	Cmd.PersistentFlags().Int64VarP(&timeout, "timeout", "t", 4, "scan duration in seconds")
+	Cmd.PersistentFlags().Int64Var(&legacyTimeout, "legacy-timeout", 0, "legacy subnet scan deadline in seconds (defaults to scan duration)")
 	Cmd.PersistentFlags().BoolVarP(&legacy, "legacy", "l", false, "perform legacy HTTP subnet scan")
 	Cmd.PersistentFlags().BoolVarP(&webrtc, "webrtc", "w", false, "discover peers via WebRTC signaling server")
-	Cmd.PersistentFlags().BoolVarP(&lan, "lan", "n", false, "perform LAN discovery (mDNS/UDP)")
+	Cmd.PersistentFlags().BoolVarP(&lan, "lan", "n", false, "perform LAN discovery (multicast/UDP)")
 	Cmd.PersistentFlags().BoolVarP(&jsonOutput, "json", "j", false, "output results as JSON")
 	Cmd.PersistentFlags().StringVarP(&excludeIDFile, "exclude-id-file", "e", "", "file containing signaling ID to exclude (for self-filtering)")
 	Cmd.PersistentFlags().StringVar(&devName, "devname", "", "device name to display to other peers")

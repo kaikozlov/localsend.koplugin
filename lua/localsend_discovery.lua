@@ -102,7 +102,15 @@ function M.scanDevices(callback, options)
     ServerState.scan_start_time = os.time() -- Track start time for timeout guard
 
     -- Build scan command
-    local args = { binary_path, "scan", "--json", "-t", tostring(constants.SCAN_TIMEOUT_SECONDS) }
+    local args = {
+        binary_path,
+        "scan",
+        "--json",
+        "-t",
+        tostring(constants.SCAN_TIMEOUT_SECONDS),
+        "--legacy-timeout",
+        tostring(constants.LEGACY_SCAN_TIMEOUT_SECONDS),
+    }
 
     -- Add device name if provided (shows this name to other peers during scan)
     if options.device_name and options.device_name ~= "" then
@@ -124,12 +132,12 @@ function M.scanDevices(callback, options)
 
     local pid_file = constants.SCAN_OUTPUT_FILE .. ".pid"
 
-    -- Run scan in background, redirect stdout to file, discard stderr
-    -- Note: We discard stderr because log messages would corrupt the JSON output
+    -- Keep structured JSON on stdout and preserve discovery diagnostics separately.
     local cmd = string.format(
-        "(%s > %s 2>/dev/null) & echo $! > %s",
+        "(%s > %s 2> %s) & echo $! > %s",
         deps.util.shell_escape(args),
         deps.util.shell_escape({ constants.SCAN_OUTPUT_FILE }),
+        deps.util.shell_escape({ constants.SCAN_LOG_FILE }),
         deps.util.shell_escape({ pid_file })
     )
 

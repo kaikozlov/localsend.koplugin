@@ -233,6 +233,7 @@ local function captureEvidence()
     return {
         captured_at = os.date("%Y-%m-%dT%H:%M:%S%z"),
         backend = readTail(constants.SERVER_OUTPUT_FILE, REPORT_TAIL_BYTES),
+        scan = readTail(constants.SCAN_LOG_FILE, REPORT_TAIL_BYTES),
         send = readTail(constants.SEND_OUTPUT_FILE, REPORT_TAIL_BYTES),
         transfers = readTail(constants.TRANSFER_LOG_FILE, REPORT_TAIL_BYTES),
         crash = readTail(crash_path, REPORT_TAIL_BYTES),
@@ -746,6 +747,7 @@ function M.collect(instance, options)
             captured_at = evidence.captured_at,
             backend_before_check = evidence.backend,
             backend_after_check = readTail(constants.SERVER_OUTPUT_FILE, REPORT_TAIL_BYTES),
+            scan = evidence.scan or readTail(constants.SCAN_LOG_FILE, REPORT_TAIL_BYTES),
             send = send_log,
             transfers = evidence.transfers,
             lifecycle = evidence.lifecycle or readTail(constants.LIFECYCLE_LOG_FILE, REPORT_TAIL_BYTES),
@@ -998,6 +1000,9 @@ function M.formatReport(report)
 
     addSection(lines, "Lifecycle test backend log")
     table.insert(lines, report.logs.backend_after_check or "No lifecycle-test backend log found.")
+
+    addSection(lines, "Recent discovery scan log")
+    table.insert(lines, report.logs.scan or "No discovery scan log found.")
 
     addSection(lines, "Recent send log")
     table.insert(lines, report.logs.send or "No send log found.")

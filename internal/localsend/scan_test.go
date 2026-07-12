@@ -1,14 +1,318 @@
 package localsend
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"localsend-cli/internal/models"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+func TestDiscovererListen_ProcessesDatagramsContinuously(t *testing.T) {
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatalf("listen UDP: %v", err)
+	}
+
+	d := &Discoverer{
+		mcastConn:  conn,
+		selfAnno:   &models.Announcement{DeviceInfo: models.DeviceInfo{Fingerprint: "self"}},
+		discovered: make(map[string]discoveryEntry),
+		mu:         &sync.RWMutex{},
+		stop:       make(chan struct{}),
+		readBuf:    make([]byte, 512),
+	}
+
+	listenDone := make(chan error, 1)
+	go func() {
+		listenDone <- d.Listen()
+	}()
+	t.Cleanup(func() {
+		_ = d.Shutdown()
+		<-listenDone
+	})
+
+	sender, err := net.DialUDP("udp4", nil, conn.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatalf("dial UDP listener: %v", err)
+	}
+	defer func() { _ = sender.Close() }()
+	if _, err := sender.Write([]byte("{")); err != nil {
+		t.Fatalf("send malformed announcement: %v", err)
+	}
+
+	send := func(alias string) {
+		t.Helper()
+		packet, marshalErr := json.Marshal(models.Announcement{
+			DeviceInfo: models.DeviceInfo{
+				Alias:       alias,
+				Fingerprint: alias,
+			},
+			Protocol: "http",
+			Port:     53317,
+		})
+		if marshalErr != nil {
+			t.Fatalf("marshal announcement: %v", marshalErr)
+		}
+		if _, writeErr := sender.Write(packet); writeErr != nil {
+			t.Fatalf("send announcement: %v", writeErr)
+		}
+	}
+
+	waitForAlias := func(want string) {
+		t.Helper()
+		deadline := time.Now().Add(500 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			for _, announcement := range d.GetAllDiscovered() {
+				if announcement.Alias == want {
+					return
+				}
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("announcement %q was not processed promptly", want)
+	}
+
+	send("first")
+	waitForAlias("first")
+	send("second")
+	waitForAlias("second")
+}
+
+func TestTryScanIP_RegistersSuccessfulResponse(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodPost {
+			t.Errorf("method = %q; want POST", req.Method)
+		}
+		if req.URL.Path != "/api/localsend/v2/register" {
+			t.Errorf("path = %q; want register endpoint", req.URL.Path)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body: io.NopCloser(strings.NewReader(`{
+				"alias":"Phone",
+				"version":"2.1",
+				"deviceType":"mobile"
+			}`)),
+			Header: make(http.Header),
+		}, nil
+	})}
+	d := newTestDiscovererForSubnetScan(client, 1, nil)
+
+	if !d.tryScanIP(context.Background(), "192.168.1.42", "http", []byte(`{}`)) {
+		t.Fatal("tryScanIP() = false; want successful discovery")
+	}
+
+	discovered := d.GetAllDiscovered()["192.168.1.42"]
+	if discovered.Alias != "Phone" || discovered.Protocol != "http" {
+		t.Fatalf("discovered device = %#v; want Phone over HTTP", discovered)
+	}
+}
+
+func TestBuildSubnetTargets_InterleavesAndDeduplicatesSubnets(t *testing.T) {
+	targets := buildSubnetTargets([]net.IP{
+		net.ParseIP("192.168.1.20"),
+		net.ParseIP("10.0.0.30"),
+		net.ParseIP("192.168.1.21"),
+	})
+
+	if got, want := len(targets), 505; got != want {
+		t.Fatalf("target count = %d; want %d", got, want)
+	}
+
+	wantPrefix := []string{"192.168.1.1", "10.0.0.1", "192.168.1.2", "10.0.0.2"}
+	for i, want := range wantPrefix {
+		if targets[i] != want {
+			t.Fatalf("target %d = %q; want %q", i, targets[i], want)
+		}
+	}
+
+	for _, target := range targets {
+		if target == "192.168.1.20" || target == "192.168.1.21" || target == "10.0.0.30" {
+			t.Fatalf("local address %s must not be scanned", target)
+		}
+	}
+}
+
+func TestInterfaceHasPrivateIPv4_RejectsPublicAndIPv6OnlyInterfaces(t *testing.T) {
+	tests := []struct {
+		name      string
+		addresses []net.Addr
+		want      bool
+	}{
+		{
+			name:      "private IPv4",
+			addresses: []net.Addr{&net.IPNet{IP: net.ParseIP("192.168.1.20"), Mask: net.CIDRMask(24, 32)}},
+			want:      true,
+		},
+		{
+			name:      "public IPv4",
+			addresses: []net.Addr{&net.IPNet{IP: net.ParseIP("203.0.113.10"), Mask: net.CIDRMask(24, 32)}},
+		},
+		{
+			name:      "private IPv6 only",
+			addresses: []net.Addr{&net.IPNet{IP: net.ParseIP("fd00::1"), Mask: net.CIDRMask(64, 128)}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := interfaceHasPrivateIPv4(tt.addresses); got != tt.want {
+				t.Fatalf("interfaceHasPrivateIPv4() = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestScanSubnet_CompletesBothProtocolAttemptsForEveryTarget(t *testing.T) {
+	var httpAttempts atomic.Int32
+	var httpsAttempts atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		switch req.URL.Scheme {
+		case "http":
+			httpAttempts.Add(1)
+		case "https":
+			httpsAttempts.Add(1)
+		default:
+			t.Errorf("unexpected protocol %q", req.URL.Scheme)
+		}
+		return nil, errors.New("unreachable test host")
+	})}
+
+	d := newTestDiscovererForSubnetScan(client, 10, []net.IP{net.ParseIP("192.168.1.20")})
+	d.ScanSubnet(context.Background())
+
+	const targets = 253
+	if got := httpAttempts.Load(); got != targets {
+		t.Fatalf("HTTP attempts = %d; want %d", got, targets)
+	}
+	if got := httpsAttempts.Load(); got != targets {
+		t.Fatalf("HTTPS attempts = %d; want %d", got, targets)
+	}
+}
+
+func TestScanSubnet_AttemptsEverySubnetBeforeSlowSubnetCanStarveIt(t *testing.T) {
+	var mu sync.Mutex
+	seenSubnets := make(map[string]bool)
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		host := req.URL.Hostname()
+		mu.Lock()
+		seenSubnets[strings.Join(strings.Split(host, ".")[:3], ".")] = true
+		mu.Unlock()
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})}
+
+	d := newTestDiscovererForSubnetScan(client, 4, []net.IP{
+		net.ParseIP("192.168.15.1"),
+		net.ParseIP("192.168.1.20"),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	d.ScanSubnet(ctx)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !seenSubnets["192.168.15"] || !seenSubnets["192.168.1"] {
+		t.Fatalf("attempted subnets = %v; want both subnets before cancellation", seenSubnets)
+	}
+}
+
+func TestScanSubnet_BoundsConcurrentRequests(t *testing.T) {
+	var active atomic.Int32
+	var maximum atomic.Int32
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		current := active.Add(1)
+		defer active.Add(-1)
+		for {
+			observed := maximum.Load()
+			if current <= observed || maximum.CompareAndSwap(observed, current) {
+				break
+			}
+		}
+		<-req.Context().Done()
+		return nil, req.Context().Err()
+	})}
+
+	d := newTestDiscovererForSubnetScan(client, 3, []net.IP{net.ParseIP("192.168.1.20")})
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	d.ScanSubnet(ctx)
+
+	if got := maximum.Load(); got > 3 {
+		t.Fatalf("maximum concurrent requests = %d; want at most 3", got)
+	}
+}
+
+func TestScanSubnet_CancelsActiveRequests(t *testing.T) {
+	requestStarted := make(chan struct{}, 1)
+	requestCanceled := make(chan struct{}, 1)
+	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		select {
+		case requestStarted <- struct{}{}:
+		default:
+		}
+		<-req.Context().Done()
+		select {
+		case requestCanceled <- struct{}{}:
+		default:
+		}
+		return nil, req.Context().Err()
+	})}
+
+	d := newTestDiscovererForSubnetScan(client, 1, []net.IP{net.ParseIP("192.168.1.20")})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		d.ScanSubnet(ctx)
+		close(done)
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("scan request did not start")
+	}
+	cancel()
+
+	select {
+	case <-requestCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("active request did not observe scan cancellation")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("subnet scan did not return after cancellation")
+	}
+}
+
+func newTestDiscovererForSubnetScan(client *http.Client, concurrency int, ips []net.IP) *Discoverer {
+	return &Discoverer{
+		selfAnno:        &models.Announcement{},
+		discovered:      make(map[string]discoveryEntry),
+		mu:              &sync.RWMutex{},
+		cachedIPs:       ips,
+		ipCacheTime:     time.Now(),
+		scanHTTPClient:  client,
+		scanConcurrency: concurrency,
+	}
+}
 
 // TestReadAndRegister_IPv6Address_CorruptedKey demonstrates the bug at scan.go:150
 // where calling remoteAddr.IP.To4().String() on an IPv6 address returns "<nil>"

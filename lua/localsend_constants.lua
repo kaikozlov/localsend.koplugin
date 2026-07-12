@@ -17,6 +17,7 @@ M.SEND_PID_FILE = "/tmp/localsend_send.pid"
 M.SEND_OUTPUT_FILE = "/tmp/localsend_send.out"
 M.LAST_SEND_EVIDENCE_FILE = "/tmp/localsend_last_send.json"
 M.SCAN_OUTPUT_FILE = "/tmp/localsend_scan.json"
+M.SCAN_LOG_FILE = "/tmp/localsend_scan.log"
 
 -- Diagnostics: nettest (multicast discovery self-test) output
 M.NETTEST_OUTPUT_FILE = "/tmp/localsend_nettest.json"
@@ -34,7 +35,8 @@ M.DEFAULT_SAVE_DIR = "/mnt/us/documents"
 M.WEBRTC_PORT_RANGE = "50000:50100"
 
 -- Scan defaults
-M.SCAN_TIMEOUT_SECONDS = 4
+M.SCAN_TIMEOUT_SECONDS = 4 -- Multicast and WebRTC collection window
+M.LEGACY_SCAN_TIMEOUT_SECONDS = 12 -- Bounded dual-protocol subnet scan deadline
 M.SCAN_MAX_POLL_DURATION = 15 -- Maximum seconds to poll before giving up (guard against hung processes)
 
 -- Update check defaults
