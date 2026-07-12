@@ -8,7 +8,7 @@ import (
 var version = "v1.3.0"
 
 // buildArchTag is injected at build time via -ldflags "-X localsend-cli/cmd.buildArchTag=<arch>"
-// by the release builds (arm_build.sh, .github/workflows/koplugin.yaml) using the same vocabulary
+// by the release builds (justfile `release` recipe, .github/workflows/koplugin.yaml) using the same vocabulary
 // as the KOReader plugin's getDeviceArch() (armv7 / arm64 / arm-legacy). A plain `go build`
 // (no ldflags, e.g. local dev) leaves it empty and effectiveArch() falls back to runtime.GOARCH.
 var buildArchTag = ""

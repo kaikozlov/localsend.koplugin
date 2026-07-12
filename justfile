@@ -21,7 +21,6 @@ image := "ghcr.io/kaikozlov/koplugin-dev:" + koplugin_dev_version
 # Verbosity: quiet by default (failures + summary only). Use V=1 for full output.
 #   just test
 #   V=1 just test
-#   ./test.sh --verbose
 v := env("V", "0")
 
 # SDL dummy driver for headless KOReader
@@ -287,7 +286,7 @@ check:
 build-go:
     {{ run }} sh -c 'cd /opt/plugin && go build -o {{ plugin_name }} ./cmd/...'
 
-# Cross-compile Go for ARM (Kindle/Kobo)
+# Cross-compile Go for ARM (Kindle/Kobo) — quick dev build, no arch tag or packaging
 [group('build')]
 build-go-arm:
     {{ run }} sh -c 'cd /opt/plugin && \
@@ -295,6 +294,83 @@ build-go-arm:
         go build -ldflags="-s -w" -o {{ plugin_name }}-armv7 ./cmd/... && \
         GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
         go build -ldflags="-s -w" -o {{ plugin_name }}-arm64 ./cmd/...'
+
+# Cross-compiles three ARM targets (arm-legacy/armv7/arm64) with buildArchTag
+# injected via ldflags, then packages each binary with the Lua source into a
+# release zip. Mirrors .github/workflows/koplugin.yaml → build/*.zip.
+# Requires host Go (CGO_ENABLED=0 cross-compile) and host `zip`.
+# Usage: just release [-p|--package]   (-p = package only, reuse build/bin)
+# Build & package release zips for all ARM targets (arm-legacy, armv7, arm64).
+[group('build')]
+release *args='':
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    package_only=false
+    for a in {{ args }}; do
+        case "$a" in
+            -p|--package) package_only=true ;;
+            -h|--help)
+                echo "Usage: just release [-p|--package]"
+                echo "  -p, --package  package only (skip compilation, reuse build/bin)"
+                exit 0
+                ;;
+            *) echo "Unknown option: $a" >&2; exit 2 ;;
+        esac
+    done
+
+    build_dir="build"
+    bin_dir="$build_dir/bin"
+    pkg="localsend.koplugin"
+    stage="$build_dir/$pkg"
+
+    if $package_only; then
+        for arch in arm-legacy armv7 arm64; do
+            if [ ! -f "$bin_dir/localsend-$arch" ]; then
+                echo "Error: $bin_dir/localsend-$arch not found — run 'just release' first." >&2
+                exit 1
+            fi
+        done
+        echo "Package-only mode: reusing existing binaries"
+        rm -rf "$stage"
+        rm -f "$build_dir"/*.zip
+    else
+        rm -rf "$build_dir"
+        mkdir -p "$bin_dir"
+    fi
+    mkdir -p "$stage"
+
+    # Stage Lua plugin source (shared by every zip)
+    cp lua/*.lua "$stage/"
+
+    if ! $package_only; then
+        echo "Cross-compiling ARM binaries..."
+        CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 \
+            go build -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=arm-legacy" \
+            -o build/bin/localsend-arm-legacy .
+        CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
+            go build -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=armv7" \
+            -o build/bin/localsend-armv7 .
+        CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+            go build -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=arm64" \
+            -o build/bin/localsend-arm64 .
+    fi
+
+    for arch in arm-legacy armv7 arm64; do
+        echo "Packaging $arch zip..."
+        cp "$bin_dir/localsend-$arch" "$stage/localsend"
+        ( cd "$build_dir" && rm -f "localsend-koplugin-$arch.zip" \
+            && zip -rq "localsend-koplugin-$arch.zip" "$pkg" )
+    done
+
+    rm -rf "$stage"
+
+    echo
+    echo "Done! Release artifacts:"
+    ls -lh "$build_dir"/*.zip
+    echo
+    echo "Binaries:"
+    ls -lh "$bin_dir"/*
 
 # =============================================================================
 # Interactive

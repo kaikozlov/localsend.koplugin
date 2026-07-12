@@ -10,8 +10,8 @@ LocalSend CLI: Go implementation of LocalSend protocol (AirDrop alternative).
 
 ```bash
 go build -o localsend                    # Local build
-./arm_build.sh                           # Cross-compile ARM + package
-./arm_build.sh --package                 # Package only (reuse binaries)
+just release                            # Cross-compile ARM + package release zips
+just release -p                         # Package only (reuse binaries)
 
 # Manual cross-compilation
 GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -ldflags="-s -w" -o localsend  # armv7
@@ -40,8 +40,6 @@ just fmt                # stylua + go fmt in Docker
 just check              # fmt + lint + test in one container (pre-commit)
 just shell              # Interactive container shell
 just                    # List all recipes
-./test.sh               # Quiet Docker wrapper for just test
-./test.sh --verbose     # Verbose Docker wrapper (V=1 just test)
 ```
 
 Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.03_4` — contains real KOReader Linux runtime.

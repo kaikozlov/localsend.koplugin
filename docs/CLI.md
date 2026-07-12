@@ -12,10 +12,10 @@ go build -o localsend
 
 ```bash
 # Full build (compile Go + package into release zips)
-./arm_build.sh
+just release
 
 # Package only (skip Go compilation, reuse existing binaries)
-./arm_build.sh --package
+just release -p
 ```
 
 Or build manually:

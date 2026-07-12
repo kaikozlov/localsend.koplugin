@@ -21,45 +21,16 @@ jobs:
           go-version: "1.26.5"
           cache: true
 
-      - name: Build ARM binaries
+      - name: Install just
         run: |
-          BUILD_DIR="build"
-          BIN_DIR="$BUILD_DIR/bin"
-          PLUGIN_NAME="localsend.koplugin"
-          PLUGIN_SRC="lua"
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+            | bash -s -- --to "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-          mkdir -p "$BIN_DIR"
-          mkdir -p "$BUILD_DIR/$PLUGIN_NAME"
-
-          # Copy plugin source files
-          cp "$PLUGIN_SRC"/*.lua "$BUILD_DIR/$PLUGIN_NAME/"
-
-          # Build for armv5 (soft-float, legacy devices like K3)
-          echo "Building for armv5 (legacy)..."
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 go build -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=arm-legacy" -o "$BIN_DIR/localsend-arm-legacy" .
-
-          # Build for armv7 (32-bit ARM)
-          echo "Building for armv7..."
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=armv7" -o "$BIN_DIR/localsend-armv7" .
-
-          # Build for arm64 (64-bit ARM)
-          echo "Building for arm64..."
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=arm64" -o "$BIN_DIR/localsend-arm64" .
-
-          # Create armv5 zip (legacy)
-          echo "Creating armv5 (legacy) zip..."
-          cp "$BIN_DIR/localsend-arm-legacy" "$BUILD_DIR/$PLUGIN_NAME/localsend"
-          (cd "$BUILD_DIR" && zip -r "localsend-koplugin-arm-legacy.zip" "$PLUGIN_NAME")
-
-          # Create armv7 zip
-          echo "Creating armv7 zip..."
-          cp "$BIN_DIR/localsend-armv7" "$BUILD_DIR/$PLUGIN_NAME/localsend"
-          (cd "$BUILD_DIR" && zip -r "localsend-koplugin-armv7.zip" "$PLUGIN_NAME")
-
-          # Create arm64 zip
-          echo "Creating arm64 zip..."
-          cp "$BIN_DIR/localsend-arm64" "$BUILD_DIR/$PLUGIN_NAME/localsend"
-          (cd "$BUILD_DIR" && zip -r "localsend-koplugin-arm64.zip" "$PLUGIN_NAME")
+      - name: Build release artifacts
+        run: just release
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
