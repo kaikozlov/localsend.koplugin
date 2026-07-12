@@ -30,6 +30,39 @@ GO_CACHE := \
 RUN := docker run --rm $(SDL_ENV) $(MOUNT) $(GO_CACHE) $(IMAGE)
 RUN_IT := docker run --rm -it $(SDL_ENV) $(MOUNT) $(GO_CACHE) $(IMAGE)
 
+# Verbosity: quiet by default (failures + summary only). Use V=1 for full output.
+#   make test
+#   make test V=1
+#   ./test.sh --verbose
+V ?= 0
+ifeq ($(V),1)
+BUSTED_OPTS := --verbose
+GO_TEST_OPTS := -v
+else
+BUSTED_OPTS :=
+GO_TEST_OPTS :=
+endif
+
+# Run busted quietly: KOReader bootstrap/log spam is captured. On success print
+# the summary line; on failure dump the full log. V=1 streams live output.
+define run_busted_quiet
+	@echo "$(1)"
+	@if [ "$(V)" = "1" ]; then \
+		$(2); \
+	else \
+		out=$$(mktemp); \
+		if $(2) >$$out 2>&1; then \
+			grep -E '^[0-9]+ success' $$out || tail -n 3 $$out; \
+			rm -f $$out; \
+		else \
+			echo "$(1) failed — full output:" >&2; \
+			cat $$out >&2; \
+			rm -f $$out; \
+			exit 1; \
+		fi; \
+	fi
+endef
+
 # =============================================================================
 # Setup
 # =============================================================================
@@ -45,33 +78,36 @@ setup: ## Pull the koplugin-dev image and install git hooks
 # =============================================================================
 
 .PHONY: test
-test: test-lua test-go-race test-go-integration ## Run all tests in Docker
+test: test-lua test-go-race test-go-integration ## Run all tests (quiet; V=1 verbose)
 
 .PHONY: test-lua
-test-lua: ## Run Lua tests
-	$(RUN) busted-koreader --verbose \
+test-lua: ## Run Lua tests (quiet; V=1 verbose)
+	$(call run_busted_quiet,Running Lua tests,$(RUN) busted-koreader $(BUSTED_OPTS) \
 		--helper=/opt/koplugin-dev/commonrequire.lua \
-		/opt/plugin/lua/spec/
+		/opt/plugin/lua/spec/)
 
 .PHONY: test-lua-filter
-test-lua-filter: ## Run Lua tests matching FILTER="pattern"
-	@test -n "$(FILTER)" || (echo 'Usage: make test-lua-filter FILTER="pattern"' >&2; exit 2)
-	$(RUN) busted-koreader --verbose \
+test-lua-filter: ## Run Lua tests matching FILTER="pattern" (quiet; V=1 verbose)
+	@test -n "$(FILTER)" || (echo 'Usage: make test-lua-filter FILTER="pattern" [V=1]' >&2; exit 2)
+	$(call run_busted_quiet,Running Lua tests (filter=$(FILTER)),$(RUN) busted-koreader $(BUSTED_OPTS) \
 		--helper=/opt/koplugin-dev/commonrequire.lua \
 		--filter="$(FILTER)" \
-		/opt/plugin/lua/spec/
+		/opt/plugin/lua/spec/)
 
 .PHONY: test-go
-test-go: ## Run Go tests
-	$(RUN) sh -c 'cd /opt/plugin && go test ./... -v -count=1'
+test-go: ## Run Go tests (quiet; V=1 verbose)
+	@echo "Running Go tests..."
+	@$(RUN) sh -c 'cd /opt/plugin && go test ./... $(GO_TEST_OPTS) -count=1'
 
 .PHONY: test-go-race
-test-go-race: ## Run Go tests with race detector
-	$(RUN) sh -c 'cd /opt/plugin && go test ./... -race -v -count=1'
+test-go-race: ## Run Go tests with race detector (quiet; V=1 verbose)
+	@echo "Running Go tests (-race)..."
+	@$(RUN) sh -c 'cd /opt/plugin && go test ./... -race $(GO_TEST_OPTS) -count=1'
 
 .PHONY: test-go-integration
-test-go-integration: ## Run Go integration tests with race detector
-	$(RUN) sh -c 'cd /opt/plugin && go test ./internal/localsend/... -tags=integration -race -v -count=1'
+test-go-integration: ## Run Go integration tests with race detector (quiet; V=1 verbose)
+	@echo "Running Go integration tests..."
+	@$(RUN) sh -c 'cd /opt/plugin && go test ./internal/localsend/... -tags=integration -race $(GO_TEST_OPTS) -count=1'
 
 # =============================================================================
 # Linting

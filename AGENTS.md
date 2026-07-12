@@ -28,7 +28,8 @@ machine-specific toolchains hide bugs.
 
 ```bash
 make setup              # One-time: pull koplugin-dev image
-make test               # All Lua + Go tests in Docker
+make test               # All Lua + Go tests (quiet; failures + summaries)
+make test V=1           # Same, with full busted/go -v output
 make test-lua           # Lua tests via busted-koreader (real KOReader)
 make test-lua-filter FILTER="pattern"  # Focused Lua run in Docker
 make test-go            # Go tests in Docker
@@ -38,7 +39,8 @@ make lint               # luacheck + golangci-lint in Docker
 make fmt                # stylua + go fmt in Docker
 make shell              # Interactive container shell
 make help               # List all targets
-./test.sh               # Docker-only wrapper for make test
+./test.sh               # Quiet Docker wrapper for make test
+./test.sh --verbose     # Verbose Docker wrapper (make test V=1)
 ```
 
 Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.03_4` — contains real KOReader Linux runtime.
