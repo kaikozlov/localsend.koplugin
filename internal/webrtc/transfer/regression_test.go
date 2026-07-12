@@ -12,7 +12,6 @@ import (
 
 	"github.com/google/uuid"
 	"localsend-cli/internal/crypto"
-	"localsend-cli/internal/models"
 	"localsend-cli/internal/webrtc/signaling"
 )
 
@@ -29,7 +28,7 @@ func TestRTCReceiver_WritesOneByteBinaryFrame(t *testing.T) {
 	r.fileWriters["f"] = f
 	r.filePaths["f"] = path
 	r.fileHashers["f"] = sha256.New()
-	r.files = []RTCFileDto{{ID: "f", Size: models.FlexInt(1)}}
+	r.files = []RTCFileDto{{ID: "f", Size: 1}}
 
 	panicked := false
 	func() {

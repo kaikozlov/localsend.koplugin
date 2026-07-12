@@ -91,6 +91,22 @@ func TestFileMeta_OmitsEmptyOptionalFields(t *testing.T) {
 	}
 }
 
+func TestFileMeta_UnmarshalJSON_RejectsFloatSize(t *testing.T) {
+	var meta FileMeta
+	err := json.Unmarshal([]byte(`{"id":"file-123","fileName":"test.txt","size":1024.0,"fileType":"text/plain"}`), &meta)
+	if err == nil {
+		t.Fatal("expected float-encoded size to be rejected")
+	}
+}
+
+func TestFileMeta_UnmarshalJSON_RejectsStringSize(t *testing.T) {
+	var meta FileMeta
+	err := json.Unmarshal([]byte(`{"id":"file-123","fileName":"test.txt","size":"1024","fileType":"text/plain"}`), &meta)
+	if err == nil {
+		t.Fatal("expected string-encoded size to be rejected")
+	}
+}
+
 // =============================================================================
 // GenFileMeta Tests
 // =============================================================================
@@ -146,7 +162,7 @@ func TestGenFileMeta_SetsCorrectSize(t *testing.T) {
 		t.Fatalf("GenFileMeta failed: %v", err)
 	}
 
-	expectedSize := FlexInt(len(content))
+	expectedSize := int64(len(content))
 	if meta.Size != expectedSize {
 		t.Errorf("Size = %d; want %d", meta.Size, expectedSize)
 	}

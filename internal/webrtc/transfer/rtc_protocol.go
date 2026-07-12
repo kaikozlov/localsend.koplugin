@@ -2,8 +2,6 @@ package transfer
 
 import (
 	"encoding/json"
-
-	"localsend-cli/internal/models"
 )
 
 // Official WebRTC protocol message types (different from our simple protocol)
@@ -50,7 +48,7 @@ type RTCFileMetadata struct {
 type RTCFileDto struct {
 	ID       string          `json:"id"`
 	FileName string          `json:"fileName"`
-	Size     models.FlexInt  `json:"size"`
+	Size     int64           `json:"size"`
 	FileType string          `json:"fileType"`
 	SHA256   string          `json:"sha256,omitempty"`
 	Preview  string          `json:"preview,omitempty"`

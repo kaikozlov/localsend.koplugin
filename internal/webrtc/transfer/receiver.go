@@ -1023,7 +1023,7 @@ func (r *RTCReceiver) handleBinaryData(data []byte) {
 	var expectedSize int64 = -1
 	for _, meta := range r.files {
 		if meta.ID == r.currentFileID {
-			expectedSize = meta.Size.Int64()
+			expectedSize = meta.Size
 			break
 		}
 	}
@@ -1078,7 +1078,7 @@ func (r *RTCReceiver) finishCurrentFile() {
 	var expectedSize int64
 	for _, meta := range r.files {
 		if meta.ID == fileID {
-			expectedSize = meta.Size.Int64()
+			expectedSize = meta.Size
 			break
 		}
 	}
@@ -1105,7 +1105,7 @@ func (r *RTCReceiver) finishCurrentFile() {
 			for _, f := range r.files {
 				if f.ID == fileID {
 					expectedChecksum = f.SHA256
-					size = f.Size.Int64()
+					size = f.Size
 					break
 				}
 			}

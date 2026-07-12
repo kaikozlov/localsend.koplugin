@@ -238,7 +238,7 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 	activeReader := &activityReader{r: fileData, lastActivity: &sess.lastActivity}
 
 	writer := io.MultiWriter(file, hasher)
-	expectedSize := expectedMeta.Size.Int64()
+	expectedSize := expectedMeta.Size
 	written, err := io.Copy(writer, io.LimitReader(activeReader, expectedSize+1))
 	if err != nil {
 		return "", lserrors.ErrFileIO
