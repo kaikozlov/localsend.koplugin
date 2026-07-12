@@ -236,6 +236,7 @@ function LocalSend:init()
             Device = Device,
             PluginShare = PluginShare,
             util = util,
+            usleep = ffiutil.usleep,
             logger = logger,
             T = T,
             _ = _,
@@ -375,7 +376,10 @@ end
 -- Instead, we stop on Exit event which is only triggered when KOReader actually closes.
 function LocalSend:onExit()
     if self:isRunning() then
-        self:stopServer()
+        -- On full KOReader teardown the UIManager-driven (async) stop may never
+        -- run its scheduled follow-ups, so stop synchronously to guarantee the
+        -- receiver is dead and the firewall torn down before we exit.
+        self:stopServer({ sync = true })
         logger.dbg("[LocalSend] Server stopped on KOReader exit")
     else
         self:closeFirewall()
@@ -383,8 +387,18 @@ function LocalSend:onExit()
 end
 
 -- Called by PluginLoader when the plugin is disabled or unloaded.
-function LocalSend:stopPlugin()
-    self:onExit()
+-- @param force boolean Passed by PluginLoader:stopPluginInstance(instance, force).
+--   A forced stop kills the receiver synchronously (via onExit) so it is dead
+--   before returning. Normal disable keeps the async path since UIManager is
+--   still running and we don't want to block the UI.
+function LocalSend:stopPlugin(force)
+    if force then
+        self:onExit()
+    elseif self:isRunning() then
+        self:stopServer()
+    else
+        self:closeFirewall()
+    end
 end
 
 -- Dynamic event registration (KOSync pattern)

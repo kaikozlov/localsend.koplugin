@@ -16,6 +16,24 @@ local binary_path = nil
 -- Graceful-stop tuning
 local STOP_POLL_ATTEMPTS = 20 -- 20 * 100ms = 2s
 
+-- Synchronous-stop tuning (used when UIManager-driven polling may not run, e.g.
+-- on KOReader exit or a forced plugin stop). usleep_fn is injected via M.init
+-- (ffi/util.usleep); M._sync_usleep is a test seam to bypass real sleeping.
+local SYNC_STOP_POLL_US = 50 * 1000 -- 50 ms per poll
+local SYNC_STOP_GRACE_POLLS = 20    -- 20 * 50 ms = 1.0 s graceful window
+local SYNC_STOP_KILL_POLLS = 10     -- 10 * 50 ms = 0.5 s after SIGKILL
+
+local usleep_fn
+M._sync_usleep = nil
+
+local function sync_sleep(usec)
+    if M._sync_usleep then
+        M._sync_usleep(usec)
+    elseif usleep_fn then
+        usleep_fn(usec)
+    end
+end
+
 local function readPIDFromFile()
     if not deps.util.pathExists(constants.PID_FILE) then
         return nil
@@ -72,6 +90,7 @@ end
 function M.init(d, paths)
     deps = d
     binary_path = paths.binary_path
+    usleep_fn = d.usleep
 end
 
 -- Check if the server process is running
@@ -388,13 +407,53 @@ function M.start(instance, silent)
     end
 end
 
+-- Synchronously terminate a LocalSend receiver process without relying on
+-- UIManager scheduling. Used on hard teardown (KOReader exit, forced plugin
+-- stop) where scheduled follow-ups may never run. Sends SIGTERM, polls for
+-- exit, then escalates to SIGKILL. Blocks the caller for up to roughly
+-- (SYNC_STOP_GRACE_POLLS + SYNC_STOP_KILL_POLLS) * SYNC_STOP_POLL_US.
+-- @param pid number Process ID to stop (already validated as ours).
+-- @param finalizeStopped function Removes PID file, closes firewall, finishes.
+-- @param finish function(success, message) Reports completion / failure.
+-- @return boolean True if the process was stopped (or already gone).
+local function stopServerSync(pid, finalizeStopped, finish)
+    os.execute(deps.util.shell_escape({ "kill", "-TERM", tostring(pid) }) .. " 2>/dev/null")
+
+    for _ = 1, SYNC_STOP_GRACE_POLLS do
+        if not isProcessAlive(pid) then
+            finalizeStopped()
+            return true
+        end
+        sync_sleep(SYNC_STOP_POLL_US)
+    end
+
+    deps.logger.warn("[LocalSend] Synchronous graceful stop timed out, forcing kill", "pid", pid)
+    os.execute(deps.util.shell_escape({ "kill", "-KILL", tostring(pid) }) .. " 2>/dev/null")
+    for _ = 1, SYNC_STOP_KILL_POLLS do
+        if not isProcessAlive(pid) then
+            finalizeStopped()
+            return true
+        end
+        sync_sleep(SYNC_STOP_POLL_US)
+    end
+
+    if isProcessAlive(pid) then
+        deps.logger.err("[LocalSend] Synchronous stop failed to kill process", "pid", pid)
+        finish(false, deps._("Failed to stop LocalSend process."))
+        return false
+    end
+    finalizeStopped()
+    return true
+end
+
 -- Stop the LocalSend server process gracefully (SIGTERM first, SIGKILL fallback).
 -- @param instance table LocalSend instance
--- @param options table|nil Optional: { callback = function(success, message) }
+-- @param options table|nil Optional: { callback = function(success, message), sync = bool }
 -- @return boolean True if stop operation was initiated
 function M.stopServer(instance, options)
     options = options or {}
     local callback = options.callback
+    local sync = options.sync
     local ServerState = state.ServerState
     local op_id = nextServerOpID()
 
@@ -438,6 +497,12 @@ function M.stopServer(instance, options)
         deps.logger.warn("[LocalSend] PID file points to non-LocalSend process; refusing to kill", "pid", pid)
         finalizeStopped()
         return true
+    end
+
+    if sync then
+        -- Hard teardown (KOReader exit / forced stop): UIManager-driven polling
+        -- may never run, so kill synchronously before returning.
+        return stopServerSync(pid, finalizeStopped, finish)
     end
 
     -- Attempt graceful shutdown first

@@ -109,6 +109,10 @@ type RTCSender struct {
 
 	// Custom STUN servers (if empty, uses DefaultSTUNServers)
 	stunServers []string
+
+	// sendOpsOverride is a test seam for SendFiles' data-channel operations.
+	// When nil, SendFiles uses s.peer.
+	sendOpsOverride sendOps
 }
 
 // NewRTCSender creates a new WebRTC sender.
@@ -692,21 +696,38 @@ func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []b
 	}
 }
 
-// SendFiles sends all accepted files.
-func (s *RTCSender) SendFiles() error {
-	// Get buffer from pool (reuse for all files to reduce GC)
-	bufPtr := chunkPool.Get().(*[]byte)
-	defer chunkPool.Put(bufPtr)
-	buf := *bufPtr
+// sendOps abstracts the data-channel send operations used by SendFiles. The real
+// *PeerConnection satisfies it; tests may substitute a recording fake via
+// RTCSender.sendOpsOverride.
+type sendOps interface {
+	SendJSON(v interface{}) error
+	Send(data []byte) error
+	SendDelimiter() error
+	WaitBufferEmptyWithTimeout(timeout time.Duration) error
+}
 
-	headerAlreadySent := false
-	for index, id := range s.acceptedIDs {
+// sendable is a file that has both a receiver-supplied token and local metadata,
+// queued for sending by SendFiles.
+type sendable struct {
+	id    string
+	token string
+	file  *FileMeta
+}
+
+// prepareSendQueue filters acceptedIDs down to files we can actually send: the
+// id must have a token from the receiver AND a local FileMeta. Filtering up front
+// (mirroring the official web client, which filters fileDtoList to the accepted
+// tokens before sending) keeps the pipelined send loop free of skip paths, so a
+// pre-announced "next header" can never be left dangling for a file we skip.
+// See docs/localsend_protocol_v3.md §C.3.
+func (s *RTCSender) prepareSendQueue() []sendable {
+	queue := make([]sendable, 0, len(s.acceptedIDs))
+	for _, id := range s.acceptedIDs {
 		token, ok := s.fileTokens[id]
 		if !ok {
+			slog.Warn("Skipping accepted file with no token", "id", id)
 			continue
 		}
-
-		// Find file
 		var file *FileMeta
 		for i := range s.files {
 			if s.files[i].ID == id {
@@ -715,8 +736,41 @@ func (s *RTCSender) SendFiles() error {
 			}
 		}
 		if file == nil {
+			slog.Warn("Skipping accepted file with no local metadata", "id", id)
 			continue
 		}
+		queue = append(queue, sendable{id: id, token: token, file: file})
+	}
+	return queue
+}
+
+// SendFiles sends all accepted files using the pipelined official protocol:
+// each file's header precedes its data, and the next file's header is
+// pre-announced before waiting for the current file's acknowledgement (matching
+// the official web client). The send queue is pre-filtered by prepareSendQueue
+// so the loop never skips an entry, which keeps the pipelining desync-free even
+// when the receiver accepts an id with no local file.
+func (s *RTCSender) SendFiles() error {
+	if s.peer == nil && s.sendOpsOverride == nil {
+		return fmt.Errorf("data channel not initialized")
+	}
+	var ops sendOps = s.peer
+	if s.sendOpsOverride != nil {
+		ops = s.sendOpsOverride
+	}
+
+	queue := s.prepareSendQueue()
+
+	// Get buffer from pool (reuse for all files to reduce GC)
+	bufPtr := chunkPool.Get().(*[]byte)
+	defer chunkPool.Put(bufPtr)
+	buf := *bufPtr
+
+	headerAlreadySent := false
+	for index, item := range queue {
+		id := item.id
+		token := item.token
+		file := item.file
 
 		slog.Info("Sending file", "id", id, "name", file.FileName)
 
@@ -729,7 +783,7 @@ func (s *RTCSender) SendFiles() error {
 		// Send file header
 		if !headerAlreadySent {
 			header := RTCSendFileHeader{ID: id, Token: token}
-			if err := s.peer.SendJSON(header); err != nil {
+			if err := ops.SendJSON(header); err != nil {
 				_ = f.Close()
 				return fmt.Errorf("failed to send file header: %w", err)
 			}
@@ -747,21 +801,21 @@ func (s *RTCSender) SendFiles() error {
 				return fmt.Errorf("failed to read file: %w", err)
 			}
 
-			if err := s.peer.Send(buf[:n]); err != nil {
+			if err := ops.Send(buf[:n]); err != nil {
 				_ = f.Close()
 				return fmt.Errorf("failed to send data: %w", err)
 			}
 		}
 		_ = f.Close()
 
-		if index+1 < len(s.acceptedIDs) {
-			nextID := s.acceptedIDs[index+1]
-			nextHeader := RTCSendFileHeader{ID: nextID, Token: s.fileTokens[nextID]}
-			if err := s.peer.SendJSON(nextHeader); err != nil {
+		if index+1 < len(queue) {
+			next := queue[index+1]
+			nextHeader := RTCSendFileHeader{ID: next.id, Token: next.token}
+			if err := ops.SendJSON(nextHeader); err != nil {
 				return fmt.Errorf("failed to send next file header: %w", err)
 			}
 			headerAlreadySent = true
-		} else if err := s.peer.SendDelimiter(); err != nil {
+		} else if err := ops.SendDelimiter(); err != nil {
 			return fmt.Errorf("failed to send final delimiter: %w", err)
 		}
 
@@ -787,7 +841,7 @@ func (s *RTCSender) SendFiles() error {
 	// Wait for buffer to actually flush instead of fixed sleep
 	// This is critical per protocol spec to ensure all data is delivered
 	slog.Info("Waiting for buffer to flush...")
-	if err := s.peer.WaitBufferEmptyWithTimeout(bufferFlushTimeout); err != nil {
+	if err := ops.WaitBufferEmptyWithTimeout(bufferFlushTimeout); err != nil {
 		slog.Warn("Timeout waiting for buffer flush, continuing anyway", "error", err)
 		// Don't return error - allow graceful degradation
 	}

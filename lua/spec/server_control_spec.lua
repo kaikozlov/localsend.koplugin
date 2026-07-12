@@ -272,6 +272,91 @@ describe("Server Control", function()
         end)
     end)
 
+    describe("stopServer (synchronous teardown)", function()
+        local lsserver
+        local orig_sync_usleep
+        local st = {} -- shared mutable state for process-alive toggling
+
+        setup(function()
+            lsserver = require("localsend_server")
+            orig_sync_usleep = lsserver._sync_usleep
+        end)
+
+        after_each(function()
+            lsserver._sync_usleep = orig_sync_usleep
+        end)
+
+        before_each(function()
+            helper.before_each()
+            -- Don't really sleep during the synchronous poll loops.
+            lsserver._sync_usleep = function() end
+            st.dead = false
+        end)
+
+        local function mockLocalSendPid()
+            util.pathExists = function(path)
+                if path == "/tmp/localsend_koreader.pid" then return true end
+                if path == "/proc/12345" then return not st.dead end
+                return orig_pathExists(path)
+            end
+            util.readFromFile = function(path)
+                if path == "/tmp/localsend_koreader.pid" then return "12345" end
+                if path == "/proc/12345/cmdline" then return "/opt/localsend\0recv\0" end
+                return orig_readFromFile(path)
+            end
+        end
+
+        it("sends SIGTERM and finalizes when the process exits promptly", function()
+            mockLocalSendPid()
+
+            local sent = {}
+            local original_execute = os.execute
+            os.execute = function(cmd)
+                if cmd:match("'%-TERM'") then
+                    sent.term = true
+                    st.dead = true -- process exits after SIGTERM
+                elseif cmd:match("'%-KILL'") then
+                    sent.kill = true
+                end
+                return 0
+            end
+
+            local instance = helper.create_instance()
+            local ok = instance:stopServer({ sync = true })
+
+            os.execute = original_execute
+
+            assert.is_true(ok, "stopServer should return true on prompt exit")
+            assert.is_true(sent.term, "should send SIGTERM first")
+            assert.is_nil(sent.kill, "should NOT escalate to SIGKILL on prompt exit")
+        end)
+
+        it("escalates to SIGKILL when the process refuses to exit", function()
+            mockLocalSendPid()
+
+            local sent = {}
+            local original_execute = os.execute
+            os.execute = function(cmd)
+                if cmd:match("'%-TERM'") then
+                    sent.term = true -- ignored: process stays alive
+                elseif cmd:match("'%-KILL'") then
+                    sent.kill = true
+                    st.dead = true
+                end
+                return 0
+            end
+
+            local instance = helper.create_instance()
+            local ok = instance:stopServer({ sync = true })
+
+            os.execute = original_execute
+
+            assert.is_true(ok, "stopServer should return true after SIGKILL")
+            assert.is_true(sent.term, "should send SIGTERM first")
+            assert.is_true(sent.kill, "should escalate to SIGKILL when SIGTERM is ignored")
+        end)
+    end)
+
     describe("stop_in_progress flag", function()
         it("should block start() while stop is in progress", function()
             local instance, LocalSend = helper.create_instance()

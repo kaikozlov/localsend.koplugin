@@ -227,3 +227,148 @@ func TestRTCReceiver_ExpiredBlockedPeersAreCleanedGlobally(t *testing.T) {
 		t.Fatalf("retained %d expired blocked peers", got)
 	}
 }
+
+// recordingSendOps records the wire sequence produced by SendFiles and
+// auto-acknowledges each file (by header id) when the next header or the final
+// delimiter is sent, mirroring a cooperative receiver. Single-goroutine use.
+type recordingSendOps struct {
+	events  []string // trace entries: "header:<id>", "data:<id>:<n>", "delimiter"
+	current string   // id of the file whose data is currently being received
+	results chan RTCSendFileResponse
+}
+
+func (r *recordingSendOps) SendJSON(v interface{}) error {
+	header, ok := v.(RTCSendFileHeader)
+	if !ok {
+		return nil
+	}
+	// A new header means the previous file's data is complete: ack it.
+	r.ackCurrent()
+	r.current = header.ID
+	r.events = append(r.events, "header:"+header.ID)
+	return nil
+}
+
+func (r *recordingSendOps) Send(data []byte) error {
+	r.events = append(r.events, fmt.Sprintf("data:%s:%d", r.current, len(data)))
+	return nil
+}
+
+func (r *recordingSendOps) SendDelimiter() error {
+	r.ackCurrent()
+	r.events = append(r.events, "delimiter")
+	return nil
+}
+
+func (r *recordingSendOps) WaitBufferEmptyWithTimeout(time.Duration) error { return nil }
+
+func (r *recordingSendOps) ackCurrent() {
+	if r.current == "" {
+		return
+	}
+	r.results <- RTCSendFileResponse{ID: r.current, Success: true}
+	r.current = ""
+}
+
+func writeSendFile(t *testing.T, path, content string) string {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
+}
+
+func hasEventPrefix(events []string, prefix string) bool {
+	for _, e := range events {
+		if strings.HasPrefix(e, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func countExactEvent(events []string, want string) int {
+	n := 0
+	for _, e := range events {
+		if e == want {
+			n++
+		}
+	}
+	return n
+}
+
+// TestRTCSender_PrepareSendQueue_FiltersMissingTokenAndMissingLocalFile
+// verifies the pre-filter that makes SendFiles' pipelining safe: an accepted id
+// is only queued when it has both a receiver token and a local FileMeta, and the
+// acceptance order is preserved.
+func TestRTCSender_PrepareSendQueue_FiltersMissingTokenAndMissingLocalFile(t *testing.T) {
+	s := NewRTCSender(nil, nil, "")
+	s.files = []FileMeta{
+		{ID: "A", FileName: "a", FilePath: "a"},
+		{ID: "C", FileName: "c", FilePath: "c"},
+	}
+	// B has a token but no local file; D has neither token nor file.
+	s.fileTokens = map[string]string{"A": "ta", "B": "tb", "C": "tc"}
+	s.acceptedIDs = []string{"A", "B", "C", "D"}
+
+	queue := s.prepareSendQueue()
+
+	if len(queue) != 2 {
+		t.Fatalf("queue length = %d, want 2 (A and C only)", len(queue))
+	}
+	if queue[0].id != "A" || queue[1].id != "C" {
+		t.Fatalf("queue order = %s, %s; want A then C", queue[0].id, queue[1].id)
+	}
+	if queue[0].token != "ta" || queue[1].token != "tc" {
+		t.Fatalf("queue tokens = %q, %q; want ta, tc", queue[0].token, queue[1].token)
+	}
+}
+
+// TestRTCSender_SendFiles_PreFiltersAcceptedIDsWithNoLocalFile is the regression
+// test for the pipelined header desync. The receiver accepted an id ("B") that
+// has no local FileMeta. On the old code the loop pre-announced B's header, then
+// `continue`d past B leaving headerAlreadySent set, so C's data was sent under
+// B's header. With the pre-filter, B is dropped up front and the wire trace
+// contains exactly headers [A, C] with each file's data under its own header.
+func TestRTCSender_SendFiles_PreFiltersAcceptedIDsWithNoLocalFile(t *testing.T) {
+	dir := t.TempDir()
+	pathA := writeSendFile(t, filepath.Join(dir, "a.txt"), "hello-A")
+	pathC := writeSendFile(t, filepath.Join(dir, "c.txt"), "hello-C")
+
+	s := NewRTCSender(nil, nil, "")
+	s.files = []FileMeta{
+		{ID: "A", FileName: "a.txt", FilePath: pathA, Size: int64(len("hello-A"))},
+		{ID: "C", FileName: "c.txt", FilePath: pathC, Size: int64(len("hello-C"))},
+	}
+	s.fileTokens = map[string]string{"A": "ta", "B": "tb", "C": "tc"}
+	s.acceptedIDs = []string{"A", "B", "C"}
+
+	rec := &recordingSendOps{results: s.fileResults}
+	s.sendOpsOverride = rec
+
+	if err := s.SendFiles(); err != nil {
+		t.Fatalf("SendFiles returned error: %v", err)
+	}
+
+	var headers []string
+	for _, e := range rec.events {
+		if strings.HasPrefix(e, "header:") {
+			headers = append(headers, strings.TrimPrefix(e, "header:"))
+		}
+	}
+	if fmt.Sprint(headers) != "[A C]" {
+		t.Fatalf("headers sent = %v, want [A C] (B must be filtered before sending)", headers)
+	}
+
+	// C's data must be recorded under C, never attributed to the skipped B.
+	if !hasEventPrefix(rec.events, "data:C:") {
+		t.Fatalf("expected a data event for C; trace=%v", rec.events)
+	}
+	if hasEventPrefix(rec.events, "data:B:") {
+		t.Fatalf("data must not be attributed to skipped B (header desync); trace=%v", rec.events)
+	}
+
+	if countExactEvent(rec.events, "delimiter") != 1 {
+		t.Fatalf("expected exactly one final delimiter; trace=%v", rec.events)
+	}
+}
