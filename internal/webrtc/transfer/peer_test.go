@@ -5,6 +5,18 @@ import (
 	"testing"
 )
 
+func TestNewPeerConnection_CreatesPeerWithDefaultConfiguration(t *testing.T) {
+	peer, err := NewPeerConnection(PeerConfig{})
+	if err != nil {
+		t.Fatalf("NewPeerConnection() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := peer.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+}
+
 // TestPeerConnection_CallbackSettersRace verifies that callback setters are thread-safe.
 // The race detector should not find any races when setting and reading callbacks concurrently.
 func TestPeerConnection_CallbackSettersRace(t *testing.T) {
