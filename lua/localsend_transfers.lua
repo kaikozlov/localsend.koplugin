@@ -148,6 +148,9 @@ function M.checkSentinelFile(instance)
 
     if not instance:isRunning() then
         -- Server died unexpectedly - clean up state so UI reflects reality
+        if state.recordLifecycle then
+            state.recordLifecycle("server_died_unexpectedly")
+        end
         instance:_cleanupServerState()
         deps.logger.dbg("[LocalSend] Server died, cleaned up state")
         return

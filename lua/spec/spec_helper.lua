@@ -326,6 +326,7 @@ function M.reset_localsend_state()
     s.send_cancelled = false
     s.server_op_id = 0
     s.stop_in_progress = false
+    s.lifecycle_events = {}
     -- Fields the reset above missed. telemetry_cleaned gates a once-per-session
     -- init in main.lua; without clearing it the first spec to flip it sticks it
     -- on for the rest of the suite. last_send / scan_start_time are set at

@@ -115,9 +115,9 @@ local function commandOutput(args)
     return nil
 end
 
-local function probeLocalAPI(instance)
+local function probeLocalAPI(instance, host)
     local scheme = instance.use_https and "https" or "http"
-    local url = scheme .. "://127.0.0.1:" .. tostring(instance.port) .. "/api/localsend/v1/info"
+    local url = scheme .. "://" .. (host or "127.0.0.1") .. ":" .. tostring(instance.port) .. "/api/localsend/v1/info"
     local args = { "curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "--connect-timeout", "1", "--max-time", "1" }
     if instance.use_https then
         table.insert(args, "-k")
@@ -137,6 +137,124 @@ local function probeLocalAPI(instance)
         return "failed (connection error)"
     end
     return "HTTP " .. output
+end
+
+local function redactNetworkInfo(value)
+    value = tostring(value or "unavailable")
+    value = value:gsub("MAC:%s*[^\n]+", "MAC: [redacted]")
+    value = value:gsub('SSID:%s*"[^\n]*"', 'SSID: "[redacted]"')
+    return value
+end
+
+local function extractIPv4s(value)
+    local seen, ips = {}, {}
+    for line in tostring(value or ""):gmatch("[^\n]+") do
+        local ip = line:match("IPv4:%s*(%d+%.%d+%.%d+%.%d+)")
+        if ip and ip ~= "127.0.0.1" and not seen[ip] then
+            seen[ip] = true
+            table.insert(ips, ip)
+        end
+    end
+    -- Some older device backends return a compact, unlabeled string.
+    if #ips == 0 then
+        local ip = tostring(value or ""):match("(%d+%.%d+%.%d+%.%d+)")
+        if ip and ip ~= "127.0.0.1" and not seen[ip] then
+            seen[ip] = true
+            table.insert(ips, ip)
+        end
+    end
+    return ips
+end
+
+local function probeLANAPIs(instance, network_info)
+    local results = {}
+    for _, ip in ipairs(extractIPv4s(network_info)) do
+        table.insert(results, { ip = ip, detail = probeLocalAPI(instance, ip) })
+    end
+    return results
+end
+
+local function sanitizeCmdline(value)
+    local parts = {}
+    local redact_next = false
+    for part in tostring(value or ""):gmatch("[^%z%s]+") do
+        if redact_next then
+            table.insert(parts, "[redacted]")
+            redact_next = false
+        else
+            table.insert(parts, part)
+            if part == "-p" or part == "--pin" then
+                redact_next = true
+            end
+        end
+    end
+    return table.concat(parts, " ")
+end
+
+local function receiverProcessStatus()
+    local pid = tonumber(readFirstLine(constants.PID_FILE) or "")
+    if not pid then
+        return { running = false, detail = "no receiver PID" }
+    end
+    local proc_path = "/proc/" .. tostring(pid)
+    if not deps.util.pathExists(proc_path) then
+        return { running = false, pid = pid, detail = "stale receiver PID" }
+    end
+    return {
+        running = true,
+        pid = pid,
+        detail = sanitizeCmdline(readFile(proc_path .. "/cmdline") or "unavailable"),
+    }
+end
+
+local function listenerStatus(instance)
+    local port = tonumber(instance.port)
+    if not port then
+        return { ok = false, detail = "invalid port" }
+    end
+    local port_hex = string.format("%04X", port)
+    local found, scopes = false, {}
+    for _, item in ipairs({ { "/proc/net/tcp", "tcp" }, { "/proc/net/tcp6", "tcp6" }, { "/proc/net/udp", "udp" }, { "/proc/net/udp6", "udp6" } }) do
+        local content = readFile(item[1]) or ""
+        for line in content:gmatch("[^\n]+") do
+            local address, state = line:match("%s[%dA-Fa-f]+:%s*([%dA-Fa-f]+):" .. port_hex .. "%s+[%dA-Fa-f]+:[%dA-Fa-f]+%s+(%x%x)")
+            if address and ((item[2]:match("^tcp") and state == "0A") or item[2]:match("^udp")) then
+                found = true
+                local scope = address:match("^0+$") and "all interfaces" or (address == "0100007F" and "loopback only" or "specific interface")
+                table.insert(scopes, item[2] .. ": " .. scope)
+            end
+        end
+    end
+    return { ok = found, detail = found and table.concat(scopes, ", ") or "no TCP/UDP listener found in /proc/net" }
+end
+
+local function captureEvidence()
+    local crash_path = (paths.data_dir or "KOReader data directory") .. "/crash.log"
+    return {
+        captured_at = os.date("%Y-%m-%dT%H:%M:%S%z"),
+        backend = readTail(constants.SERVER_OUTPUT_FILE, REPORT_TAIL_BYTES),
+        send = readTail(constants.SEND_OUTPUT_FILE, REPORT_TAIL_BYTES),
+        transfers = readTail(constants.TRANSFER_LOG_FILE, REPORT_TAIL_BYTES),
+        crash = readTail(crash_path, REPORT_TAIL_BYTES),
+        crash_path = crash_path,
+        lifecycle = readTail(constants.LIFECYCLE_LOG_FILE, REPORT_TAIL_BYTES),
+    }
+end
+
+local function lastSendEvidence()
+    local current = serverState() and serverState().last_send or nil
+    if current then
+        return current
+    end
+    if not deps.json or not deps.json.decode then
+        return nil
+    end
+    local content = readFile(constants.LAST_SEND_EVIDENCE_FILE)
+    if not content or content == "" then
+        return nil
+    end
+    local ok, value = pcall(deps.json.decode, content)
+    return ok and type(value) == "table" and value or nil
 end
 
 local function stopDiagnosticServer(instance)
@@ -447,11 +565,11 @@ local function checksFromReport(instance, report)
     if report.firewall and not report.firewall.managed then
         table.insert(checks, { info = true, label = deps._("Firewall"), detail = report.firewall.detail })
     elseif report.firewall and report.firewall.ok then
-        table.insert(checks, { ok = true, label = deps._("Firewall self-test"), detail = report.firewall.detail })
+        table.insert(checks, { ok = true, label = deps._("Firewall rules"), detail = report.firewall.detail })
     else
         table.insert(checks, {
             ok = false,
-            label = deps._("Firewall self-test"),
+            label = deps._("Firewall rules"),
             detail = report.firewall and report.firewall.detail or deps._("unknown"),
             hint = deps.T(deps._("The plugin could not open its firewall rules for port %1."), tostring(instance.port)),
         })
@@ -469,11 +587,17 @@ local function checksFromReport(instance, report)
         end
     end
 
-    local ls = serverState() and serverState().last_send or nil
+    local ls = report.last_send or lastSendEvidence()
     if ls then
         local age = os.time() - (ls.time or 0)
         local age_str = age < 60 and deps._("just now") or deps.T(deps._("%1 min ago"), math.floor(age / 60))
-        if ls.success then
+        if ls.status == "in_progress" or ls.status == "awaiting_pin" then
+            table.insert(checks, {
+                info = true,
+                label = deps._("Last send"),
+                detail = (ls.message or ls.status) .. "  (" .. age_str .. ")",
+            })
+        elseif ls.success then
             table.insert(checks, {
                 ok = true,
                 label = deps._("Last send"),
@@ -532,6 +656,7 @@ end
 
 function M.collect(instance, options)
     options = options or {}
+    local evidence = options.evidence or captureEvidence()
     local binary = binaryStatus(instance)
     local server_probe = options.server_probe or activeServerProbe(instance)
     local firewall_probe = options.firewall_probe or firewallProbe(instance)
@@ -542,14 +667,44 @@ function M.collect(instance, options)
         return nil
     end, nil)
 
+    local last_send = lastSendEvidence()
+    local send_log = evidence.send
+    if (not send_log or send_log == "") and last_send and last_send.raw_output and last_send.raw_output ~= "" then
+        send_log = last_send.raw_output
+    end
+
     return {
         generated_at = os.date("%Y-%m-%d %H:%M:%S"),
+        generated_timezone = os.date("%z"),
         generated_unix = os.time(),
         plugin_version = paths.plugin_version or "unknown",
         arch = instance.getDeviceArch and (instance:getDeviceArch() or "unknown") or "unknown",
         device_info = safeCall(function()
             return deps.Device and deps.Device.info and deps.Device:info() or "unknown"
         end, "unknown"),
+        platform = safeCall(function()
+            if deps.Device:isKindle() then
+                return "Kindle"
+            elseif deps.Device.isKobo and deps.Device:isKobo() then
+                return "Kobo"
+            elseif deps.Device.isRemarkable and deps.Device:isRemarkable() then
+                return "reMarkable"
+            elseif deps.Device.isPocketBook and deps.Device:isPocketBook() then
+                return "PocketBook"
+            elseif deps.Device.isAndroid and deps.Device:isAndroid() then
+                return "Android"
+            end
+            return "other"
+        end, "unknown"),
+        firmware = deps.Device and deps.Device.firmware_rev or nil,
+        koreader_version = safeCall(function()
+            return deps.Version and deps.Version:getCurrentRevision() or "unknown"
+        end, "unknown"),
+        kernel = commandOutput({ "uname", "-r" }) or "unknown",
+        runtime_arch = commandOutput({ "uname", "-m" }) or "unknown",
+        recovery_mode = instance.recovery_mode == true,
+        reinstall_required = instance.reinstall_required == true,
+        module_load_errors = instance.module_load_errors or {},
         plugin_path = paths.plugin_path or "unknown",
         binary_path = paths.binary_path or "unknown",
         binary_exists = binary.exists,
@@ -559,7 +714,7 @@ function M.collect(instance, options)
         arch_mismatch = binary.mismatch,
         network_connected = networkFlag("isConnected"),
         network_online = networkFlag("isOnline"),
-        network_info = network_info,
+        network_info = redactNetworkInfo(network_info),
         settings = {
             port = instance.port,
             save_dir = instance.save_dir,
@@ -579,17 +734,23 @@ function M.collect(instance, options)
         },
         server = {
             self_test = server_probe,
-            probe_log_path = DIAG_SERVER_OUTPUT_FILE,
             backend_log_path = constants.SERVER_OUTPUT_FILE,
             transfer_log_path = constants.TRANSFER_LOG_FILE,
+            process = server_probe.process or receiverProcessStatus(),
+            listeners = server_probe.listeners or listenerStatus(instance),
         },
         firewall = firewall_probe,
+        discovery = M._last_discovery_result,
+        last_send = last_send,
         logs = {
-            backend = readTail(constants.SERVER_OUTPUT_FILE, REPORT_TAIL_BYTES),
-            diagnostic_server = readTail(DIAG_SERVER_OUTPUT_FILE, REPORT_TAIL_BYTES),
-            send = readTail(constants.SEND_OUTPUT_FILE, REPORT_TAIL_BYTES),
-            transfers = readTail(constants.TRANSFER_LOG_FILE, REPORT_TAIL_BYTES),
-            crash_log_path = (paths.data_dir or "KOReader data directory") .. "/crash.log",
+            captured_at = evidence.captured_at,
+            backend_before_check = evidence.backend,
+            backend_after_check = readTail(constants.SERVER_OUTPUT_FILE, REPORT_TAIL_BYTES),
+            send = send_log,
+            transfers = evidence.transfers,
+            lifecycle = evidence.lifecycle or readTail(constants.LIFECYCLE_LOG_FILE, REPORT_TAIL_BYTES),
+            crash = evidence.crash,
+            crash_log_path = evidence.crash_path,
         },
     }
 end
@@ -601,9 +762,10 @@ function M.collectAsync(instance, callback)
     end
 
     local was_running = instance.isRunning and instance:isRunning() or false
+    local evidence = captureEvidence()
 
     local function finish(server_probe, firewall_probe)
-        callback(M.collect(instance, { server_probe = server_probe, firewall_probe = firewall_probe }))
+        callback(M.collect(instance, { server_probe = server_probe, firewall_probe = firewall_probe, evidence = evidence }))
     end
 
     local function firewallStatus()
@@ -640,7 +802,17 @@ function M.collectAsync(instance, callback)
             local probe = probeLocalAPI(instance)
             local code = probe and probe:match("^HTTP (%d+)")
             if code and code:sub(1, 1) == "2" then
-                local server_probe = { ok = true, detail = probe, log_path = constants.SERVER_OUTPUT_FILE }
+                local network_info = safeCall(function()
+                    return deps.Device and deps.Device.retrieveNetworkInfo and deps.Device:retrieveNetworkInfo() or nil
+                end, nil)
+                local server_probe = {
+                    ok = true,
+                    detail = probe,
+                    log_path = constants.SERVER_OUTPUT_FILE,
+                    lan_probes = probeLANAPIs(instance, network_info),
+                    process = receiverProcessStatus(),
+                    listeners = listenerStatus(instance),
+                }
                 local firewall_probe = firewallStatus()
                 if was_running then
                     -- The freshly started receiver is the restored receiver.
@@ -715,13 +887,29 @@ end
 function M.formatReport(report)
     local lines = {}
     table.insert(lines, "LocalSend Diagnostics")
-    table.insert(lines, "Generated: " .. report.generated_at)
+    table.insert(lines, "Generated: " .. report.generated_at .. " " .. tostring(report.generated_timezone or ""))
+
+    addSection(lines, "Reproduction details (fill in before posting)")
+    table.insert(lines, "What happened: ")
+    table.insert(lines, "Expected result: ")
+    table.insert(lines, "Steps to reproduce: ")
+    table.insert(lines, "Transfer direction: to / from e-reader")
+    table.insert(lines, "Sender app and release: ")
+    table.insert(lines, "File/folder type and approximate size: ")
+    table.insert(lines, "Did either device sleep or disconnect? ")
+    table.insert(lines, "Network setup (guest Wi-Fi, VLAN, repeater): ")
 
     addSection(lines, "Summary")
     table.insert(lines, formatCheckSummary(report.checks or {}))
 
     addSection(lines, "Plugin")
     table.insert(lines, "Version: " .. tostring(report.plugin_version))
+    table.insert(lines, "KOReader revision: " .. tostring(report.koreader_version or "unknown"))
+    table.insert(lines, "Platform: " .. tostring(report.platform or "unknown"))
+    table.insert(lines, "Device: " .. tostring(report.device_info))
+    table.insert(lines, "Firmware: " .. tostring(report.firmware or "not exposed by KOReader"))
+    table.insert(lines, "Kernel: " .. tostring(report.kernel or "unknown"))
+    table.insert(lines, "Runtime architecture: " .. tostring(report.runtime_arch or "unknown"))
     table.insert(lines, "Architecture: " .. tostring(report.arch))
     table.insert(lines, "Plugin path: " .. tostring(report.plugin_path))
     table.insert(lines, "Binary path: " .. tostring(report.binary_path))
@@ -743,13 +931,20 @@ function M.formatReport(report)
                 .. "). Install the matching package for this device."
         )
     end
-    table.insert(lines, "Device: " .. tostring(report.device_info))
+    table.insert(lines, "Recovery mode: " .. boolLabel(report.recovery_mode))
+    table.insert(lines, "Reinstall required: " .. boolLabel(report.reinstall_required))
+    if report.module_load_errors and #report.module_load_errors > 0 then
+        table.insert(lines, "Module load errors: " .. table.concat(report.module_load_errors, "; "))
+    else
+        table.insert(lines, "Module load errors: none")
+    end
 
     addSection(lines, "Network")
     table.insert(lines, statusLabel(report.network_connected, "LAN connected"))
     table.insert(lines, statusLabel(report.network_online, "Internet reachable"))
     table.insert(lines, "Network info:")
     table.insert(lines, tostring(report.network_info or "unavailable"))
+    table.insert(lines, "  SSID and MAC address are redacted in this public report.")
     table.insert(lines, "Discovery tip: if other apps can't find this device, also check the")
     table.insert(lines, "  sender's firewall (port " .. tostring(report.settings.port) .. " TCP+UDP) and Local Network permission.")
 
@@ -770,11 +965,21 @@ function M.formatReport(report)
     table.insert(lines, "Routing rules: " .. formatRoutes(report.settings.routing_rules))
     table.insert(lines, "Autostart: " .. boolLabel(report.settings.autostart))
 
-    addSection(lines, "Server self-test")
-    table.insert(lines, statusLabel(report.server.self_test and report.server.self_test.ok, "Temporary server starts and local API responds"))
+    addSection(lines, "Receiver lifecycle test")
+    table.insert(lines, statusLabel(report.server.self_test and report.server.self_test.ok, "Real receiver starts and local API responds"))
     table.insert(lines, "Result: " .. tostring(report.server.self_test and report.server.self_test.detail or "unknown"))
-    table.insert(lines, "Diagnostic server log: " .. tostring(report.server.probe_log_path))
-    table.insert(lines, "Previous backend log: " .. tostring(report.server.backend_log_path))
+    local lan_probes = report.server.self_test and report.server.self_test.lan_probes or {}
+    if #lan_probes == 0 then
+        table.insert(lines, "LAN address probes: no non-loopback IPv4 address found")
+    else
+        for _, probe in ipairs(lan_probes) do
+            table.insert(lines, "LAN address probe " .. tostring(probe.ip) .. ": " .. tostring(probe.detail))
+        end
+    end
+    table.insert(lines, "Receiver process: " .. tostring(report.server.process and report.server.process.detail or "unknown"))
+    table.insert(lines, "Receiver PID: " .. tostring(report.server.process and report.server.process.pid or "none"))
+    table.insert(lines, "Listeners: " .. tostring(report.server.listeners and report.server.listeners.detail or "unknown"))
+    table.insert(lines, "Backend log: " .. tostring(report.server.backend_log_path))
     table.insert(lines, "Transfer log: " .. tostring(report.server.transfer_log_path))
 
     addSection(lines, "Firewall")
@@ -782,16 +987,17 @@ function M.formatReport(report)
         lines,
         statusLabel(
             report.firewall and report.firewall.ok,
-            report.firewall and report.firewall.managed and "iptables open/verify/close self-test" or "Plugin-managed firewall"
+            report.firewall and report.firewall.managed and "Firewall rules installed by receiver" or "Plugin-managed firewall"
         )
     )
     table.insert(lines, "Result: " .. tostring(report.firewall and report.firewall.detail or "unknown"))
 
-    addSection(lines, "Recent backend log")
-    table.insert(lines, report.logs.backend or "No backend log found.")
+    addSection(lines, "Backend log before troubleshooting")
+    table.insert(lines, "Captured: " .. tostring(report.logs.captured_at or "unknown"))
+    table.insert(lines, report.logs.backend_before_check or "No pre-check backend log found.")
 
-    addSection(lines, "Recent diagnostic server self-test log")
-    table.insert(lines, report.logs.diagnostic_server or "No diagnostic server self-test log found.")
+    addSection(lines, "Lifecycle test backend log")
+    table.insert(lines, report.logs.backend_after_check or "No lifecycle-test backend log found.")
 
     addSection(lines, "Recent send log")
     table.insert(lines, report.logs.send or "No send log found.")
@@ -799,11 +1005,47 @@ function M.formatReport(report)
     addSection(lines, "Recent transfer log")
     table.insert(lines, report.logs.transfers or "No transfer log found.")
 
+    addSection(lines, "Last plugin send")
+    if report.last_send then
+        table.insert(lines, "Time: " .. os.date("%Y-%m-%dT%H:%M:%S%z", report.last_send.time or 0))
+        table.insert(lines, "Status: " .. tostring(report.last_send.status or (report.last_send.success and "succeeded" or "failed")))
+        table.insert(lines, "Success: " .. boolLabel(report.last_send.success))
+        table.insert(lines, "Message: " .. tostring(report.last_send.message or "unknown"))
+        table.insert(lines, "Exit code: " .. tostring(report.last_send.exit_code or "unknown"))
+        table.insert(lines, "Category: " .. tostring(report.last_send.error_category or "none"))
+        table.insert(lines, "Protocol: " .. tostring(report.last_send.protocol or "unknown"))
+        table.insert(lines, "Recipient: " .. tostring(report.last_send.recipient or "unknown"))
+        table.insert(lines, "File: " .. tostring(report.last_send.filename or "unknown"))
+        table.insert(lines, "Size: " .. tostring(report.last_send.size or "unknown"))
+        table.insert(lines, "Duration: " .. tostring(report.last_send.duration_seconds or "unknown") .. " second(s)")
+    else
+        table.insert(lines, "No send has completed in this KOReader session.")
+    end
+
+    addSection(lines, "Receiver/power/network lifecycle")
+    table.insert(lines, report.logs.lifecycle or "No lifecycle events recorded.")
+
+    addSection(lines, "Latest discovery test")
+    if report.discovery then
+        table.insert(lines, "Performed: " .. tostring(report.discovery.recorded_at or "unknown"))
+        table.insert(lines, "Multicast loopback: " .. boolLabel(report.discovery.loopback))
+        table.insert(lines, "Peers: " .. tostring(report.discovery.peers or 0))
+        table.insert(lines, "UDP peers: " .. tostring(report.discovery.udp_peers or 0))
+        table.insert(lines, "HTTP register peers: " .. tostring(report.discovery.register_peers or 0))
+        table.insert(lines, "Local IPs: " .. table.concat(report.discovery.local_ips or {}, ", "))
+        table.insert(lines, "Seen devices: " .. table.concat(report.discovery.seen_aliases or {}, ", "))
+        table.insert(lines, "Bind error: " .. tostring(report.discovery.bind_error or "none"))
+        table.insert(lines, "Register bind error: " .. tostring(report.discovery.register_bind_error or "none"))
+    else
+        table.insert(lines, "No discovery test has been run in this KOReader session.")
+    end
+
     addSection(lines, "Bug report")
     table.insert(lines, "Attach this report and KOReader crash.log if you open a GitHub issue.")
     table.insert(lines, "crash.log: " .. tostring(report.logs.crash_log_path))
     table.insert(lines, "Note: review the report before posting publicly — it can include")
-    table.insert(lines, "device names, file names, and network addresses.")
+    table.insert(lines, "device aliases, file names, routing paths, and private IP addresses.")
+    table.insert(lines, "MAC addresses and Wi-Fi SSIDs are redacted by default.")
 
     return table.concat(lines, "\n")
 end
@@ -1015,9 +1257,9 @@ function M.saveReportText(text, filename, directory)
     return path
 end
 
-local function withReportAsync(instance, progress_text, callback)
+local function withReportAsync(instance, progress_text, callback, force_refresh)
     local last_generated = M._last_report and M._last_report.generated_unix
-    if last_generated and os.time() - last_generated < 300 then
+    if not force_refresh and last_generated and os.time() - last_generated < 300 then
         callback(M._last_report)
         return
     end
@@ -1081,8 +1323,9 @@ local function showBugReportWithReport(instance, collected_report)
 
     -- Best-effort: append the tail of KOReader's crash.log so users paste it
     -- alongside the diagnostics report when filing an issue.
-    local crash_log_path = (paths.data_dir and (paths.data_dir .. "/crash.log")) or "KOReader data directory/crash.log"
-    local crash_tail = readTail(crash_log_path, REPORT_TAIL_BYTES)
+    local crash_log_path = collected_report.logs and collected_report.logs.crash_log_path
+        or ((paths.data_dir and (paths.data_dir .. "/crash.log")) or "KOReader data directory/crash.log")
+    local crash_tail = collected_report.logs and collected_report.logs.crash or readTail(crash_log_path, REPORT_TAIL_BYTES)
     local crash_section = "\n\n## crash.log (tail)\nPath: " .. crash_log_path .. "\n\n" .. (crash_tail or "(crash.log not found or empty)")
 
     local checklist = deps._(
@@ -1142,15 +1385,15 @@ end
 function M.showBugReport(instance)
     withReportAsync(instance, deps._("Creating support report…"), function(report)
         showBugReportWithReport(instance, report)
-    end)
+    end, true)
 end
 
 function M.captureTransferEvidence()
-    local last_send = serverState() and serverState().last_send or nil
+    local last_send = lastSendEvidence()
     return {
         last_send = last_send,
         backend = readTail(constants.SERVER_OUTPUT_FILE, REPORT_TAIL_BYTES) or "",
-        send_log = readTail(constants.SEND_OUTPUT_FILE, REPORT_TAIL_BYTES) or "",
+        send_log = readTail(constants.SEND_OUTPUT_FILE, REPORT_TAIL_BYTES) or (last_send and last_send.raw_output) or "",
     }
 end
 
@@ -1522,6 +1765,8 @@ end
 function M._pollDiscoveryTest(instance, attempts, deadline, restart_after)
     local result = readNetTestResult()
     if result then
+        result.recorded_at = os.date("%Y-%m-%dT%H:%M:%S%z")
+        M._last_discovery_result = result
         os.remove(constants.NETTEST_OUTPUT_FILE)
         os.remove(constants.NETTEST_PID_FILE)
         local text = M.formatDiscoveryResult(instance, result)

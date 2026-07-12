@@ -11,8 +11,8 @@ the LocalSend receiver is running and provides these guided paths:
 
 - **Check LocalSend** — checks Wi-Fi, the installed receiver program, receive
   folder, server lifecycle, and firewall. If the normal receiver is running, the
-  check stops it, starts and probes a controlled diagnostic receiver, then
-  restores the normal receiver. It shows one plain-language conclusion and a
+  check stops it, starts and probes the receiver through the plugin's real
+  lifecycle, then restores its original running/stopped state. It shows one plain-language conclusion and a
   relevant action. The full report remains available through **Technical details**.
 - **Can't find a device?** — explains how to prepare the other device, then tests
   LocalSend discovery. If necessary, the receiver is restarted briefly and
@@ -47,8 +47,9 @@ The device is reachable, but the LocalSend receiver is not listening.
 - Disable **Wi-Fi isolation** (a.k.a. AP/client isolation) on your router.
 - Check the firewall on your **phone/computer** as well — it must allow LocalSend
   on port 53317. See [Network & firewall](#network--firewall) below.
-- On devices with `iptables`, confirm the plugin can open the LocalSend firewall
-  rules. The diagnostics report actively tests open/verify/close for those rules.
+- On devices with `iptables`, confirm the plugin installed the LocalSend firewall
+  rules. Diagnostics inspect the rules created by the real receiver start without
+  closing them underneath a running receiver.
 - The device must be reachable on port **53317** (see _Connection refused_
   above).
 
@@ -121,5 +122,11 @@ instead of transcribing from the screen.
 If a log is long, paste the last ~100 lines around the error.
 
 **Privacy:** review the report before posting it publicly. The PIN is redacted
-automatically, but the report can still include your device name, file names,
-and local network addresses.
+automatically, as are Wi-Fi SSIDs and MAC addresses. The report can still include
+device aliases, file names, routing paths, and private network addresses.
+
+The report snapshots failure evidence before troubleshooting restarts anything.
+It separates the pre-check backend log from the lifecycle-test log and includes
+the latest send result, receiver/power/network event history, listener and LAN
+probe status, the latest discovery test, KOReader/device/runtime information, and
+the tail of `crash.log`. Fill in the reproduction fields at the top before posting.

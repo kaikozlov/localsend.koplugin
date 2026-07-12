@@ -13,6 +13,41 @@ local deps = {}
 
 -- Path configuration (set via M.init)
 local binary_path = nil
+local SEND_EVIDENCE_BYTES = 12 * 1024
+
+local function tailString(value, max_bytes)
+    value = tostring(value or "")
+    if #value <= max_bytes then
+        return value
+    end
+    return "... (showing last " .. tostring(max_bytes) .. " bytes)\n" .. value:sub(-max_bytes)
+end
+
+local function fileSize(path)
+    local ok, f = pcall(io.open, path, "rb")
+    if not ok or not f then
+        return nil
+    end
+    local size = f:seek("end")
+    f:close()
+    return size
+end
+
+local function persistLastSend(value)
+    if not deps.json or not deps.json.encode then
+        return
+    end
+    local encode_ok, encoded = pcall(deps.json.encode, value)
+    if not encode_ok or not encoded then
+        return
+    end
+    local open_ok, f = pcall(io.open, constants.LAST_SEND_EVIDENCE_FILE, "w")
+    if not open_ok or not f then
+        return
+    end
+    pcall(f.write, f, encoded)
+    f:close()
+end
 
 -- Initialize module with dependencies
 -- @param d table Dependencies: { UIManager, InfoMessage, Notification, InputDialog, PathChooser, NetworkMgr, util, json, logger, T, _ }
@@ -87,6 +122,8 @@ function M.sendFile(device, filepath, pin, callback, options)
 
     ServerState.send_in_progress = true
     ServerState.send_cancelled = false -- Reset cancel flag
+    local send_started_at = os.time()
+    local send_size = fileSize(filepath)
 
     -- Build send command based on device type
     local args = { binary_path, "send" }
@@ -137,6 +174,28 @@ function M.sendFile(device, filepath, pin, callback, options)
     -- Extract filename for display
     local _, filename = deps.util.splitFilePathName(filepath)
 
+    local function recordOutcome(success, message, output, exit_code, status)
+        ServerState.last_send = {
+            status = status or (success and "succeeded" or "failed"),
+            success = success,
+            message = message,
+            time = os.time(),
+            started_at = send_started_at,
+            duration_seconds = math.max(0, os.time() - send_started_at),
+            exit_code = exit_code,
+            error_category = success and nil or M.categorizeError(output),
+            raw_output = tailString(output, SEND_EVIDENCE_BYTES),
+            protocol = device.type == "lan" and "V2 " .. tostring(device.protocol or "http") or "V3 WebRTC",
+            recipient = device.alias or device.ip or device.id or "unknown",
+            recipient_ip = device.type == "lan" and device.ip or nil,
+            filename = filename,
+            size = send_size,
+        }
+        persistLastSend(ServerState.last_send)
+    end
+
+    recordOutcome(nil, deps._("Send in progress"), "", nil, "in_progress")
+
     -- Show progress notification
     deps.UIManager:show(deps.Notification:new({
         text = deps.T(deps._("Sending %1 to %2..."), filename, device.alias),
@@ -147,6 +206,8 @@ function M.sendFile(device, filepath, pin, callback, options)
     local function checkSendComplete()
         -- Check if send was cancelled - show "Cancelled" not "Send failed"
         if ServerState.send_cancelled then
+            local output = deps.util.readFromFile(constants.SEND_OUTPUT_FILE) or ""
+            recordOutcome(false, deps._("Cancelled"), output, nil, "cancelled")
             os.remove(constants.SEND_OUTPUT_FILE)
             os.remove(constants.SEND_OUTPUT_FILE .. ".exit")
             os.remove(constants.SEND_PID_FILE)
@@ -203,6 +264,7 @@ function M.sendFile(device, filepath, pin, callback, options)
             if error_category == "rejected" then
                 message = deps._("Transfer was rejected by the recipient")
             elseif error_category == "wrong_pin" or error_category == "pin_required" then
+                recordOutcome(false, deps._("PIN required"), output, exit_code, "awaiting_pin")
                 -- Prompt for PIN and retry
                 M.showPINDialog(device, function(entered_pin)
                     if entered_pin and entered_pin ~= "" then
@@ -241,7 +303,7 @@ function M.sendFile(device, filepath, pin, callback, options)
 
         -- Record the outcome so diagnostics can report send-side
         -- health (ServerState persists across widget recreations).
-        ServerState.last_send = { success = success, message = message, time = os.time() }
+        recordOutcome(success, message, output, exit_code)
 
         if callback then
             callback(success, message)

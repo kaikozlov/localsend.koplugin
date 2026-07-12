@@ -139,6 +139,36 @@ describe("localsend_sender", function()
             sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" }, "/test/file.epub", nil, nil)
             assert.is_true(state.ServerState.send_in_progress)
         end)
+
+        it("retains raw failure evidence after cleaning up the send log", function()
+            local original_read = util.readFromFile
+            finally(function()
+                util.readFromFile = original_read
+            end)
+            util.pathExists = function(path)
+                return path == "/test/file.epub" or path == "/tmp/localsend_send.out.exit"
+            end
+            util.readFromFile = function(path)
+                if path == "/tmp/localsend_send.out.exit" then
+                    return "1\n"
+                elseif path == "/tmp/localsend_send.out" then
+                    return "connection reset by peer: raw detail"
+                end
+            end
+
+            sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "http", alias = "Phone" }, "/test/file.epub", nil, nil)
+            helper.state.scheduled_tasks[#helper.state.scheduled_tasks].callback()
+
+            local last = require("localsend_state").ServerState.last_send
+            assert.is_not_nil(last)
+            assert.is_false(last.success)
+            assert.equals(1, last.exit_code)
+            assert.equals("connection", last.error_category)
+            assert.truthy(last.raw_output:match("raw detail"))
+            assert.equals("V2 http", last.protocol)
+            assert.equals("Phone", last.recipient)
+            assert.equals("file.epub", last.filename)
+        end)
     end)
 
     describe("cancelSend", function()

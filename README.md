@@ -64,7 +64,7 @@ Open **Menu → Network → LocalSend → Troubleshooting** for a guided setup c
 
 For common symptoms and fixes (connection refused, device not discovered, HTTP 400/403, HTTPS and WebRTC issues), see the **[Troubleshooting guide](docs/TROUBLESHOOTING.md)**.
 
-When reporting a bug, include the diagnostics report plus KOReader's `crash.log` (`/mnt/us/koreader/crash.log` on Kindle, `.adds/koreader/crash.log` on Kobo).
+When reporting a bug, include the generated support report. It snapshots LocalSend evidence before running lifecycle checks, includes the tail of KOReader's `crash.log`, and redacts Wi-Fi SSIDs, MAC addresses, and PIN values by default. Review device aliases, file names, routing paths, and private IP addresses before posting publicly.
 
 ### Compatibility
 

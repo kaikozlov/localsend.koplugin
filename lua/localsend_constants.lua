@@ -10,10 +10,12 @@ M.TRANSFER_LOG_FILE = "/tmp/localsend_transfers.log"
 M.TRANSFER_NOTIFY_FILE = "/tmp/localsend_notify"
 M.SIGNALING_ID_FILE = "/tmp/localsend_signaling.id" -- WebRTC signaling ID for self-filtering
 M.SERVER_OUTPUT_FILE = "/tmp/localsend_server.out" -- Combined stdout/stderr from receiver process
+M.LIFECYCLE_LOG_FILE = "/tmp/localsend_lifecycle.log" -- Timestamped plugin/server/power/network events
 
 -- Send-related file paths
 M.SEND_PID_FILE = "/tmp/localsend_send.pid"
 M.SEND_OUTPUT_FILE = "/tmp/localsend_send.out"
+M.LAST_SEND_EVIDENCE_FILE = "/tmp/localsend_last_send.json"
 M.SCAN_OUTPUT_FILE = "/tmp/localsend_scan.json"
 
 -- Diagnostics: nettest (multicast discovery self-test) output

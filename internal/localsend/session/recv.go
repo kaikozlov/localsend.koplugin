@@ -239,11 +239,29 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 
 	writer := io.MultiWriter(file, hasher)
 	expectedSize := expectedMeta.Size
+	transferStarted := time.Now()
 	written, err := io.Copy(writer, io.LimitReader(activeReader, expectedSize+1))
 	if err != nil {
+		slog.Error("Receive body failed",
+			"file", expectedMeta.Filename,
+			"expectedBytes", expectedSize,
+			"receivedBytes", written,
+			"durationMs", time.Since(transferStarted).Milliseconds(),
+			"session", sess.id,
+			"remote", sess.clientIP,
+			"error", err,
+		)
 		return "", lserrors.ErrFileIO
 	}
 	if written != expectedSize {
+		slog.Error("Receive body size mismatch",
+			"file", expectedMeta.Filename,
+			"expectedBytes", expectedSize,
+			"receivedBytes", written,
+			"durationMs", time.Since(transferStarted).Milliseconds(),
+			"session", sess.id,
+			"remote", sess.clientIP,
+		)
 		return "", lserrors.ErrInvalidBody
 	}
 
@@ -252,6 +270,14 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 		checksum := hex.EncodeToString(hasher.Sum(nil))
 
 		if checksum != expectedMeta.Checksum {
+			slog.Error("Receive checksum mismatch",
+				"file", expectedMeta.Filename,
+				"expectedBytes", expectedSize,
+				"receivedBytes", written,
+				"durationMs", time.Since(transferStarted).Milliseconds(),
+				"session", sess.id,
+				"remote", sess.clientIP,
+			)
 			return "", lserrors.ErrChecksum
 		}
 	}
@@ -259,7 +285,7 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 	// All validations passed - mark as success to prevent cleanup
 	success = true
 
-	slog.Info("Recv file", "file", saveAs, "session", sess.id)
+	slog.Info("Recv file", "file", saveAs, "session", sess.id, "bytes", written, "durationMs", time.Since(transferStarted).Milliseconds())
 
 	// remove finished file
 	atomic.AddInt64(&sess.filesCount, -1)

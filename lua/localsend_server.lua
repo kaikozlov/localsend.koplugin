@@ -191,6 +191,7 @@ function M.onServerStarted(instance, silent, effective_name)
     local ServerState = state.ServerState
 
     ServerState.stop_in_progress = false
+    state.recordLifecycle("server_ready", "name=" .. tostring(effective_name) .. " port=" .. tostring(instance.port))
     M.reconcileServerState(instance)
 
     -- Recreate task references if they were nullified by onCloseWidget
@@ -236,6 +237,7 @@ end
 -- @param instance table LocalSend instance
 -- @param silent boolean Suppress notifications
 function M.onServerStartFailed(instance, silent)
+    state.recordLifecycle("server_start_failed", "readiness timeout")
     instance:closeFirewall()
     state.ServerState.stop_in_progress = false
     M.reconcileServerState(instance)
@@ -267,9 +269,11 @@ function M.start(instance, silent)
     end
 
     local op_id = nextServerOpID()
+    state.recordLifecycle("server_start_requested", "silent=" .. tostring(not not silent))
 
     -- If server is already running, just take over polling responsibility
     if instance:isRunning() then
+        state.recordLifecycle("server_already_running")
         deps.logger.dbg("[LocalSend] Server already running, taking over polling")
         -- Sync cache with actual state
         M.reconcileServerState(instance)
@@ -283,6 +287,7 @@ function M.start(instance, silent)
     -- Validate save directory
     local valid, err = instance:validateSaveDir(instance.save_dir)
     if not valid then
+        state.recordLifecycle("server_start_rejected", "invalid save directory: " .. tostring(err))
         if not silent then
             deps.UIManager:show(deps.InfoMessage:new({
                 icon = "notice-warning",
@@ -393,6 +398,7 @@ function M.start(instance, silent)
             end
         )
     else
+        state.recordLifecycle("server_start_failed", "launcher exit status=" .. tostring(result))
         instance:closeFirewall()
         M.reconcileServerState(instance)
         if not silent then
@@ -456,6 +462,7 @@ function M.stopServer(instance, options)
     local sync = options.sync
     local ServerState = state.ServerState
     local op_id = nextServerOpID()
+    state.recordLifecycle("server_stop_requested", "sync=" .. tostring(not not sync))
 
     -- Unschedule Lua tasks first
     instance:_unschedulePolling()
@@ -469,6 +476,7 @@ function M.stopServer(instance, options)
         end
 
         ServerState.stop_in_progress = false
+        state.recordLifecycle(success and "server_stopped" or "server_stop_failed", message)
         M.reconcileServerState(instance)
 
         if callback then

@@ -73,13 +73,12 @@ body:
       required: true
 
   - type: textarea
-    id: crash-log
+    id: support-report
     attributes:
-      label: crash.log
+      label: LocalSend support report
       description: |
-        **Required.** Attach the contents of your `crash.log` file.
-        On most devices: `/mnt/us/koreader/crash.log` (Kindle) or `.adds/koreader/crash.log` (Kobo).
-        If the file is long, paste the **last 100 lines** (the part around the error).
+        **Required.** Immediately after reproducing the problem, open LocalSend → Troubleshooting → Create support report and attach `localsend-bugreport.txt`.
+        The report already includes preserved LocalSend logs and the tail of KOReader's `crash.log`. Review device aliases, filenames, paths, and private IP addresses before posting.
       render: shell
     validations:
       required: true
@@ -91,8 +90,33 @@ body:
       description: "What app/device are you sending FROM? e.g., LocalSend Android v1.16.0, LocalSend Windows v1.15.0"
       placeholder: "LocalSend Android v1.16.0"
 
+  - type: dropdown
+    id: direction
+    attributes:
+      label: Transfer direction
+      options:
+        - Sending to the e-reader
+        - Sending from the e-reader
+        - Device discovery only
+        - Receiver startup/lifecycle
+
+  - type: input
+    id: transfer-size
+    attributes:
+      label: File or folder type and approximate size
+      placeholder: "ZIP file, approximately 1.2 GB"
+
+  - type: dropdown
+    id: sleep-disconnect
+    attributes:
+      label: Did either device sleep or disconnect?
+      options:
+        - No
+        - Yes
+        - Unsure
+
   - type: textarea
     id: additional
     attributes:
       label: Additional context
-      description: "Screenshots, network setup details (same WiFi? VLAN?), anything else that might help."
+      description: "Screenshots, network setup details (same Wi-Fi? guest network? VLAN? repeater?), full crash.log if needed, or anything else that might help."

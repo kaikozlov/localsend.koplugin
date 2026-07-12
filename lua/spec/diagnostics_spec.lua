@@ -201,8 +201,8 @@ describe("LocalSend diagnostics", function()
         assert.truthy(report:match("LAN connected"))
         assert.truthy(report:match("Internet reachable"))
         assert.truthy(report:match("wlan0: 192%.168%.1%.100"))
-        assert.truthy(report:match("Server self%-test"))
-        assert.truthy(report:match("Temporary server starts and local API responds"))
+        assert.truthy(report:match("Receiver lifecycle test"))
+        assert.truthy(report:match("Real receiver starts and local API responds"))
         assert.truthy(report:match("Result: HTTP 200"))
         assert.truthy(report:match("tcp/53317"))
         assert.truthy(report:match("backend log line"))
@@ -217,12 +217,103 @@ describe("LocalSend diagnostics", function()
     it("does not include the PIN value in diagnostics", function()
         local instance = helper.create_instance()
         instance.pin = "9876"
+        files["/proc/12345/cmdline"] = "/tmp/localsend\0recv\0-p\09876\0"
         local diagnostics = require("localsend_diagnostics")
 
         local report = diagnostics.getReportText(instance)
 
         assert.falsy(report:match("9876"))
         assert.truthy(report:match("PIN enabled: yes"))
+    end)
+
+    it("redacts SSID and MAC address from the public report", function()
+        apply_mocks({
+            network_info = 'Interface: wlan0\nMAC: AA:BB:CC:DD:EE:FF\nSSID: "Home Network"\nIPv4: 192.168.1.100',
+        })
+        mock_io()
+        local instance = helper.create_instance()
+        local diagnostics = require("localsend_diagnostics")
+
+        local report = diagnostics.getReportText(instance)
+
+        assert.falsy(report:match("AA:BB:CC"))
+        assert.falsy(report:match("Home Network"))
+        assert.truthy(report:match("MAC: %[redacted%]"))
+        assert.truthy(report:match('SSID: "%[redacted%]"'))
+        assert.truthy(report:match("192%.168%.1%.100"))
+    end)
+
+    it("includes the KOReader and runtime environment", function()
+        local instance = helper.create_instance()
+        local diagnostics = require("localsend_diagnostics")
+
+        local report = diagnostics.getReportText(instance)
+
+        assert.truthy(report:match("KOReader revision:"))
+        assert.truthy(report:match("Platform: Kindle"))
+        assert.truthy(report:match("Kernel:"))
+        assert.truthy(report:match("Runtime architecture:"))
+        assert.truthy(report:match("Recovery mode: no"))
+    end)
+
+    it("reports whether the receiver is listening beyond loopback", function()
+        files["/proc/net/tcp"] = "  sl  local_address rem_address   st\n   0: 00000000:D045 00000000:0000 0A\n"
+        files["/proc/net/udp"] = "  sl  local_address rem_address   st\n   1: 00000000:D045 00000000:0000 07\n"
+        local instance = helper.create_instance()
+        local diagnostics = require("localsend_diagnostics")
+
+        local report = diagnostics.collect(instance)
+
+        assert.is_true(report.server.listeners.ok)
+        assert.truthy(report.server.listeners.detail:match("tcp: all interfaces"))
+        assert.truthy(report.server.listeners.detail:match("udp: all interfaces"))
+    end)
+
+    it("includes timestamped power and network lifecycle evidence", function()
+        files["/tmp/localsend_lifecycle.log"] = "2026-07-12T12:00:00-0500\tsuspend\n2026-07-12T12:00:03-0500\tnetwork_disconnected\n"
+        local instance = helper.create_instance()
+        local diagnostics = require("localsend_diagnostics")
+
+        local report = diagnostics.getReportText(instance)
+
+        assert.truthy(report:match("Receiver/power/network lifecycle"))
+        assert.truthy(report:match("suspend"))
+        assert.truthy(report:match("network_disconnected"))
+    end)
+
+    it("uses retained raw output after the temporary send log is removed", function()
+        files["/tmp/localsend_send.out"] = nil
+        local state = require("localsend_state")
+        state.ServerState.last_send = {
+            success = false,
+            message = "Send failed",
+            time = os.time(),
+            raw_output = "raw tcp failure detail",
+            exit_code = 1,
+            error_category = "connection",
+        }
+        local instance = helper.create_instance()
+        local diagnostics = require("localsend_diagnostics")
+
+        local report = diagnostics.getReportText(instance)
+
+        assert.truthy(report:match("raw tcp failure detail"))
+        assert.truthy(report:match("Exit code: 1"))
+        assert.truthy(report:match("Category: connection"))
+    end)
+
+    it("loads retained send evidence after a KOReader restart", function()
+        files["/tmp/localsend_send.out"] = nil
+        files["/tmp/localsend_last_send.json"] =
+            [[{"success":false,"message":"Send failed","time":1770000000,"raw_output":"persisted raw failure","exit_code":1,"error_category":"timeout"}]]
+        require("localsend_state").ServerState.last_send = nil
+        local instance = helper.create_instance()
+        local diagnostics = require("localsend_diagnostics")
+
+        local report = diagnostics.getReportText(instance)
+
+        assert.truthy(report:match("persisted raw failure"))
+        assert.truthy(report:match("Category: timeout"))
     end)
 
     it("reports server self-test failures", function()
@@ -286,6 +377,27 @@ describe("LocalSend diagnostics", function()
         assert.truthy(dialog.text:match("LocalSend Diagnostics"))
     end)
 
+    it("always refreshes evidence when creating a support report", function()
+        local instance = helper.create_instance()
+        local diagnostics = require("localsend_diagnostics")
+        diagnostics._last_report = diagnostics.collect(instance)
+        files["/tmp/localsend_server.out"] = "new failure after cached check\n"
+        local collected = false
+        diagnostics._setAsyncCollectOverride(function(target, callback)
+            collected = true
+            callback(diagnostics.collect(target))
+        end)
+
+        instance:showBugReportInfo()
+        assert.is_false(collected)
+        finish_async_report()
+
+        assert.is_true(collected)
+        local dialog = helper.find_dialog_with_title("TextViewer", "LocalSend support report")
+        assert.is_not_nil(dialog)
+        assert.truthy(dialog.text:match("new failure after cached check"))
+    end)
+
     it("does not prompt for Wi-Fi when diagnostics run offline", function()
         apply_mocks({ is_connected = false, is_online = false })
         mock_io()
@@ -299,7 +411,7 @@ describe("LocalSend diagnostics", function()
         local dialog = helper.find_dialog("TextViewer")
         assert.is_not_nil(dialog)
         assert.truthy(dialog.text:match("LAN connected"))
-        assert.truthy(dialog.text:match("Server self%-test"))
+        assert.truthy(dialog.text:match("Receiver lifecycle test"))
     end)
 
     it("shows recent backend log separately", function()
@@ -324,7 +436,7 @@ describe("LocalSend diagnostics", function()
         assert.equals("LocalSend diagnostics", dialog.title)
         assert.truthy(dialog.text:match("all %d+ checks passed"))
         assert.truthy(dialog.text:match("LAN connected"))
-        assert.truthy(dialog.text:match("Server self%-test"))
+        assert.truthy(dialog.text:match("Receiver lifecycle test"))
         assert.truthy(dialog.text:match("53317")) -- computer-firewall tip
     end)
 
@@ -342,7 +454,7 @@ describe("LocalSend diagnostics", function()
         assert.is_not_nil(dialog)
         assert.truthy(dialog.text:match("to fix")) -- "N to fix" summary
         assert.truthy(dialog.text:match("Enable Wi%-Fi")) -- LAN hint
-        assert.truthy(dialog.text:match("Server self%-test"))
+        assert.truthy(dialog.text:match("Receiver lifecycle test"))
     end)
 
     it("flags a binary that exists but cannot run", function()
@@ -553,6 +665,10 @@ describe("LocalSend diagnostics", function()
         assert.is_not_nil(dialog)
         assert.equals("Device discovery", dialog.title)
         assert.truthy(dialog.text:match("Another LocalSend device was found"))
+        local report = diagnostics.collect(instance)
+        assert.is_not_nil(report.discovery)
+        assert.equals(1, report.discovery.peers)
+        assert.is_not_nil(report.discovery.recorded_at)
     end)
 
     it("kills a stale nettest process when the poll times out", function()
@@ -817,6 +933,8 @@ describe("LocalSend diagnostics", function()
             assert.equals(1, start_count)
             assert.is_true(running)
             assert.is_true(report.server.self_test.ok)
+            assert.equals("192.168.1.100", report.server.self_test.lan_probes[1].ip)
+            assert.equals("HTTP 200", report.server.self_test.lan_probes[1].detail)
             assert.is_true(report.firewall.managed)
             assert.truthy(report.firewall.detail:match("iptables"))
         end)
@@ -851,6 +969,31 @@ describe("LocalSend diagnostics", function()
             assert.equals(1, stop_count)
             assert.is_false(running)
             assert.is_true(report.server.self_test.ok)
+        end)
+
+        it("preserves the failure log before the lifecycle start replaces it", function()
+            files["/tmp/localsend_server.out"] = "original upload failure: unexpected EOF\n"
+            local instance = helper.create_instance()
+            instance.isRunning = function()
+                return false
+            end
+            instance.start = function()
+                files["/tmp/localsend_server.out"] = "fresh receiver startup log\n"
+            end
+            instance.stopServer = function(_, options)
+                options.callback(true)
+            end
+            local diagnostics = require("localsend_diagnostics")
+            diagnostics._setAsyncCollectOverride(nil)
+            local report
+
+            diagnostics.collectAsync(instance, function(value)
+                report = value
+            end)
+
+            assert.is_not_nil(report)
+            assert.truthy(report.logs.backend_before_check:match("original upload failure"))
+            assert.truthy(report.logs.backend_after_check:match("fresh receiver startup"))
         end)
 
         it("runs the active lifecycle check before diagnosing a failed transfer", function()

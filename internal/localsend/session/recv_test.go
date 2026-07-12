@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -667,6 +668,42 @@ func TestSaveFile_RejectsBodySmallerThanDeclaredSize(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("undersized body left %d partial files", len(entries))
+	}
+}
+
+func TestSaveFile_LogsTransferProgress_WhenBodyIsShort(t *testing.T) {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	dir := t.TempDir()
+	sess, err := NewRecvSession("logged-underrun", "192.0.2.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := models.FileMeta{Id: "f", Filename: "large.zip", Size: 10}
+	if err := sess.AcceptFile("f", meta); err != nil {
+		t.Fatal(err)
+	}
+	sess.Start()
+	_, err = sess.SaveFile(dir, "f", sess.FileTokens()["f"], "192.0.2.1", bytes.NewReader([]byte("short")))
+	if err == nil {
+		t.Fatal("undersized body was accepted")
+	}
+
+	output := logs.String()
+	for _, expected := range []string{
+		"Receive body size mismatch",
+		"file=large.zip",
+		"expectedBytes=10",
+		"receivedBytes=5",
+		"durationMs=",
+		"remote=192.0.2.1",
+	} {
+		if !strings.Contains(output, expected) {
+			t.Errorf("log %q does not contain %q", output, expected)
+		}
 	}
 }
 

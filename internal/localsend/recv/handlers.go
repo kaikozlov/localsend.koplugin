@@ -99,8 +99,10 @@ func (fr *FileReceiver) preUploadHandler(c *fiber.Ctx) error {
 	err := parseJSONBodyLimited(c, &metaReq, maxPreUploadBodyBytes)
 	if err != nil {
 		if errors.Is(err, errRequestBodyTooLarge) {
+			slog.Warn("Prepare upload body rejected", "remote", c.IP(), "status", fiber.StatusRequestEntityTooLarge, "error", err)
 			return c.SendStatus(fiber.StatusRequestEntityTooLarge)
 		}
+		slog.Warn("Prepare upload body rejected", "remote", c.IP(), "status", fiber.StatusBadRequest, "error", err)
 		return c.SendStatus(400)
 	}
 
@@ -111,17 +113,42 @@ func (fr *FileReceiver) preUploadHandler(c *fiber.Ctx) error {
 	}
 	metaReq.Files = filteredFiles
 
+	var declaredBytes int64
+	for _, file := range metaReq.Files {
+		declaredBytes += file.Size
+	}
+	senderAlias, senderVersion, senderModel, senderType, senderProtocol := "", "", "", "", ""
+	if metaReq.Info != nil {
+		senderAlias = metaReq.Info.Alias
+		senderVersion = metaReq.Info.Version
+		senderModel = metaReq.Info.DeviceModel
+		senderType = metaReq.Info.DeviceType
+		senderProtocol = metaReq.Info.Protocol
+	}
+	slog.Info("Prepare upload",
+		"remote", c.IP(),
+		"sender", senderAlias,
+		"senderProtocolVersion", senderVersion,
+		"senderModel", senderModel,
+		"senderType", senderType,
+		"transport", senderProtocol,
+		"files", len(metaReq.Files),
+		"declaredBytes", declaredBytes,
+	)
+
 	// Atomically enforce admission rules + create session.
 	// Prevents races between active-session checks and creation.
 	sessionId, err := fr.sessman.CreateSessionIfAllowed(metaReq.Files, c.IP())
 	if err != nil {
 		if err == constants.ErrTooManySessions {
+			slog.Warn("Prepare upload rejected", "remote", c.IP(), "status", fiber.StatusTooManyRequests, "error", err)
 			return c.SendStatus(429)
 		}
+		slog.Warn("Prepare upload rejected", "remote", c.IP(), "status", constants.Status(err), "error", err)
 		return c.SendStatus(constants.Status(err))
 	}
 
-	slog.Info("Accepting file", "remote", c.IP(), "session", sessionId, "files", len(metaReq.Files))
+	slog.Info("Accepting file", "remote", c.IP(), "session", sessionId, "files", len(metaReq.Files), "declaredBytes", declaredBytes)
 
 	resp, err := fr.sessman.GeneratePreUploadResp(sessionId)
 	if err != nil {
@@ -172,8 +199,16 @@ func (fr *FileReceiver) uploadHandler(c *fiber.Ctx) error {
 	// Pass client IP for validation per protocol spec Section 4.2
 	savedFilename, err := session.SaveFile(saveDir, fileId, token, c.IP(), bodyReader)
 	if err != nil {
-		slog.Error("Upload error", "remote", c.IP(), "session", sessionId, "error", err)
-		return c.SendStatus(constants.Status(err))
+		status := constants.Status(err)
+		slog.Error("Upload error",
+			"remote", c.IP(),
+			"session", sessionId,
+			"file", fileMeta.Filename,
+			"declaredBytes", fileMeta.Size,
+			"status", status,
+			"error", err,
+		)
+		return c.SendStatus(status)
 	}
 
 	// Log the successful transfer with the actual saved filename (may differ from original if renamed)

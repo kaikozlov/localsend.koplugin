@@ -16,6 +16,7 @@ local _ = require("gettext")
 local T = ffiutil.template
 local json = require("json")
 local PluginShare = require("pluginshare")
+local Version = require("version")
 
 -- Critical modules (required for recovery mode)
 local lsutils = require("localsend_utils")
@@ -121,6 +122,8 @@ local LocalSend = WidgetContainer:extend({
     name = "LocalSend",
     is_doc_only = false,
     recovery_mode = RECOVERY_MODE,
+    reinstall_required = REINSTALL_REQUIRED,
+    module_load_errors = module_load_errors,
 })
 
 -- =============================================================================
@@ -190,6 +193,7 @@ function LocalSend:init()
             T = T,
             _ = _,
             G_reader_settings = G_reader_settings,
+            Version = Version,
         })
     end
 
@@ -439,6 +443,7 @@ end
 -- Stop server before device suspends (WiFi will be disabled)
 function LocalSend:_onSuspend()
     logger.dbg("[LocalSend] onSuspend")
+    state.recordLifecycle("suspend")
     -- Unschedule polling before stopping
     self:_unschedulePolling()
     self:_unscheduleResume()
@@ -456,6 +461,7 @@ end
 -- Restart server after device resumes (if it was running before)
 function LocalSend:_onResume()
     logger.dbg("[LocalSend] onResume")
+    state.recordLifecycle("resume", "network_connected=" .. tostring(NetworkMgr:isConnected()))
 
     -- Reschedule update check after resume
     if self.auto_update_check then
@@ -477,6 +483,7 @@ end
 -- Same handling for standby (light sleep)
 function LocalSend:_onEnterStandby()
     logger.dbg("[LocalSend] onEnterStandby")
+    state.recordLifecycle("standby_enter")
     -- Unschedule polling before stopping
     self:_unschedulePolling()
 
@@ -491,6 +498,7 @@ end
 
 function LocalSend:_onLeaveStandby()
     logger.dbg("[LocalSend] onLeaveStandby")
+    state.recordLifecycle("standby_leave", "network_connected=" .. tostring(NetworkMgr:isConnected()))
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
         if NetworkMgr:isConnected() then
             -- Network already available
@@ -506,6 +514,7 @@ end
 -- Handle network disconnect (e.g., user manually turns off WiFi)
 function LocalSend:_onNetworkDisconnected()
     logger.dbg("[LocalSend] onNetworkDisconnected")
+    state.recordLifecycle("network_disconnected")
     if self:isRunning() then
         ServerState.was_running_before_disconnect = true
         self:stopServer()
@@ -518,6 +527,7 @@ end
 -- Handle network reconnect
 function LocalSend:_onNetworkConnected()
     logger.dbg("[LocalSend] onNetworkConnected")
+    state.recordLifecycle("network_connected")
     -- Restart if we were waiting for network after suspend OR after disconnect
     local should_restart = (ServerState.was_running_before_suspend or ServerState.was_running_before_disconnect) and not ServerState.user_stopped
     if should_restart then
@@ -588,8 +598,10 @@ function LocalSend:deletePluginSettings()
         constants.SIGNALING_ID_FILE,
         constants.SEND_PID_FILE,
         constants.SEND_OUTPUT_FILE,
+        constants.LAST_SEND_EVIDENCE_FILE,
         constants.SCAN_OUTPUT_FILE,
         constants.SERVER_OUTPUT_FILE,
+        constants.LIFECYCLE_LOG_FILE,
     }
     for _, filepath in ipairs(tmp_files) do
         if util.pathExists(filepath) then
@@ -616,6 +628,7 @@ function LocalSend:deletePluginSettings()
         ServerState.send_cancelled = false
         ServerState.server_op_id = 0
         ServerState.stop_in_progress = false
+        ServerState.lifecycle_events = {}
         -- Runtime-added fields: set by the sender / discovery flow during a
         -- transfer or scan. Must be cleared too, else a user who deletes all
         -- settings mid-send keeps stale send metadata for the rest of the session.
