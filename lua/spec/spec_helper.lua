@@ -25,6 +25,12 @@ local DataStorage = require("datastorage")
 local ffiUtil = require("ffi/util")
 local util = require("util")
 
+-- Optional: serialize the live widget tree on test failure so the dump lands in
+-- the busted output right under the failing assertion. No-op if busted's
+-- mediator isn't reachable. Gated on KO_DEBUG_UI_DUMP (default on) so CI can
+-- quiet it with KO_DEBUG_UI_DUMP=0.
+local _ui_dump_enabled = os.getenv("KO_DEBUG_UI_DUMP") ~= "0"
+
 -- Capture the real os.execute/os.remove before any spy wraps them (spies install
 -- later in setup). prepare_runtime_plugin must actually mkdir/cp/chmod.
 local _real_os_execute = os.execute
@@ -424,6 +430,7 @@ function M.setup_complete(opts)
             logger:setLevel(logger.levels and logger.levels.warn or 2)
         end
     end
+    M.install_dump_on_failure()
 end
 
 function M.before_each()
@@ -517,6 +524,76 @@ function M.find_dialog_with_title(dialog_type, title_pattern)
         end
     end
     return nil
+end
+
+-- =============================================================================
+-- Widget tree dump on test failure
+-- =============================================================================
+-- Serializes UIManager._window_stack with serpent.block, filtering keys that
+-- bloat output or contain cdata (which serpent chokes on / breaks stable
+-- serialization). Lifted from rakuyomi's testing.lua — but deterministic: we
+-- print it for humans to read, never ship it to a model.
+local serpent = require("ffi/serpent")
+
+local DUMP_IGNORED_KEYS = {
+    key_events = true,
+    ges_events = true,
+    _xshaping = true,
+    face = true,
+    koptinterface = true,
+    deinflector = true,
+    -- bloats output without aiding triage
+    item_table = true,
+    -- cdata / hashes break stable serialization
+    ftsize = true,
+}
+
+function M.dump_visible_ui()
+    local stack = UIManager._window_stack or {}
+    local visible = {}
+    for i = #stack, 1, -1 do
+        visible[#visible + 1] = stack[i]
+        local w = stack[i].widget
+        if w and w.covers_fullscreen then
+            break
+        end
+    end
+
+    local keyignore = setmetatable({}, {
+        __index = function(_, key)
+            return DUMP_IGNORED_KEYS[key] ~= nil or type(key) == "string" and key:sub(1, 1) == "_"
+        end,
+    })
+
+    return serpent.block(visible, {
+        maxlevel = 8,
+        indent = "  ",
+        nocode = true,
+        comment = false,
+        keyignore = keyignore,
+    })
+end
+
+local _dump_hook_installed = false
+--- Subscribe to busted's test-end event and dump the live widget tree when a
+--- test fails. Call once from a spec's setup() — safe to call repeatedly.
+function M.install_dump_on_failure()
+    if not _ui_dump_enabled or _dump_hook_installed then
+        return
+    end
+    local ok, busted = pcall(require, "busted")
+    if not ok or not busted or not busted.subscribe then
+        return
+    end
+    _dump_hook_installed = true
+    busted.subscribe({ "test", "end" }, function(_, _, status)
+        -- status is the string "success" / "failure" / "error" / "pending".
+        if status == "failure" or status == "error" then
+            io.stderr:write("\n--- visible UI at failure ---\n")
+            io.stderr:write(M.dump_visible_ui())
+            io.stderr:write("\n--- end UI dump ---\n")
+        end
+    end)
 end
 
 return M
