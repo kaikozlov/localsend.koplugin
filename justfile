@@ -8,6 +8,9 @@
 #   just test      # run all tests (quiet; V=1 for verbose)
 #   just lint      # lint everything
 #   just shell     # drop into the container
+#
+# Aggregate recipes (fmt / lint / test / check / fmt-check) use a single
+# `docker run` each to avoid container startup tax.
 
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
@@ -68,9 +71,51 @@ install-hooks:
 # Testing
 # =============================================================================
 
-# Run all tests (quiet; V=1 verbose)
+# Run all tests in one container (quiet; V=1 verbose)
 [group('test')]
-test: test-lua test-go-race test-go-integration
+test:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{ run }} sh -c '
+        set -euo pipefail
+        V="{{ v }}"
+        busted_opts="{{ busted_opts }}"
+        go_test_opts="{{ go_test_opts }}"
+
+        run_busted_quiet() {
+            local label="$1"
+            shift
+            echo "$label"
+            if [ "$V" = "1" ]; then
+                "$@"
+            else
+                local out
+                out="$(mktemp)"
+                if "$@" >"$out" 2>&1; then
+                    grep -E "^[0-9]+ success" "$out" || tail -n 3 "$out"
+                    rm -f "$out"
+                else
+                    echo "$label failed — full output:" >&2
+                    cat "$out" >&2
+                    rm -f "$out"
+                    exit 1
+                fi
+            fi
+        }
+
+        # shellcheck disable=SC2086
+        run_busted_quiet "Running Lua tests" busted-koreader $busted_opts \
+            --helper=/opt/koplugin-dev/commonrequire.lua \
+            /opt/plugin/lua/spec/
+
+        echo "Running Go tests (-race)..."
+        # shellcheck disable=SC2086
+        (cd /opt/plugin && go test ./... -race $go_test_opts -count=1)
+
+        echo "Running Go integration tests..."
+        # shellcheck disable=SC2086
+        (cd /opt/plugin && go test ./internal/localsend/... -tags=integration -race $go_test_opts -count=1)
+    '
 
 # Run Lua tests via busted-koreader (quiet; V=1 verbose)
 [group('test')]
@@ -140,9 +185,10 @@ test-go-integration:
 # Linting
 # =============================================================================
 
-# Run all linters
+# Run all linters in one container
 [group('lint')]
-lint: lint-lua lint-go
+lint:
+    {{ run }} sh -c 'cd /opt/plugin/lua && luacheck . && cd /opt/plugin && golangci-lint run'
 
 # Run luacheck
 [group('lint')]
@@ -158,9 +204,10 @@ lint-go:
 # Formatting
 # =============================================================================
 
-# Format all code
+# Format all code in one container
 [group('lint')]
-fmt: fmt-lua fmt-go
+fmt:
+    {{ run }} sh -c 'stylua /opt/plugin/lua && cd /opt/plugin && go fmt ./...'
 
 # Format Lua with stylua
 [group('lint')]
@@ -172,11 +219,64 @@ fmt-lua:
 fmt-go:
     {{ run }} sh -c 'cd /opt/plugin && go fmt ./...'
 
-# Check formatting without modifying
+# Check formatting without modifying (one container)
 [group('lint')]
 fmt-check:
-    {{ run }} stylua --check /opt/plugin/lua
-    {{ run }} sh -c 'cd /opt/plugin && test -z "$(gofmt -l .)"'
+    {{ run }} sh -c 'stylua --check /opt/plugin/lua && cd /opt/plugin && test -z "$(gofmt -l .)"'
+
+# Format, lint, and test in one container (used by pre-commit)
+[group('lint')]
+check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{ run }} sh -c '
+        set -euo pipefail
+        V="{{ v }}"
+        busted_opts="{{ busted_opts }}"
+        go_test_opts="{{ go_test_opts }}"
+
+        echo "Formatting..."
+        stylua /opt/plugin/lua
+        (cd /opt/plugin && go fmt ./...)
+
+        echo "Linting..."
+        (cd /opt/plugin/lua && luacheck .)
+        (cd /opt/plugin && golangci-lint run)
+
+        run_busted_quiet() {
+            local label="$1"
+            shift
+            echo "$label"
+            if [ "$V" = "1" ]; then
+                "$@"
+            else
+                local out
+                out="$(mktemp)"
+                if "$@" >"$out" 2>&1; then
+                    grep -E "^[0-9]+ success" "$out" || tail -n 3 "$out"
+                    rm -f "$out"
+                else
+                    echo "$label failed — full output:" >&2
+                    cat "$out" >&2
+                    rm -f "$out"
+                    exit 1
+                fi
+            fi
+        }
+
+        # shellcheck disable=SC2086
+        run_busted_quiet "Running Lua tests" busted-koreader $busted_opts \
+            --helper=/opt/koplugin-dev/commonrequire.lua \
+            /opt/plugin/lua/spec/
+
+        echo "Running Go tests (-race)..."
+        # shellcheck disable=SC2086
+        (cd /opt/plugin && go test ./... -race $go_test_opts -count=1)
+
+        echo "Running Go integration tests..."
+        # shellcheck disable=SC2086
+        (cd /opt/plugin && go test ./internal/localsend/... -tags=integration -race $go_test_opts -count=1)
+    '
 
 # =============================================================================
 # Building

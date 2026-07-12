@@ -37,6 +37,7 @@ just test-go-race       # Go tests with race detector in Docker
 just test-go-integration # Go integration tests in Docker
 just lint               # luacheck + golangci-lint in Docker
 just fmt                # stylua + go fmt in Docker
+just check              # fmt + lint + test in one container (pre-commit)
 just shell              # Interactive container shell
 just                    # List all recipes
 ./test.sh               # Quiet Docker wrapper for just test
