@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v4"
 )
 
 // Connection close wait parameters
@@ -121,7 +121,7 @@ func NewPeerConnection(config PeerConfig) (*PeerConnection, error) {
 	})
 
 	// Set up ICE gathering state handler
-	pc.OnICEGatheringStateChange(func(state webrtc.ICEGathererState) {
+	pc.OnICEGatheringStateChange(func(state webrtc.ICEGatheringState) {
 		slog.Info("ICE gathering state", "state", state.String())
 	})
 
