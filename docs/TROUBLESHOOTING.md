@@ -6,27 +6,25 @@ help, the same menu formats the information you should attach to a bug report.
 
 ## In-plugin diagnostics
 
-Stop the LocalSend server first, then open **Menu → Network → LocalSend → Settings → Troubleshooting** for:
+Open **Menu → Network → LocalSend → Troubleshooting**. It remains available while
+the LocalSend receiver is running and provides these guided paths:
 
-- **Run diagnostics** — runs pass/fail checks for network, binary, temporary
-  server self-test, and plugin-managed firewall rules, then shows detailed
-  plugin, device, settings, and log information. If `iptables` is available,
-  diagnostics actively opens, verifies, and closes the LocalSend firewall rules;
-  this is not limited to Kindle.
-- **Test discovery** — checks whether this device can send and receive LocalSend
-  multicast discovery packets and whether other LocalSend devices respond, to
-  attribute a "device not discovered" problem to this device/network vs. the
-  other device. The normal server is stopped before entering troubleshooting, so
-  the test can own the LocalSend port without stopping/restarting anything.
-- **Show network info** — displays KOReader's current network information,
-  including IP addresses when available.
-- **Show recent LocalSend log** — displays the receiver backend log captured at
-  `/tmp/localsend_server.out`.
-- **Prepare bug report** — formats the diagnostics details with a checklist of
-  information to include in GitHub issues.
-
-The **Common fixes** submenu lets you restart the server, rotate certificates,
-toggle HTTPS/WebRTC, and reinstall the plugin without leaving the menu.
+- **Check LocalSend** — checks Wi-Fi, the installed receiver program, receive
+  folder, server lifecycle, and firewall. If the normal receiver is running, the
+  check stops it, starts and probes a controlled diagnostic receiver, then
+  restores the normal receiver. It shows one plain-language conclusion and a
+  relevant action. The full report remains available through **Technical details**.
+- **Can't find a device?** — explains how to prepare the other device, then tests
+  LocalSend discovery. If necessary, the receiver is restarted briefly and
+  restored automatically after the test.
+- **Transfer failed?** — runs the same active receiver lifecycle test first, then
+  uses recent LocalSend errors as supporting evidence for connection, storage,
+  PIN, HTTPS, file-filter, checksum, and interrupted-transfer failures.
+- **Create support report** — combines diagnostics and the tail of KOReader's
+  `crash.log`, then saves `localsend-bugreport.txt` in the configured receive
+  folder so it can be retrieved over USB.
+- **Advanced** — exposes network details, raw backend and discovery information,
+  the complete diagnostic report, and a manual server restart.
 
 ## Common symptoms
 
@@ -34,11 +32,11 @@ toggle HTTPS/WebRTC, and reinstall the plugin without leaving the menu.
 
 The device is reachable, but the LocalSend receiver is not listening.
 
-1. Stop the server, then open **Settings → Troubleshooting → Run diagnostics**.
-   The diagnostics self-test starts a temporary receiver, probes the local API,
-   and stops it again.
-2. If the server self-test fails, check **Show recent LocalSend log** and the
-   diagnostic server self-test log in the report.
+1. Open **Troubleshooting → Check LocalSend**. The check temporarily stops a
+   running receiver when necessary, exercises the complete diagnostic lifecycle,
+   and restores the normal receiver afterward.
+2. If the receiver check fails, use its **View log** action or open **Advanced →
+   Backend log**.
 3. On older Kindles, verify that you installed the `arm-legacy` package — the
    `armv7` binary will not run on 32-bit-only hardware.
 
@@ -62,8 +60,8 @@ The device is reachable, but the LocalSend receiver is not listening.
 
 ### HTTPS connection problems
 
-Temporarily disable **Use HTTPS** from **Settings** or
-**Troubleshooting → Common fixes**, then try again.
+Use **Troubleshooting → Transfer failed?**. If the recorded error points to TLS or
+HTTPS, the result offers **Try without HTTPS** with a confirmation.
 
 ### WebRTC / signaling problems
 
@@ -109,16 +107,16 @@ Allow **incoming TCP and UDP on port 53317** for LocalSend:
 
 When reporting a bug, include:
 
-- the **bug report** (**Troubleshooting → Prepare bug report**) — it already
+- the **support report** (**Troubleshooting → Create support report**) — it already
   contains the diagnostics report and the tail of KOReader's `crash.log`, and
 - the full `crash.log` if the error is not in the included tail —
   `/mnt/us/koreader/crash.log` on Kindle, `.adds/koreader/crash.log` on Kobo.
 
-Both **Run diagnostics** and **Prepare bug report** also save their output as a
-text file under the KOReader data directory (`cache/localsend/localsend-report.txt`
-and `cache/localsend/localsend-bugreport.txt`; the exact path is shown at the
-bottom of the report). Copy the file off the device over USB instead of
-transcribing from the screen.
+**Check LocalSend** saves its technical report under the KOReader data directory
+at `cache/localsend/localsend-report.txt`. **Create support report** saves the
+complete `localsend-bugreport.txt` in the configured LocalSend receive folder;
+the exact path is shown at the bottom. Copy that file off the device over USB
+instead of transcribing from the screen.
 
 If a log is long, paste the last ~100 lines around the error.
 

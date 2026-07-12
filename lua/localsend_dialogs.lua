@@ -88,7 +88,9 @@ function M.showSaveDirPicker(instance, touchmenu_instance)
             if valid then
                 instance.save_dir = path
                 deps.G_reader_settings:saveSetting("LocalSend_save_dir", instance.save_dir)
-                touchmenu_instance:updateItems()
+                if touchmenu_instance then
+                    touchmenu_instance:updateItems()
+                end
             else
                 deps.UIManager:show(deps.InfoMessage:new({
                     icon = "notice-warning",

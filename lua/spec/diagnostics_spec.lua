@@ -106,6 +106,12 @@ describe("LocalSend diagnostics", function()
         end)
     end
 
+    local function finish_async_report()
+        local task = helper.state.scheduled_tasks[#helper.state.scheduled_tasks]
+        assert.is_not_nil(task, "expected report collection to be scheduled")
+        task.callback()
+    end
+
     setup(function()
         original_io_open = io.open
         original_io_popen = io.popen
@@ -174,6 +180,13 @@ describe("LocalSend diagnostics", function()
         mock_io()
         mock_server_probe()
         mock_firewall_probe()
+        -- Most UI tests only care about rendering an already collected report.
+        -- Keep those synchronous; lifecycle-specific tests clear this override
+        -- and exercise the real orchestration below.
+        local diagnostics = require("localsend_diagnostics")
+        diagnostics._setAsyncCollectOverride(function(instance, callback)
+            callback(diagnostics.collect(instance))
+        end)
     end)
 
     it("formats a report with plugin, network, server, firewall, and log details", function()
@@ -232,6 +245,7 @@ describe("LocalSend diagnostics", function()
         local instance = helper.create_instance()
 
         instance:showDiagnostics()
+        finish_async_report()
 
         local dialog = helper.find_dialog("TextViewer")
         assert.is_not_nil(dialog)
@@ -253,6 +267,7 @@ describe("LocalSend diagnostics", function()
         local instance = helper.create_instance()
 
         instance:showDiagnostics()
+        finish_async_report()
 
         local dialog = helper.find_dialog("TextViewer")
         assert.truthy(dialog.text:match("Saved to:"))
@@ -262,10 +277,11 @@ describe("LocalSend diagnostics", function()
         local instance = helper.create_instance()
 
         instance:showBugReportInfo()
+        finish_async_report()
 
         local dialog = helper.find_dialog("TextViewer")
         assert.is_not_nil(dialog)
-        assert.equals("LocalSend bug report", dialog.title)
+        assert.equals("LocalSend support report", dialog.title)
         assert.truthy(dialog.text:match("Steps to reproduce"))
         assert.truthy(dialog.text:match("LocalSend Diagnostics"))
     end)
@@ -278,6 +294,7 @@ describe("LocalSend diagnostics", function()
         local instance = helper.create_instance()
 
         instance:showDiagnostics()
+        finish_async_report()
 
         local dialog = helper.find_dialog("TextViewer")
         assert.is_not_nil(dialog)
@@ -300,6 +317,7 @@ describe("LocalSend diagnostics", function()
         local instance = helper.create_instance()
 
         instance:showDiagnostics()
+        finish_async_report()
 
         local dialog = helper.find_dialog("TextViewer")
         assert.is_not_nil(dialog)
@@ -318,6 +336,7 @@ describe("LocalSend diagnostics", function()
         local instance = helper.create_instance()
 
         instance:showDiagnostics()
+        finish_async_report()
 
         local dialog = helper.find_dialog("TextViewer")
         assert.is_not_nil(dialog)
@@ -424,6 +443,7 @@ describe("LocalSend diagnostics", function()
         local instance = helper.create_instance()
 
         instance:showBugReportInfo()
+        finish_async_report()
 
         local dialog = helper.find_dialog("TextViewer")
         assert.is_not_nil(dialog)
@@ -437,6 +457,7 @@ describe("LocalSend diagnostics", function()
         local instance = helper.create_instance()
 
         instance:showBugReportInfo()
+        finish_async_report()
 
         local dialog = helper.find_dialog("TextViewer")
         assert.is_not_nil(dialog)
@@ -530,8 +551,8 @@ describe("LocalSend diagnostics", function()
         assert.is_true(closed)
         local dialog = helper.find_dialog("TextViewer")
         assert.is_not_nil(dialog)
-        assert.equals("LocalSend discovery test", dialog.title)
-        assert.truthy(dialog.text:match("Discovery is healthy"))
+        assert.equals("Device discovery", dialog.title)
+        assert.truthy(dialog.text:match("Another LocalSend device was found"))
     end)
 
     it("kills a stale nettest process when the poll times out", function()
@@ -597,7 +618,7 @@ describe("LocalSend diagnostics", function()
             assert.truthy(text:match("Last send"))
             assert.truthy(text:match("Device is not running LocalSend"))
             assert.truthy(text:match("to fix"))
-            assert.truthy(text:match("recipient is not running LocalSend")) -- hint
+            assert.truthy(text:match("Use Transfer failed%?"))
         end)
 
         it("reports a recent successful send", function()
@@ -627,7 +648,7 @@ describe("LocalSend diagnostics", function()
         end)
     end)
 
-    it("diagnostics suggests Test discovery when all checks pass", function()
+    it("diagnostics suggests Can't find a device when all checks pass", function()
         local state = require("localsend_state")
         state.ServerState.last_send = nil
         finally(function()
@@ -636,10 +657,281 @@ describe("LocalSend diagnostics", function()
         local instance = helper.create_instance()
 
         instance:showDiagnostics()
+        finish_async_report()
 
         local dialog = helper.find_dialog("TextViewer")
         assert.is_not_nil(dialog)
-        assert.truthy(dialog.text:match("Test discovery"))
-        assert.truthy(dialog.text:match("can't find"))
+        assert.truthy(dialog.text:match("Can't find a device%?"))
+        assert.truthy(dialog.text:match("cannot find"))
+    end)
+
+    describe("guided troubleshooting UX", function()
+        it("shows progress before running checks asynchronously", function()
+            local instance = helper.create_instance()
+            local diagnostics = require("localsend_diagnostics")
+            local collected = false
+            diagnostics._setAsyncCollectOverride(function(_, callback)
+                collected = true
+                callback({
+                    network_connected = true,
+                    binary_exists = true,
+                    binary_runs = true,
+                    arch_mismatch = false,
+                    settings = { save_dir_status = "writable: /mnt/us/documents" },
+                    server = { self_test = { ok = true, detail = "HTTP 200" } },
+                    firewall = { managed = true, ok = true, detail = "open" },
+                    logs = {},
+                })
+            end)
+
+            instance:runTroubleshootingCheck()
+
+            assert.is_false(collected)
+            assert.is_not_nil(helper.find_notification("Checking LocalSend"))
+            local task = helper.state.scheduled_tasks[#helper.state.scheduled_tasks]
+            assert.is_not_nil(task)
+            task.callback()
+            assert.is_true(collected)
+
+            local dialog = helper.find_dialog_with_title("TextViewer", "LocalSend check")
+            assert.is_not_nil(dialog)
+            assert.truthy(dialog.text:match("ready"))
+            assert.is_table(dialog.buttons_table)
+        end)
+
+        it("classifies a missing binary with a direct reinstall action", function()
+            local instance = helper.create_instance()
+            local diagnostics = require("localsend_diagnostics")
+
+            local result = diagnostics.classifyReport(instance, {
+                network_connected = true,
+                binary_exists = false,
+                binary_runs = false,
+                arch_mismatch = false,
+                settings = { save_dir_status = "writable: /mnt/us/documents" },
+                server = { self_test = { ok = false, detail = "binary missing" } },
+                firewall = { managed = false, ok = true },
+                logs = {},
+            })
+
+            assert.equals("binary_missing", result.id)
+            assert.equals("Reinstall", result.action_label)
+        end)
+
+        it("classifies an invalid save folder before attempting transfer fixes", function()
+            local instance = helper.create_instance()
+            local diagnostics = require("localsend_diagnostics")
+
+            local result = diagnostics.classifyReport(instance, {
+                network_connected = true,
+                binary_exists = true,
+                binary_runs = true,
+                arch_mismatch = false,
+                settings = { save_dir_status = "exists but not writable: /mnt/onboard/books" },
+                server = { self_test = { ok = true, detail = "HTTP 200" } },
+                firewall = { managed = true, ok = true },
+                logs = {},
+            })
+
+            assert.equals("save_dir", result.id)
+            assert.equals("Choose folder", result.action_label)
+        end)
+
+        it("turns connection-refused send evidence into a device discovery action", function()
+            local state = require("localsend_state")
+            state.ServerState.last_send = {
+                success = false,
+                message = "tcp connect error: connection refused",
+                time = os.time(),
+            }
+            local instance = helper.create_instance()
+            local diagnostics = require("localsend_diagnostics")
+
+            local result = diagnostics.diagnoseTransfer(instance)
+
+            assert.equals("recipient_unavailable", result.id)
+            assert.equals("Find devices", result.action_label)
+        end)
+
+        it("recognizes receiver storage errors from the backend log", function()
+            files["/tmp/localsend_server.out"] = "Upload error: no space left on device\n"
+            local instance = helper.create_instance()
+            local diagnostics = require("localsend_diagnostics")
+
+            local result = diagnostics.diagnoseTransfer(instance)
+
+            assert.equals("storage", result.id)
+            assert.equals("Choose folder", result.action_label)
+        end)
+
+        it("recognizes a connection interrupted during a long transfer", function()
+            files["/tmp/localsend_server.out"] = "Upload failed: unexpected EOF\n"
+            local instance = helper.create_instance()
+            local diagnostics = require("localsend_diagnostics")
+
+            local result = diagnostics.diagnoseTransfer(instance)
+
+            assert.equals("interrupted", result.id)
+            assert.truthy(result.text:match("awake"))
+            assert.equals("Create report", result.action_label)
+        end)
+
+        it("does not treat normal HTTPS startup logging as a transfer failure", function()
+            files["/tmp/localsend_server.out"] = "INFO Loading https certificate\nINFO Waiting for files\n"
+            local instance = helper.create_instance()
+            local diagnostics = require("localsend_diagnostics")
+
+            local result = diagnostics.diagnoseTransfer(instance)
+
+            assert.equals("unknown", result.id)
+            assert.truthy(result.title:match("No recent transfer error"))
+        end)
+
+        it("stops, tests, and restores a running receiver", function()
+            local instance = helper.create_instance()
+            local running = true
+            instance.isRunning = function()
+                return running
+            end
+            local stop_count, start_count = 0, 0
+            instance.stopServer = function(_, options)
+                stop_count = stop_count + 1
+                running = false
+                options.callback(true)
+            end
+            instance.start = function(_, silent)
+                assert.is_true(silent)
+                start_count = start_count + 1
+                running = true
+            end
+            local diagnostics = require("localsend_diagnostics")
+            diagnostics._setAsyncCollectOverride(nil)
+            local report
+
+            diagnostics.collectAsync(instance, function(value)
+                report = value
+            end)
+
+            assert.is_not_nil(report)
+            assert.equals(1, stop_count)
+            assert.equals(1, start_count)
+            assert.is_true(running)
+            assert.is_true(report.server.self_test.ok)
+            assert.is_true(report.firewall.managed)
+            assert.truthy(report.firewall.detail:match("iptables"))
+        end)
+
+        it("starts, tests, and stops a receiver that was originally stopped", function()
+            local instance = helper.create_instance()
+            local running = false
+            local stop_count, start_count = 0, 0
+            instance.isRunning = function()
+                return running
+            end
+            instance.start = function(_, silent)
+                assert.is_true(silent)
+                start_count = start_count + 1
+                running = true
+            end
+            instance.stopServer = function(_, options)
+                stop_count = stop_count + 1
+                running = false
+                options.callback(true)
+            end
+            local diagnostics = require("localsend_diagnostics")
+            diagnostics._setAsyncCollectOverride(nil)
+            local report
+
+            diagnostics.collectAsync(instance, function(value)
+                report = value
+            end)
+
+            assert.is_not_nil(report)
+            assert.equals(1, start_count)
+            assert.equals(1, stop_count)
+            assert.is_false(running)
+            assert.is_true(report.server.self_test.ok)
+        end)
+
+        it("runs the active lifecycle check before diagnosing a failed transfer", function()
+            local instance = helper.create_instance()
+            local diagnostics = require("localsend_diagnostics")
+            local collected = false
+            diagnostics._setAsyncCollectOverride(function(_, callback)
+                collected = true
+                callback({
+                    generated_at = "2026-07-12 12:00:00",
+                    generated_unix = os.time(),
+                    network_connected = true,
+                    binary_exists = true,
+                    binary_runs = true,
+                    arch_mismatch = false,
+                    settings = { save_dir_status = "writable: /mnt/us/documents" },
+                    server = { self_test = { ok = true, detail = "HTTP 200" } },
+                    firewall = { managed = true, ok = true, detail = "open" },
+                    logs = {},
+                })
+            end)
+
+            instance:showTransferTroubleshooting()
+
+            assert.is_false(collected)
+            assert.is_not_nil(helper.find_notification("Testing the LocalSend receiver"))
+            helper.state.scheduled_tasks[#helper.state.scheduled_tasks].callback()
+            assert.is_true(collected)
+            local dialog = helper.find_dialog_with_title("TextViewer", "Transfer failed")
+            assert.is_not_nil(dialog)
+            assert.truthy(dialog.text:match("No recent transfer error"))
+        end)
+
+        it("explains discovery in plain language before starting the test", function()
+            local instance = helper.create_instance()
+
+            instance:showDiscoveryHelp()
+
+            local dialog = helper.find_dialog("ConfirmBox")
+            assert.is_not_nil(dialog)
+            assert.truthy(dialog.text:match("Open LocalSend on your phone or computer"))
+            assert.equals("Start test", dialog.ok_text)
+        end)
+
+        it("briefly stops and restores a running receiver for discovery", function()
+            local instance = helper.create_instance()
+            instance.isRunning = function()
+                return true
+            end
+            local stopped = false
+            instance.stopServer = function(_, options)
+                stopped = true
+                options.callback(true)
+            end
+            local diagnostics = require("localsend_diagnostics")
+            local original_launch = diagnostics._launchNetTest
+            local restart_after
+            diagnostics._launchNetTest = function(_, restart)
+                restart_after = restart
+            end
+            finally(function()
+                diagnostics._launchNetTest = original_launch
+            end)
+
+            diagnostics.showDiscoveryTest(instance)
+
+            assert.is_true(stopped)
+            assert.is_true(restart_after)
+        end)
+
+        it("exports support reports to the configured receive folder", function()
+            local instance = helper.create_instance()
+            instance.save_dir = "/mnt/us/documents"
+
+            instance:showBugReportInfo()
+            finish_async_report()
+
+            local dialog = helper.find_dialog_with_title("TextViewer", "LocalSend support report")
+            assert.is_not_nil(dialog)
+            assert.truthy(dialog.text:match("/mnt/us/documents/localsend%-bugreport%.txt"))
+            assert.is_table(dialog.buttons_table)
+        end)
     end)
 end)

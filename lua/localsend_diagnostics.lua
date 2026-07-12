@@ -214,6 +214,10 @@ function M._setFirewallProbeOverride(fn)
     M._firewallProbeOverride = fn
 end
 
+function M._setAsyncCollectOverride(fn)
+    M._asyncCollectOverride = fn
+end
+
 local function activeServerProbe(instance)
     if M._serverProbeOverride then
         return M._serverProbeOverride(instance)
@@ -379,79 +383,88 @@ local function checksFromReport(instance, report)
 
     local ip = report.network_info and report.network_info:match("(%d+%.%d+%.%d+%.%d+)") or nil
     if report.network_connected then
-        table.insert(checks, { ok = true, label = "LAN connected", detail = ip and ("IP " .. ip) or nil })
+        table.insert(checks, { ok = true, label = deps._("LAN connected"), detail = ip and ("IP " .. ip) or nil })
     else
         table.insert(checks, {
             ok = false,
-            label = "LAN connected",
-            hint = "Enable Wi-Fi and connect to the same network as your other devices.",
+            label = deps._("LAN connected"),
+            hint = deps._("Enable Wi-Fi and connect to the same network as your other devices."),
         })
     end
 
     if not report.binary_exists then
         table.insert(checks, {
             ok = false,
-            label = "Receiver binary present",
-            hint = "The localsend binary is missing. Reinstall the plugin via " .. "Updates → Check for updates / reinstall.",
+            label = deps._("Receiver program present"),
+            hint = deps._("The LocalSend receiver program is missing. Reinstall the plugin from Updates."),
         })
     elseif not report.binary_runs then
         table.insert(checks, {
             ok = false,
-            label = "Receiver binary runs",
-            hint = "The binary is present but would not run. This usually means the wrong "
-                .. "architecture package was installed, or the executable bit was lost when "
-                .. "extracting the archive. Reinstall the package matching your device.",
+            label = deps._("Receiver program runs"),
+            hint = deps._(
+                "The receiver is installed but cannot run. Reinstall the package matching this device and preserve executable permissions."
+            ),
         })
     elseif report.arch_mismatch then
         table.insert(checks, {
             ok = false,
-            label = "Receiver binary architecture",
-            detail = "binary " .. tostring(report.binary_arch) .. ", device " .. tostring(report.arch),
-            hint = "The binary runs but its architecture does not match the device. Install the matching package.",
+            label = deps._("Receiver package matches this device"),
+            detail = deps.T(deps._("package %1, device %2"), tostring(report.binary_arch), tostring(report.arch)),
+            hint = deps._("Install the LocalSend package matching this device."),
         })
     else
         table.insert(checks, {
             ok = true,
-            label = "Receiver binary runs",
+            label = deps._("Receiver program runs"),
             detail = (report.binary_version or ""):gsub("%s+$", ""),
         })
     end
 
-    if report.server.self_test and report.server.self_test.ok then
-        table.insert(checks, { ok = true, label = "Server self-test", detail = report.server.self_test.detail })
+    local save_status = report.settings and report.settings.save_dir_status or deps._("not configured")
+    if save_status:match("^writable:") then
+        table.insert(checks, { ok = true, label = deps._("Receive folder writable"), detail = save_status })
     else
         table.insert(checks, {
             ok = false,
-            label = "Server self-test",
-            detail = report.server.self_test and report.server.self_test.detail or "unknown",
-            hint = "The receiver did not start and answer locally. Check the diagnostic server self-test log below.",
+            label = deps._("Receive folder writable"),
+            detail = save_status,
+            hint = deps._("Choose an existing folder that KOReader can write to."),
+        })
+    end
+
+    if report.server.self_test and report.server.self_test.ok then
+        table.insert(checks, { ok = true, label = deps._("Receiver self-test"), detail = report.server.self_test.detail })
+    else
+        table.insert(checks, {
+            ok = false,
+            label = deps._("Receiver self-test"),
+            detail = report.server.self_test and report.server.self_test.detail or deps._("unknown"),
+            hint = deps._("The receiver did not start and answer on this device. Check the backend log below."),
         })
     end
 
     if report.firewall and not report.firewall.managed then
-        table.insert(checks, { info = true, label = "Firewall", detail = report.firewall.detail })
+        table.insert(checks, { info = true, label = deps._("Firewall"), detail = report.firewall.detail })
     elseif report.firewall and report.firewall.ok then
-        table.insert(checks, { ok = true, label = "Firewall self-test", detail = report.firewall.detail })
+        table.insert(checks, { ok = true, label = deps._("Firewall self-test"), detail = report.firewall.detail })
     else
         table.insert(checks, {
             ok = false,
-            label = "Firewall self-test",
-            detail = report.firewall and report.firewall.detail or "unknown",
-            hint = "The plugin could not open the iptables rules for port "
-                .. tostring(instance.port)
-                .. ". Check permissions and iptables support on this device.",
+            label = deps._("Firewall self-test"),
+            detail = report.firewall and report.firewall.detail or deps._("unknown"),
+            hint = deps.T(deps._("The plugin could not open its firewall rules for port %1."), tostring(instance.port)),
         })
     end
 
     if instance.use_webrtc then
         if report.network_online then
-            table.insert(checks, { ok = true, label = "Internet reachable (WebRTC)", detail = "online" })
+            table.insert(checks, { ok = true, label = deps._("Internet reachable (WebRTC)"), detail = deps._("online") })
         else
             table.insert(checks, {
                 ok = false,
-                label = "Internet reachable (WebRTC)",
-                hint = "WebRTC needs Internet access to reach the signaling server. "
-                    .. "Connect to the Internet, or disable WebRTC if you only need LAN transfers.",
+                label = deps._("Internet reachable (WebRTC)"),
+                hint = deps._("WebRTC needs Internet access. Connect to the Internet or disable WebRTC for LAN-only transfers."),
             })
         end
     end
@@ -459,23 +472,19 @@ local function checksFromReport(instance, report)
     local ls = serverState() and serverState().last_send or nil
     if ls then
         local age = os.time() - (ls.time or 0)
-        local age_str = age < 60 and "just now" or string.format("%d min ago", math.floor(age / 60))
+        local age_str = age < 60 and deps._("just now") or deps.T(deps._("%1 min ago"), math.floor(age / 60))
         if ls.success then
             table.insert(checks, {
                 ok = true,
-                label = "Last send",
-                detail = (ls.message or "OK") .. "  (" .. age_str .. ")",
+                label = deps._("Last send"),
+                detail = (ls.message or deps._("OK")) .. "  (" .. age_str .. ")",
             })
         else
             table.insert(checks, {
                 ok = false,
-                label = "Last send",
-                detail = (ls.message or "failed") .. "  (" .. age_str .. ")",
-                hint = "A recent send failed. Common causes: the recipient is not running "
-                    .. "LocalSend, a PIN mismatch, or the recipient's firewall blocks port "
-                    .. tostring(instance.port)
-                    .. ". Try Test discovery to confirm the recipient "
-                    .. "is visible, then send again.",
+                label = deps._("Last send"),
+                detail = (ls.message or deps._("failed")) .. "  (" .. age_str .. ")",
+                hint = deps._("A recent send failed. Use Transfer failed? for a focused explanation."),
             })
         end
     end
@@ -496,9 +505,9 @@ local function formatCheckSummary(checks)
         end
     end
     if failed == 0 then
-        table.insert(lines, string.format("Result: all %d checks passed", passed))
+        table.insert(lines, deps.T(deps._("Result: all %1 checks passed"), passed))
     else
-        table.insert(lines, string.format("Result: %d passed, %d to fix", passed, failed))
+        table.insert(lines, deps.T(deps._("Result: %1 passed, %2 to fix"), passed, failed))
     end
     table.insert(lines, "")
     for _, c in ipairs(checks or {}) do
@@ -516,15 +525,16 @@ local function formatCheckSummary(checks)
     end
     if failed == 0 then
         table.insert(lines, "")
-        table.insert(lines, "If other devices still can't find this one, run Test discovery to check multicast.")
+        table.insert(lines, deps._("If another device still cannot find this one, choose “Can't find a device?”."))
     end
     return table.concat(lines, "\n")
 end
 
-function M.collect(instance)
+function M.collect(instance, options)
+    options = options or {}
     local binary = binaryStatus(instance)
-    local server_probe = activeServerProbe(instance)
-    local firewall_probe = firewallProbe(instance)
+    local server_probe = options.server_probe or activeServerProbe(instance)
+    local firewall_probe = options.firewall_probe or firewallProbe(instance)
     local network_info = safeCall(function()
         if deps.Device and deps.Device.retrieveNetworkInfo then
             return deps.Device:retrieveNetworkInfo()
@@ -534,6 +544,7 @@ function M.collect(instance)
 
     return {
         generated_at = os.date("%Y-%m-%d %H:%M:%S"),
+        generated_unix = os.time(),
         plugin_version = paths.plugin_version or "unknown",
         arch = instance.getDeviceArch and (instance:getDeviceArch() or "unknown") or "unknown",
         device_info = safeCall(function()
@@ -581,6 +592,107 @@ function M.collect(instance)
             crash_log_path = (paths.data_dir or "KOReader data directory") .. "/crash.log",
         },
     }
+end
+
+function M.collectAsync(instance, callback)
+    if M._asyncCollectOverride then
+        M._asyncCollectOverride(instance, callback)
+        return
+    end
+
+    local was_running = instance.isRunning and instance:isRunning() or false
+
+    local function finish(server_probe, firewall_probe)
+        callback(M.collect(instance, { server_probe = server_probe, firewall_probe = firewall_probe }))
+    end
+
+    local function firewallStatus()
+        if M._firewallProbeOverride then
+            return M._firewallProbeOverride(instance)
+        end
+        if instance.checkFirewall then
+            return instance:checkFirewall()
+        end
+        return { managed = false, ok = true, detail = "firewall inspection unavailable" }
+    end
+
+    local function stopTestReceiver(server_probe, firewall_probe)
+        instance:stopServer({
+            callback = function(success)
+                if not success then
+                    server_probe = {
+                        ok = false,
+                        detail = "receiver started but could not be stopped after its lifecycle test",
+                        log_path = constants.SERVER_OUTPUT_FILE,
+                    }
+                end
+                finish(server_probe, firewall_probe)
+            end,
+        })
+    end
+
+    local function startAndProbe()
+        -- This deliberately calls the same start method as the normal plugin.
+        -- It therefore validates its settings, command construction, firewall
+        -- setup, PID handling, and readiness behavior as one lifecycle.
+        instance:start(true)
+        local function poll(attempt)
+            local probe = probeLocalAPI(instance)
+            local code = probe and probe:match("^HTTP (%d+)")
+            if code and code:sub(1, 1) == "2" then
+                local server_probe = { ok = true, detail = probe, log_path = constants.SERVER_OUTPUT_FILE }
+                local firewall_probe = firewallStatus()
+                if was_running then
+                    -- The freshly started receiver is the restored receiver.
+                    finish(server_probe, firewall_probe)
+                else
+                    stopTestReceiver(server_probe, firewall_probe)
+                end
+            elseif attempt >= 50 then
+                local server_probe = { ok = false, detail = probe, log_path = constants.SERVER_OUTPUT_FILE }
+                local firewall_probe = firewallStatus()
+                instance:stopServer({
+                    callback = function()
+                        if was_running then
+                            -- Preserve the user's original desired state even
+                            -- after a failed probe; start() will surface details
+                            -- in the backend log included with the report.
+                            instance:start(true)
+                        end
+                        finish(server_probe, firewall_probe)
+                    end,
+                })
+            else
+                deps.UIManager:scheduleIn(0.1, function()
+                    poll(attempt + 1)
+                end)
+            end
+        end
+        poll(1)
+    end
+
+    if not was_running then
+        startAndProbe()
+        return
+    end
+
+    instance:stopServer({
+        callback = function(success)
+            if success then
+                startAndProbe()
+            else
+                finish({
+                    ok = false,
+                    detail = "could not stop the running receiver for its lifecycle test",
+                    log_path = constants.SERVER_OUTPUT_FILE,
+                }, {
+                    managed = false,
+                    ok = false,
+                    detail = "not tested because the running receiver could not be stopped",
+                })
+            end
+        end,
+    })
 end
 
 local function addSection(lines, title)
@@ -696,17 +808,195 @@ function M.formatReport(report)
     return table.concat(lines, "\n")
 end
 
-function M.getReportText(instance)
-    local report = M.collect(instance)
+function M.getReportText(instance, report)
+    report = report or M.collect(instance)
     report.checks = checksFromReport(instance, report)
     return M.formatReport(report)
+end
+
+local function saveDirectoryIsWritable(report)
+    local status = report.settings and report.settings.save_dir_status or ""
+    return status:match("^writable:") ~= nil
+end
+
+-- Reduce the diagnostic report to one user-facing conclusion and one useful
+-- next action. Raw checks and logs remain available through Technical details.
+function M.classifyReport(_, report)
+    report = report or {}
+    if not report.network_connected then
+        return {
+            id = "offline",
+            title = deps._("Wi-Fi is not connected"),
+            text = deps._("Connect this device to the same Wi-Fi network as the phone or computer you want to use."),
+            action = "connect_wifi",
+            action_label = deps._("Connect Wi-Fi"),
+        }
+    end
+    if not report.binary_exists then
+        return {
+            id = "binary_missing",
+            title = deps._("LocalSend needs to be reinstalled"),
+            text = deps._("The receiver program is missing from the plugin installation."),
+            action = "reinstall",
+            action_label = deps._("Reinstall"),
+        }
+    end
+    if not report.binary_runs or report.arch_mismatch then
+        return {
+            id = "binary_invalid",
+            title = deps._("The installed package does not work on this device"),
+            text = deps._("Reinstall the LocalSend package that matches this device. Also preserve executable permissions when extracting it."),
+            action = "reinstall",
+            action_label = deps._("Reinstall"),
+        }
+    end
+    if not saveDirectoryIsWritable(report) then
+        return {
+            id = "save_dir",
+            title = deps._("Files cannot be saved to the selected folder"),
+            text = deps._("Choose an existing folder that KOReader can write to, then try the transfer again."),
+            action = "choose_folder",
+            action_label = deps._("Choose folder"),
+        }
+    end
+    if not (report.server and report.server.self_test and report.server.self_test.ok) then
+        return {
+            id = "server",
+            title = deps._("The LocalSend receiver could not start"),
+            text = deps._("The receiver did not answer on this device. The backend log may explain why."),
+            action = "backend_log",
+            action_label = deps._("View log"),
+        }
+    end
+    if report.firewall and report.firewall.managed and not report.firewall.ok then
+        return {
+            id = "firewall",
+            title = deps._("LocalSend could not open its network port"),
+            text = deps.T(deps._("This device could not allow LocalSend through its firewall on port %1."), tostring(constants.DEFAULT_PORT)),
+            action = "details",
+            action_label = deps._("View details"),
+        }
+    end
+    return {
+        id = "healthy",
+        title = deps._("LocalSend is ready on this device"),
+        text = deps._(
+            "The receiver starts correctly and the save folder is writable. If another device still cannot find this one, test device discovery next."
+        ),
+        action = "discovery",
+        action_label = deps._("Test discovery"),
+    }
+end
+
+local function showTryWithoutHTTPS(instance)
+    local ConfirmBox = require("ui/widget/confirmbox")
+    deps.UIManager:show(ConfirmBox:new({
+        text = deps._("This disables encrypted LocalSend transfers until you turn HTTPS back on in Settings. The receiver will restart."),
+        ok_text = deps._("Disable HTTPS"),
+        ok_callback = function()
+            instance.use_https = false
+            if deps.G_reader_settings then
+                deps.G_reader_settings:makeFalse("LocalSend_use_https")
+            elseif _G.G_reader_settings then
+                _G.G_reader_settings:makeFalse("LocalSend_use_https")
+            end
+            instance:restart()
+        end,
+    }))
+end
+
+local function runResultAction(instance, result)
+    if result.action == "connect_wifi" then
+        deps.NetworkMgr:runWhenConnected(function()
+            M.showGuidedCheck(instance)
+        end)
+    elseif result.action == "reinstall" then
+        instance:checkForUpdates()
+    elseif result.action == "choose_folder" then
+        instance:showSaveDirPicker()
+    elseif result.action == "backend_log" then
+        M.showRecentBackendLog()
+    elseif result.action == "discovery" then
+        M.showDiscoveryHelp(instance)
+    elseif result.action == "disable_https" then
+        showTryWithoutHTTPS(instance)
+    elseif result.action == "allowed_files" then
+        deps.UIManager:show(deps.InfoMessage:new({
+            text = deps._("Open LocalSend Settings and review Allowed extensions and File type routing."),
+        }))
+    elseif result.action == "support_report" then
+        M.showBugReport(instance)
+    else
+        M.showDiagnostics(instance)
+    end
+end
+
+local function showResult(instance, result, title)
+    local TextViewer = require("ui/widget/textviewer")
+    local dialog
+    local secondary_buttons = {
+        {
+            text = deps._("Technical details"),
+            callback = function()
+                deps.UIManager:close(dialog)
+                M.showDiagnostics(instance)
+            end,
+        },
+    }
+    local button_rows = {}
+    if result.action and result.action_label then
+        table.insert(button_rows, {
+            {
+                text = result.action_label,
+                callback = function()
+                    deps.UIManager:close(dialog)
+                    runResultAction(instance, result)
+                end,
+            },
+        })
+    end
+    table.insert(secondary_buttons, {
+        text = deps._("Close"),
+        callback = function()
+            deps.UIManager:close(dialog)
+        end,
+    })
+    table.insert(button_rows, secondary_buttons)
+    dialog = TextViewer:new({
+        title = title or deps._("LocalSend check"),
+        text = result.title .. "\n\n" .. result.text,
+        buttons_table = button_rows,
+        show_menu = false,
+    })
+    deps.UIManager:show(dialog)
+end
+
+function M.showGuidedCheck(instance)
+    local progress = deps.InfoMessage:new({
+        text = deps._("Checking LocalSend…"),
+        dismissable = false,
+    })
+    deps.UIManager:show(progress)
+    -- Let the progress message reach the e-ink screen before any shell probes.
+    deps.UIManager:scheduleIn(0.1, function()
+        M.collectAsync(instance, function(report)
+            report.checks = checksFromReport(instance, report)
+            M._last_report = report
+            local formatted, report_text = pcall(M.formatReport, report)
+            if formatted then
+                M.saveReportText(report_text)
+            end
+            deps.UIManager:close(progress)
+            showResult(instance, M.classifyReport(instance, report), deps._("LocalSend check"))
+        end)
+    end)
 end
 
 -- Best-effort write of a report to the plugin cache dir
 -- (data_dir/cache/localsend, matching the update module's cache subdir).
 -- Returns the written path, or nil on failure. Not device-specific.
-function M.saveReportText(text, filename)
-    local report_dir = (paths.data_dir or "") .. "/cache/localsend"
+function M.saveReportText(text, filename, directory)
+    local report_dir = directory or ((paths.data_dir or "") .. "/cache/localsend")
     if deps.util and deps.util.makePath then
         if not deps.util.makePath(report_dir) then
             return nil
@@ -725,9 +1015,30 @@ function M.saveReportText(text, filename)
     return path
 end
 
-function M.showDiagnostics(instance)
+local function withReportAsync(instance, progress_text, callback)
+    local last_generated = M._last_report and M._last_report.generated_unix
+    if last_generated and os.time() - last_generated < 300 then
+        callback(M._last_report)
+        return
+    end
+    local progress = deps.InfoMessage:new({
+        text = progress_text,
+        dismissable = false,
+    })
+    deps.UIManager:show(progress)
+    deps.UIManager:scheduleIn(0.1, function()
+        M.collectAsync(instance, function(report)
+            report.checks = checksFromReport(instance, report)
+            M._last_report = report
+            deps.UIManager:close(progress)
+            callback(report)
+        end)
+    end)
+end
+
+local function showDiagnosticsWithReport(instance, report)
     local TextViewer = require("ui/widget/textviewer")
-    local text = M.getReportText(instance)
+    local text = M.getReportText(instance, report)
     local saved = M.saveReportText(text)
     if saved then
         text = text .. "\n\nSaved to: " .. saved
@@ -736,6 +1047,12 @@ function M.showDiagnostics(instance)
         title = deps._("LocalSend diagnostics"),
         text = text,
     }))
+end
+
+function M.showDiagnostics(instance)
+    withReportAsync(instance, deps._("Collecting technical details…"), function(report)
+        showDiagnosticsWithReport(instance, report)
+    end)
 end
 
 function M.showNetworkInfo()
@@ -758,9 +1075,9 @@ function M.showRecentBackendLog()
     }))
 end
 
-function M.showBugReport(instance)
+local function showBugReportWithReport(instance, collected_report)
     local TextViewer = require("ui/widget/textviewer")
-    local report = M.getReportText(instance)
+    local report = M.getReportText(instance, collected_report)
 
     -- Best-effort: append the tail of KOReader's crash.log so users paste it
     -- alongside the diagnostics report when filing an issue.
@@ -784,14 +1101,229 @@ function M.showBugReport(instance)
 
     -- Save the full bug report so users can attach the file (over USB/cloud)
     -- instead of transcribing it from an e-ink screen.
-    local saved = M.saveReportText(text, "localsend-bugreport.txt")
+    -- Put the report where received files normally go so it is easy to find
+    -- over USB. Fall back to the plugin cache if that folder is unavailable.
+    local export_dir = instance.save_dir
+    local valid = instance.validateSaveDir and instance:validateSaveDir(export_dir)
+    local saved = valid and M.saveReportText(text, "localsend-bugreport.txt", export_dir) or M.saveReportText(text, "localsend-bugreport.txt")
     if saved then
         text = text .. "\n\nSaved to: " .. saved
     end
 
-    deps.UIManager:show(TextViewer:new({
-        title = deps._("LocalSend bug report"),
+    local dialog
+    local buttons = {
+        {
+            {
+                text = deps._("Copy report"),
+                callback = function()
+                    if deps.Device and deps.Device.input and deps.Device.input.setClipboardText then
+                        deps.Device.input.setClipboardText(text)
+                        deps.UIManager:show(deps.Notification:new({ text = deps._("Support report copied") }))
+                    end
+                end,
+            },
+            {
+                text = deps._("Close"),
+                callback = function()
+                    deps.UIManager:close(dialog)
+                end,
+            },
+        },
+    }
+    dialog = TextViewer:new({
+        title = deps._("LocalSend support report"),
         text = text,
+        buttons_table = buttons,
+        text_type = "code",
+    })
+    deps.UIManager:show(dialog)
+end
+
+function M.showBugReport(instance)
+    withReportAsync(instance, deps._("Creating support report…"), function(report)
+        showBugReportWithReport(instance, report)
+    end)
+end
+
+function M.captureTransferEvidence()
+    local last_send = serverState() and serverState().last_send or nil
+    return {
+        last_send = last_send,
+        backend = readTail(constants.SERVER_OUTPUT_FILE, REPORT_TAIL_BYTES) or "",
+        send_log = readTail(constants.SEND_OUTPUT_FILE, REPORT_TAIL_BYTES) or "",
+    }
+end
+
+local function errorLines(text)
+    local lines = {}
+    for line in tostring(text or ""):gmatch("[^\n]+") do
+        local lower = line:lower()
+        if
+            lower:match("error")
+            or lower:match("failed")
+            or lower:match("rejected")
+            or lower:match("refused")
+            or lower:match("invalid")
+            or lower:match("timed? ?out")
+            or lower:match("unexpected eof")
+            or lower:match("bodywriteaborted")
+            or lower:match("noteof")
+            or lower:match("broken pipe")
+            or lower:match("connection reset")
+            or lower:match("no space left")
+        then
+            table.insert(lines, line)
+        end
+    end
+    return table.concat(lines, "\n")
+end
+
+function M.diagnoseTransfer(_, captured)
+    captured = captured or M.captureTransferEvidence()
+    local last_send = captured.last_send
+    local recent_failed_send = last_send and not last_send.success and os.time() - (last_send.time or 0) <= 300
+    local send_message = recent_failed_send and tostring(last_send.message or "") or ""
+    local evidence = (send_message .. "\n" .. errorLines(captured.send_log) .. "\n" .. errorLines(captured.backend)):lower()
+
+    if evidence:match("no space left") or evidence:match("read%-only") or evidence:match("file io") then
+        return {
+            id = "storage",
+            title = deps._("The receiving device could not save the file"),
+            text = deps._("Its storage may be full, unavailable, or read-only. Check free space or choose another receive folder."),
+            action = "choose_folder",
+            action_label = deps._("Choose folder"),
+        }
+    elseif evidence:match("all files rejected") or evidence:match("rejected by extension") or evidence:match("extension filter") then
+        return {
+            id = "file_rejected",
+            title = deps._("The receiving device rejected this file"),
+            text = deps._("Review Allowed extensions and File type routing on the receiving device."),
+            action = "allowed_files",
+            action_label = deps._("Review settings"),
+        }
+    elseif evidence:match("pin") or evidence:match("status code: 401") or evidence:match("too many failed attempts") then
+        return {
+            id = "pin",
+            title = deps._("The PIN was not accepted"),
+            text = deps._("Enter the PIN shown by the receiving device and try again."),
+            action = "details",
+            action_label = deps._("View details"),
+        }
+    elseif
+        evidence:match("tls handshake")
+        or evidence:match("x509")
+        or evidence:match("certificate verification")
+        or evidence:match("certificate[^\n]*error")
+        or evidence:match("certificate[^\n]*failed")
+        or evidence:match("certificate[^\n]*invalid")
+        or evidence:match("certificate[^\n]*expired")
+        or evidence:match("https[^\n]*error")
+        or evidence:match("https[^\n]*failed")
+    then
+        return {
+            id = "https",
+            title = deps._("The secure connection failed"),
+            text = deps._("The devices could not establish an HTTPS connection. You can temporarily test without HTTPS."),
+            action = "disable_https",
+            action_label = deps._("Try without HTTPS"),
+        }
+    elseif
+        evidence:match("connection refused")
+        or evidence:match("tcp connect")
+        or evidence:match("not running localsend")
+        or evidence:match("device is not running")
+        or evidence:match("connection failed")
+        or evidence:match("connection timed out")
+    then
+        return {
+            id = "recipient_unavailable",
+            title = deps._("The other device is not reachable"),
+            text = deps._("Make sure LocalSend is open on the other device and both devices are connected to the same Wi-Fi network."),
+            action = "discovery",
+            action_label = deps._("Find devices"),
+        }
+    elseif
+        evidence:match("bodywriteaborted")
+        or evidence:match("noteof")
+        or evidence:match("broken pipe")
+        or evidence:match("connection reset")
+        or evidence:match("unexpected eof")
+    then
+        return {
+            id = "interrupted",
+            title = deps._("The connection ended during the transfer"),
+            text = deps._(
+                "Keep both devices awake and connected to Wi-Fi, then retry. If it happens again, create a support report immediately afterward."
+            ),
+            action = "support_report",
+            action_label = deps._("Create report"),
+        }
+    elseif evidence:match("checksum") then
+        return {
+            id = "checksum",
+            title = deps._("The received file did not pass verification"),
+            text = deps._("The transfer was incomplete or corrupted. Retry it while both devices have a stable Wi-Fi connection."),
+            action = "support_report",
+            action_label = deps._("Create report"),
+        }
+    elseif evidence:match("rejected") or evidence:match("status code: 400") or evidence:match("status code: 403") then
+        return {
+            id = "rejected",
+            title = deps._("The receiving device rejected the transfer"),
+            text = deps._(
+                "The available logs do not identify a safe automatic fix. Create a support report immediately after reproducing the failure."
+            ),
+            action = "support_report",
+            action_label = deps._("Create report"),
+        }
+    end
+
+    return {
+        id = "unknown",
+        title = deps._("No recent transfer error was recognized"),
+        text = deps._("Try the transfer once more, then return here immediately. A support report will include the newest LocalSend logs."),
+        action = "support_report",
+        action_label = deps._("Create report"),
+    }
+end
+
+function M.showTransferCheck(instance)
+    -- Capture the previous receiver/send logs before the lifecycle test stops
+    -- and restores the normal receiver, which may rotate or truncate them.
+    local captured = M.captureTransferEvidence()
+    local progress = deps.InfoMessage:new({
+        text = deps._("Testing the LocalSend receiver…"),
+        dismissable = false,
+    })
+    deps.UIManager:show(progress)
+    deps.UIManager:scheduleIn(0.1, function()
+        M.collectAsync(instance, function(report)
+            report.checks = checksFromReport(instance, report)
+            M._last_report = report
+            deps.UIManager:close(progress)
+
+            local lifecycle_result = M.classifyReport(instance, report)
+            if lifecycle_result.id ~= "healthy" then
+                showResult(instance, lifecycle_result, deps._("Transfer failed"))
+                return
+            end
+            showResult(instance, M.diagnoseTransfer(instance, captured), deps._("Transfer failed"))
+        end)
+    end)
+end
+
+function M.showDiscoveryHelp(instance)
+    local ConfirmBox = require("ui/widget/confirmbox")
+    deps.UIManager:show(ConfirmBox:new({
+        text = deps._(
+            "Open LocalSend on your phone or computer and keep it visible during the test. "
+                .. "Both devices should be connected to the same Wi-Fi network.\n\n"
+                .. "The LocalSend receiver may restart briefly."
+        ),
+        ok_text = deps._("Start test"),
+        ok_callback = function()
+            M.showDiscoveryTest(instance)
+        end,
     }))
 end
 
@@ -822,7 +1354,12 @@ function M.formatDiscoveryResult(instance, r)
     local lines = {}
     table.insert(lines, "LocalSend Discovery Test")
     table.insert(lines, "")
-    table.insert(lines, "Multicast loopback: " .. (r.loopback and "OK" or "FAILED"))
+    if (r.peers or 0) > 0 and not r.loopback then
+        table.insert(lines, "Multicast reception: OK (another device responded)")
+        table.insert(lines, "Self-loopback: inconclusive")
+    else
+        table.insert(lines, "Multicast self-test: " .. (r.loopback and "OK" or "FAILED"))
+    end
     table.insert(
         lines,
         "Other devices seen: "
@@ -864,10 +1401,6 @@ function M.formatDiscoveryResult(instance, r)
             "device(s) were seen. If transfers still fail, the problem is the transfer",
             "itself (HTTPS, PIN, sender app), not discovery.",
         }
-        if not r.loopback then
-            table.insert(diag_lines, "(Self-loopback read FAILED, but peer announcements were")
-            table.insert(diag_lines, "received, so multicast is working — ignore the FAILED line above.)")
-        end
     elseif not r.loopback then
         diag_lines = {
             "Multicast discovery is NOT working on this device/network. Likely causes:",
@@ -891,6 +1424,67 @@ function M.formatDiscoveryResult(instance, r)
     table.insert(lines, "port " .. port .. " (TCP + UDP). See the Troubleshooting guide.")
 
     return table.concat(lines, "\n")
+end
+
+local function classifyDiscoveryResult(r)
+    r = r or {}
+    if r.bind_error and r.bind_error ~= "" then
+        return {
+            title = deps._("LocalSend could not use its discovery port"),
+            text = deps._("Another process may be using the LocalSend network port. Restart KOReader and try again."),
+        }
+    elseif (r.peers or 0) > 0 then
+        local aliases = type(r.seen_aliases) == "table" and #r.seen_aliases > 0 and table.concat(r.seen_aliases, ", ") or nil
+        return {
+            title = deps._("Another LocalSend device was found"),
+            text = aliases and deps.T(deps._("Device discovery is working. Found: %1"), aliases)
+                or deps._("Device discovery is working on this network."),
+        }
+    elseif not r.loopback then
+        return {
+            title = deps._("This network is blocking device discovery"),
+            text = deps._("Try a non-guest Wi-Fi network and disable AP or client isolation in the router settings."),
+        }
+    end
+    return {
+        title = deps._("No other LocalSend device answered"),
+        text = deps._(
+            "This device's network test passed. Keep LocalSend open on the other device and check its firewall or Local Network permission."
+        ),
+    }
+end
+
+local function showDiscoveryResult(instance, result)
+    local TextViewer = require("ui/widget/textviewer")
+    local dialog
+    dialog = TextViewer:new({
+        title = deps._("Device discovery"),
+        text = result.title .. "\n\n" .. result.text,
+        show_menu = false,
+        buttons_table = {
+            {
+                {
+                    text = deps._("Technical details"),
+                    callback = function()
+                        deps.UIManager:close(dialog)
+                        local details = TextViewer:new({
+                            title = deps._("Discovery details"),
+                            text = M._last_discovery_text or deps._("No discovery details are available."),
+                            text_type = "code",
+                        })
+                        deps.UIManager:show(details)
+                    end,
+                },
+                {
+                    text = deps._("Close"),
+                    callback = function()
+                        deps.UIManager:close(dialog)
+                    end,
+                },
+            },
+        },
+    })
+    deps.UIManager:show(dialog)
 end
 
 local function readNetTestResult()
@@ -918,18 +1512,22 @@ local function killStaleNetTest()
     os.remove(constants.NETTEST_PID_FILE)
 end
 
-function M._pollDiscoveryTest(instance, attempts, deadline)
+local function finishDiscoveryTest(instance, restart_after)
+    instance:closeFirewall()
+    if restart_after then
+        instance:start(true)
+    end
+end
+
+function M._pollDiscoveryTest(instance, attempts, deadline, restart_after)
     local result = readNetTestResult()
     if result then
         os.remove(constants.NETTEST_OUTPUT_FILE)
         os.remove(constants.NETTEST_PID_FILE)
-        instance:closeFirewall()
         local text = M.formatDiscoveryResult(instance, result)
-        local TextViewer = require("ui/widget/textviewer")
-        deps.UIManager:show(TextViewer:new({
-            title = deps._("LocalSend discovery test"),
-            text = text,
-        }))
+        M._last_discovery_text = text
+        finishDiscoveryTest(instance, restart_after)
+        showDiscoveryResult(instance, classifyDiscoveryResult(result))
         return
     end
     if os.time() > deadline or attempts > 30 then
@@ -937,18 +1535,18 @@ function M._pollDiscoveryTest(instance, attempts, deadline)
         os.remove(constants.NETTEST_OUTPUT_FILE)
         deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
-            text = deps._("Discovery test timed out. Is the binary working? Try Run diagnostics first."),
+            text = deps._("The discovery test timed out. Use Check LocalSend, then try again."),
             timeout = 4,
         }))
-        instance:closeFirewall()
+        finishDiscoveryTest(instance, restart_after)
         return
     end
     deps.UIManager:scheduleIn(0.5, function()
-        M._pollDiscoveryTest(instance, attempts + 1, deadline)
+        M._pollDiscoveryTest(instance, attempts + 1, deadline, restart_after)
     end)
 end
 
-function M._launchNetTest(instance)
+function M._launchNetTest(instance, restart_after)
     os.remove(constants.NETTEST_OUTPUT_FILE)
     -- Ensure UDP 53317 is reachable for the probe on Kindle. Troubleshooting is
     -- only reachable while the normal server is stopped, so nettest can own the port.
@@ -967,7 +1565,7 @@ function M._launchNetTest(instance)
         text = deps._("Running discovery test… this takes a few seconds."),
         timeout = 3,
     }))
-    M._pollDiscoveryTest(instance, 0, os.time() + constants.NETTEST_DURATION + 5)
+    M._pollDiscoveryTest(instance, 0, os.time() + constants.NETTEST_DURATION + 5, restart_after)
 end
 
 function M.showDiscoveryTest(instance)
@@ -978,10 +1576,30 @@ function M.showDiscoveryTest(instance)
         }))
         return
     end
-    -- Settings/Troubleshooting is disabled while the normal server is running,
-    -- so the discovery test can own the LocalSend port without stopping anything.
-    -- nettest advertises itself, so the device is discoverable during the test.
-    M._launchNetTest(instance)
+    -- nettest needs the receiver's port. If the normal server is active, stop it
+    -- briefly and restore it after the result or timeout.
+    if instance.isRunning and instance:isRunning() then
+        local progress = deps.InfoMessage:new({
+            text = deps._("Restarting LocalSend briefly for the discovery test…"),
+            dismissable = false,
+        })
+        deps.UIManager:show(progress)
+        instance:stopServer({
+            callback = function(success)
+                deps.UIManager:close(progress)
+                if success then
+                    M._launchNetTest(instance, true)
+                else
+                    deps.UIManager:show(deps.InfoMessage:new({
+                        icon = "notice-warning",
+                        text = deps._("LocalSend could not be stopped for the discovery test."),
+                    }))
+                end
+            end,
+        })
+    else
+        M._launchNetTest(instance, false)
+    end
 end
 
 return M

@@ -277,6 +277,7 @@ function LocalSend:init()
             logger = logger,
             T = T,
             _ = _,
+            G_reader_settings = G_reader_settings,
         }, {
             binary_path = binary_path,
             plugin_path = plugin_path,
@@ -761,6 +762,19 @@ function LocalSend:testFirewall()
     return lsfirewall.selfTestFirewall(self.port, self.use_webrtc)
 end
 
+-- Inspect the rules installed by the running receiver without changing them.
+-- Troubleshooting uses this while exercising the real server lifecycle.
+function LocalSend:checkFirewall()
+    if not isValidPort(self.port) then
+        logger.err("[LocalSend] Invalid port, cannot check firewall")
+        return { managed = false, ok = false, detail = "invalid port" }
+    end
+    if not lsfirewall or not lsfirewall.checkFirewall then
+        return { managed = false, ok = true, detail = "firewall module unavailable" }
+    end
+    return lsfirewall.checkFirewall(self.port, self.use_webrtc)
+end
+
 function LocalSend:validateDeviceName(name)
     local valid, err = validateDeviceName(name)
     if not valid and err then
@@ -1110,6 +1124,24 @@ function LocalSend:showDiagnostics()
     end
 end
 
+function LocalSend:runTroubleshootingCheck()
+    if lsdiagnostics then
+        lsdiagnostics.showGuidedCheck(self)
+    end
+end
+
+function LocalSend:showDiscoveryHelp()
+    if lsdiagnostics then
+        lsdiagnostics.showDiscoveryHelp(self)
+    end
+end
+
+function LocalSend:showTransferTroubleshooting()
+    if lsdiagnostics then
+        lsdiagnostics.showTransferCheck(self)
+    end
+end
+
 function LocalSend:runDiscoveryTest()
     if lsdiagnostics then
         lsdiagnostics.showDiscoveryTest(self)
@@ -1434,13 +1466,16 @@ function LocalSend:_buildMainMenu()
                 end,
                 help_text = _("Generate new TLS certificates. Use if you experience connection issues or want to reset trusted device pairings."),
             },
-            {
-                text = _("Troubleshooting"),
-                sub_item_table_func = function()
-                    return self:_buildTroubleshootingMenu()
-                end,
-            },
         },
+    })
+
+    -- Keep troubleshooting outside Settings: Settings is intentionally disabled
+    -- while the receiver is running, but diagnosis must always remain reachable.
+    table.insert(menu, {
+        text = _("Troubleshooting"),
+        sub_item_table_func = function()
+            return self:_buildTroubleshootingMenu()
+        end,
         separator = true,
     })
 
@@ -1490,40 +1525,31 @@ end
 function LocalSend:_buildTroubleshootingMenu()
     local menu = {
         {
-            text = _("Run diagnostics"),
+            text = _("Check LocalSend"),
             keep_menu_open = true,
             callback = function()
-                self:showDiagnostics()
+                self:runTroubleshootingCheck()
             end,
-            help_text = _("Run checks for network, binary, server, and firewall, then show detailed logs " .. "and report information."),
+            help_text = _("Check Wi-Fi, the receiver, the save folder, and network access, then recommend the next step."),
         },
         {
-            text = _("Test discovery"),
+            text = _("Can't find a device?"),
             keep_menu_open = true,
             callback = function()
-                self:runDiscoveryTest()
+                self:showDiscoveryHelp()
             end,
-            help_text = _(
-                "Check whether this device can send/receive LocalSend multicast discovery packets "
-                    .. "and whether other devices are visible, to explain why a device isn't being found."
-            ),
+            help_text = _("Use this when a phone, computer, or e-reader does not appear in LocalSend."),
         },
         {
-            text = _("Show network info"),
+            text = _("Transfer failed?"),
             keep_menu_open = true,
             callback = function()
-                self:showNetworkInfo()
+                self:showTransferTroubleshooting()
             end,
+            help_text = _("Explain the most recent send or receive failure and suggest a relevant action."),
         },
         {
-            text = _("Show recent LocalSend log"),
-            keep_menu_open = true,
-            callback = function()
-                self:showRecentBackendLog()
-            end,
-        },
-        {
-            text = _("Prepare bug report"),
+            text = _("Create support report"),
             keep_menu_open = true,
             callback = function()
                 self:showBugReportInfo()
@@ -1531,49 +1557,41 @@ function LocalSend:_buildTroubleshootingMenu()
             separator = true,
         },
         {
-            text = _("Common fixes"),
+            text = _("Advanced"),
             sub_item_table = {
+                {
+                    text = _("Technical details"),
+                    keep_menu_open = true,
+                    callback = function()
+                        self:showDiagnostics()
+                    end,
+                },
+                {
+                    text = _("Network details"),
+                    keep_menu_open = true,
+                    callback = function()
+                        self:showNetworkInfo()
+                    end,
+                },
+                {
+                    text = _("Backend log"),
+                    keep_menu_open = true,
+                    callback = function()
+                        self:showRecentBackendLog()
+                    end,
+                },
+                {
+                    text = _("Discovery details"),
+                    keep_menu_open = true,
+                    callback = function()
+                        self:runDiscoveryTest()
+                    end,
+                },
                 {
                     text = _("Restart LocalSend server"),
                     keep_menu_open = true,
                     callback = function()
                         self:restart()
-                    end,
-                },
-                {
-                    text = _("Rotate certificates"),
-                    keep_menu_open = true,
-                    callback = function()
-                        self:rotateCertificates()
-                    end,
-                },
-                {
-                    text = _("Use HTTPS"),
-                    checked_func = function()
-                        return self.use_https
-                    end,
-                    callback = function()
-                        self.use_https = not self.use_https
-                        _G.G_reader_settings:flipNilOrTrue("LocalSend_use_https")
-                    end,
-                    help_text = _("Disable temporarily if another LocalSend app cannot connect over HTTPS."),
-                },
-                {
-                    text = _("Enable WebRTC Support (Experimental)"),
-                    checked_func = function()
-                        return self.use_webrtc
-                    end,
-                    callback = function()
-                        self.use_webrtc = not self.use_webrtc
-                        _G.G_reader_settings:flipNilOrFalse("LocalSend_use_webrtc")
-                    end,
-                    help_text = _("Disable temporarily if startup or discovery fails while WebRTC signaling " .. "is enabled."),
-                },
-                {
-                    text = _("Check for updates / reinstall"),
-                    keep_menu_open = true,
-                    callback = function()
-                        self:checkForUpdates()
                     end,
                 },
             },

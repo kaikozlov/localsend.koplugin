@@ -60,7 +60,7 @@ If you are already up to date, the updater can reinstall the current release. Th
 
 ### Troubleshooting
 
-Stop the server, then open **Menu → Network → LocalSend → Settings → Troubleshooting** for in-plugin diagnostics — run diagnostics, test discovery, view network info and recent logs, and prepare a bug report.
+Open **Menu → Network → LocalSend → Troubleshooting** for a guided setup check, device-discovery help, transfer-error explanations, and an exportable support report. Troubleshooting remains available while the receiver is running.
 
 For common symptoms and fixes (connection refused, device not discovered, HTTP 400/403, HTTPS and WebRTC issues), see the **[Troubleshooting guide](docs/TROUBLESHOOTING.md)**.
 

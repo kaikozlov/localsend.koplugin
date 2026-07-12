@@ -295,7 +295,17 @@ describe("Menu Building", function()
             assert.is_true(found_updates, "Should have updates submenu")
             assert.is_true(found_about, "Should have about menu item")
 
-            -- Troubleshooting is nested under Settings, not a top-level item.
+            local found_troubleshooting = false
+            for _, item in ipairs(sub_items) do
+                if item.text == "Troubleshooting" then
+                    found_troubleshooting = true
+                    assert.is_nil(item.enabled_func, "Troubleshooting must remain available while the server is running")
+                end
+            end
+            assert.is_true(found_troubleshooting, "Troubleshooting should be a top-level item")
+
+            -- Settings must contain configuration only; troubleshooting remains
+            -- reachable even when Settings is disabled by a running server.
             assert.is_not_nil(settings_item, "Settings submenu should exist")
             local found_troubleshooting_in_settings = false
             for _, item in ipairs(settings_item.sub_item_table) do
@@ -304,22 +314,21 @@ describe("Menu Building", function()
                     break
                 end
             end
-            assert.is_true(found_troubleshooting_in_settings, "Troubleshooting should be nested under Settings")
+            assert.is_false(found_troubleshooting_in_settings, "Troubleshooting should not be nested under Settings")
         end)
 
-        it("builds troubleshooting submenu with diagnostics and common fixes", function()
+        it("builds a user-oriented troubleshooting submenu with advanced details", function()
             local instance = helper.create_instance()
 
             local troubleshooting_menu = instance:_buildTroubleshootingMenu()
 
             assert.is_table(troubleshooting_menu)
-            assert.equals("Run diagnostics", troubleshooting_menu[1].text)
-            assert.equals("Test discovery", troubleshooting_menu[2].text)
-            assert.equals("Show network info", troubleshooting_menu[3].text)
-            assert.equals("Show recent LocalSend log", troubleshooting_menu[4].text)
-            assert.equals("Prepare bug report", troubleshooting_menu[5].text)
-            assert.equals("Common fixes", troubleshooting_menu[6].text)
-            assert.is_table(troubleshooting_menu[6].sub_item_table)
+            assert.equals("Check LocalSend", troubleshooting_menu[1].text)
+            assert.equals("Can't find a device?", troubleshooting_menu[2].text)
+            assert.equals("Transfer failed?", troubleshooting_menu[3].text)
+            assert.equals("Create support report", troubleshooting_menu[4].text)
+            assert.equals("Advanced", troubleshooting_menu[5].text)
+            assert.is_table(troubleshooting_menu[5].sub_item_table)
         end)
 
         it("builds updates submenu with version, manual check, and auto-check", function()
