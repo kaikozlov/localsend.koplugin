@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -8,7 +10,7 @@ import (
 
 func TestVersionStringFormat(t *testing.T) {
 	v := versionString()
-	// Expect "<version> <goos>/<arch>", e.g. "v1.3.0 linux/arm64".
+	// Expect "<version> <goos>/<arch>", e.g. "vX.Y.Z linux/arm64".
 	if !strings.HasPrefix(v, version+" ") {
 		t.Errorf("versionString %q does not start with %q", v, version+" ")
 	}
@@ -17,6 +19,22 @@ func TestVersionStringFormat(t *testing.T) {
 	}
 	if !strings.HasSuffix(v, "/"+effectiveArch()) {
 		t.Errorf("versionString %q does not end with %q", v, "/"+effectiveArch())
+	}
+}
+
+func TestVersionMatchesPluginMetadata(t *testing.T) {
+	meta, err := os.ReadFile("../lua/_meta.lua")
+	if err != nil {
+		t.Fatalf("read plugin metadata: %v", err)
+	}
+
+	match := regexp.MustCompile(`version\s*=\s*"([^"]+)"`).FindSubmatch(meta)
+	if len(match) != 2 {
+		t.Fatal("plugin metadata does not contain a version field")
+	}
+
+	if pluginVersion := string(match[1]); pluginVersion != version {
+		t.Errorf("CLI version %q does not match plugin metadata version %q", version, pluginVersion)
 	}
 }
 

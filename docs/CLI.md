@@ -34,7 +34,7 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o localsend
 ./localsend --version
 ```
 
-Prints `<version> <goos>/<arch>` (for example `v1.3.0 linux/arm64`). The
+Prints `<version> <goos>/<arch>` (for example `vX.Y.Z linux/arm64`). The
 architecture is injected at build time and matches the asset names (`arm64`,
 `armv7`, `arm-legacy`); the KOReader plugin compares it against the device's
 architecture to flag a mismatched package.

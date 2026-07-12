@@ -6,6 +6,8 @@ local NetworkMgr = require("ui/network/manager")
 
 -- Tests for LocalSend troubleshooting/diagnostics flow
 
+local TEST_BINARY_VERSION = "v9.8.7"
+
 describe("LocalSend diagnostics", function()
     local original_io_open
     local original_io_popen
@@ -67,7 +69,7 @@ describe("LocalSend diagnostics", function()
             if cmd:match("curl") then
                 output = "200"
             elseif cmd:match("%-%-version") then
-                output = "v1.3.0 linux/arm64\n"
+                output = TEST_BINARY_VERSION .. " linux/arm64\n"
             elseif cmd:match("command %-v iptables") then
                 output = "/sbin/iptables\n"
             elseif cmd:match("^'df'") then
@@ -515,7 +517,7 @@ describe("LocalSend diagnostics", function()
                 return fake_file("200")
             end
             if cmd:match("%-%-version") then
-                return fake_file("v1.3.0 linux/arm\n")
+                return fake_file(TEST_BINARY_VERSION .. " linux/arm\n")
             end
             if cmd:match("iptables") then
                 return fake_file("")
