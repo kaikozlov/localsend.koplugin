@@ -44,7 +44,8 @@ just                    # List all recipes
 Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.03_4` — contains real KOReader Linux runtime.
 Bump `koplugin_dev_version` in `justfile` when the image updates.
 
-Shared recipes are imported from a sibling `../koplugin-dev/shared.just` checkout.
+Shared recipes are vendored at `just/shared.just` (from koplugin-dev). Refresh with
+`just sync-shared` when upstream recipes change, then commit the file.
 Product packaging stays local: `just release`.
 
 ## Architecture

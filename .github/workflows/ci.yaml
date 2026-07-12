@@ -6,25 +6,12 @@ on:
   pull_request:
     branches: [main]
 
-defaults:
-  run:
-    working-directory: localsend.koplugin
-
 jobs:
   test:
     name: Docker Test Suite
     runs-on: ubuntu-latest
     steps:
-      - name: Check out plugin
-        uses: actions/checkout@v7
-        with:
-          path: localsend.koplugin
-
-      - name: Check out koplugin-dev (shared.just)
-        uses: actions/checkout@v7
-        with:
-          repository: kaikozlov/koplugin-dev
-          path: koplugin-dev
+      - uses: actions/checkout@v7
 
       - name: Install just
         run: |

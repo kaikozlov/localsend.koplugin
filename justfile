@@ -1,6 +1,6 @@
 # justfile for localsend.koplugin
 #
-# Shared recipes come from a sibling checkout of koplugin-dev.
+# Shared recipes are vendored from koplugin-dev (just/shared.just).
 # No local toolchain required — just Docker (and `just`).
 #
 # Quick start:
@@ -9,9 +9,14 @@
 #   just lint      # lint everything
 #   just shell     # drop into the container
 #   just release   # cross-compile ARM + package release zips (host Go)
+#
+# When shared recipes change upstream:
+#   just sync-shared   # refresh just/shared.just (then commit)
 
 plugin_name := "localsend"
 koplugin_dev_version := "v2026.03_4"
+# Git ref used by `just sync-shared` (recipe source). Independent of the image pin.
+koplugin_dev_ref := env("KOPLUGIN_DEV_REF", "main")
 # Go CLI owns the repo root; the installable .koplugin lives under lua/.
 plugin_path := "/opt/plugin/lua"
 spec_dir := "lua/spec"
@@ -20,7 +25,33 @@ has_go := "1"
 go_integration_packages := "./internal/localsend/..."
 exclude_tags := "e2e"
 
-import "../koplugin-dev/shared.just"
+import "./just/shared.just"
+
+# =============================================================================
+# Setup (plugin-local)
+# =============================================================================
+
+# Refresh just/shared.just from upstream koplugin-dev
+# (Named just/ — not vendor/ — so Go does not treat it as a module vendor tree.)
+[group('setup')]
+sync-shared:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ref="{{ koplugin_dev_ref }}"
+    mkdir -p just
+    tmp="$(mktemp)"
+    url="https://raw.githubusercontent.com/kaikozlov/koplugin-dev/${ref}/shared.just"
+    echo "Fetching ${url}"
+    curl -fsSL "$url" -o "$tmp"
+    {
+        echo "# Vendored from https://github.com/kaikozlov/koplugin-dev"
+        echo "# Ref: ${ref}"
+        echo "# Refresh with: just sync-shared"
+        echo
+        cat "$tmp"
+    } > just/shared.just
+    rm -f "$tmp"
+    echo "Updated just/shared.just from koplugin-dev@${ref}"
 
 # =============================================================================
 # Build (product-specific)
