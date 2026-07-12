@@ -133,7 +133,11 @@ describe("LocalSend Task Scheduling", function()
             instance:start()
 
             assert.equal(1, #helper.state.scheduled_tasks, "Should schedule sentinel task only")
-            assert.equal(instance.check_sentinel_task, helper.state.scheduled_tasks[1].callback, "Should schedule check_sentinel_task for fast notifications")
+            assert.equal(
+                instance.check_sentinel_task,
+                helper.state.scheduled_tasks[1].callback,
+                "Should schedule check_sentinel_task for fast notifications"
+            )
         end)
     end)
 
@@ -257,7 +261,11 @@ describe("LocalSend Task Scheduling", function()
 
             -- Should have scheduled the recreated task
             assert.equal(1, #helper.state.scheduled_tasks, "Should schedule the recreated sentinel task")
-            assert.equal(instance.check_sentinel_task, helper.state.scheduled_tasks[1].callback, "Should schedule the newly created check_sentinel_task")
+            assert.equal(
+                instance.check_sentinel_task,
+                helper.state.scheduled_tasks[1].callback,
+                "Should schedule the newly created check_sentinel_task"
+            )
         end)
 
         -- NOTE: Full suspend/resume integration is tested in lifecycle_spec.lua

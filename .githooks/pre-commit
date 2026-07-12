@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook for localsend.koplugin
+# Auto-formats, then runs lint + tests via koplugin-dev Docker container
+#
+
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+run_check() {
+    local label="$1"
+    shift
+
+    local output status
+    output="$(mktemp)"
+
+    # With set -e, capture failure via || so $? is not lost after an if/fi.
+    status=0
+    "$@" >"$output" 2>&1 || status=$?
+
+    if [ "$status" -eq 0 ]; then
+        rm -f "$output"
+        return 0
+    fi
+
+    echo "[pre-commit] ${label} failed:" >&2
+    cat "$output" >&2
+    rm -f "$output"
+    return "$status"
+}
+
+# Remember staged paths so we can re-stage after auto-format without
+# accidentally adding unrelated untracked files.
+staged_files="$(git diff --cached --name-only --diff-filter=ACM || true)"
+
+echo "[pre-commit] Formatting..."
+just fmt
+
+# Re-stage previously staged files that still exist (picks up formatter edits).
+if [ -n "$staged_files" ]; then
+    while IFS= read -r file; do
+        if [ -n "$file" ] && [ -f "$file" ]; then
+            git add -- "$file"
+        fi
+    done <<<"$staged_files"
+fi
+
+run_check "lint" just lint
+run_check "tests" just test
+
+echo "[pre-commit] Checks passed."

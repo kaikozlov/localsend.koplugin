@@ -210,7 +210,8 @@ describe("Self-Update", function()
 
         for _, tc in ipairs(up_to_date_cases) do
             it("shows 'up to date' when remote is " .. tc[2], function()
-                file_contents["/tmp/koreader-test-data/cache/localsend/update_check.json"] = string.format('{"tag_name":"%s","body":"Release notes"}', tc[1])
+                file_contents["/tmp/koreader-test-data/cache/localsend/update_check.json"] =
+                    string.format('{"tag_name":"%s","body":"Release notes"}', tc[1])
 
                 local instance = helper.create_instance()
                 instance:doCheckForUpdates()

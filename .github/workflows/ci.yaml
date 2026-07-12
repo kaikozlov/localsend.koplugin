@@ -13,8 +13,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install just
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.local/bin"
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+            | bash -s -- --to "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/just" --version
+
       - name: Pull koplugin-dev image
         run: docker pull ghcr.io/kaikozlov/koplugin-dev:v2026.03_4
 
       - name: Run all tests in koplugin-dev
-        run: make test
+        run: just test

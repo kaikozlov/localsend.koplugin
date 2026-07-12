@@ -705,7 +705,10 @@ describe("LocalSend Lifecycle", function()
 
             instance:_onNetworkDisconnected()
 
-            assert.is_false(LocalSend._ServerState.was_running_before_disconnect, "should clear was_running_before_disconnect when server not running")
+            assert.is_false(
+                LocalSend._ServerState.was_running_before_disconnect,
+                "should clear was_running_before_disconnect when server not running"
+            )
         end)
 
         it("onNetworkConnected should restart server if was_running_before_disconnect", function()
@@ -795,7 +798,6 @@ describe("LocalSend Lifecycle", function()
     -- Bug 2: New widget should check was_running_before_suspend in init()
     -- =========================================================================
     describe("new widget instance after missed resume event", function()
-
         it("keeps the restart flag and network handler while still offline", function()
             LocalSend = require("main")
             LocalSend._ServerState.was_running_before_suspend = true

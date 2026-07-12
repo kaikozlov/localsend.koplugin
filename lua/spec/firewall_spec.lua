@@ -92,7 +92,6 @@ describe("Firewall Management", function()
         end)
 
         describe("openFirewall", function()
-
             it("onExit removes rules opened for sender-only use", function()
                 local instance = helper.create_instance()
                 instance.port = "53317"

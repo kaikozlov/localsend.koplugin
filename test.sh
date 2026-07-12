@@ -19,16 +19,16 @@ for arg in "$@"; do
             echo "Usage: ./test.sh [--verbose|-v]"
             echo "  (default) quiet — failures and summaries only"
             echo "  -v        verbose — full busted/go test output"
-            echo "Focused runs: make test-lua-filter FILTER='pattern' [V=1]"
+            echo "Focused runs: just test-lua-filter 'pattern'  (V=1 for verbose)"
             exit 0
             ;;
         *)
             echo "Unsupported argument: $arg" >&2
             echo "Usage: ./test.sh [--verbose|-v]" >&2
-            echo "Focused runs: make test-lua-filter FILTER='pattern' [V=1]" >&2
+            echo "Focused runs: just test-lua-filter 'pattern'  (V=1 for verbose)" >&2
             exit 2
             ;;
     esac
 done
 
-exec make test V="$V"
+exec env V="$V" just test

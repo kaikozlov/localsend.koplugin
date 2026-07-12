@@ -295,13 +295,21 @@ describe("Server Control", function()
 
         local function mockLocalSendPid()
             util.pathExists = function(path)
-                if path == "/tmp/localsend_koreader.pid" then return true end
-                if path == "/proc/12345" then return not st.dead end
+                if path == "/tmp/localsend_koreader.pid" then
+                    return true
+                end
+                if path == "/proc/12345" then
+                    return not st.dead
+                end
                 return orig_pathExists(path)
             end
             util.readFromFile = function(path)
-                if path == "/tmp/localsend_koreader.pid" then return "12345" end
-                if path == "/proc/12345/cmdline" then return "/opt/localsend\0recv\0" end
+                if path == "/tmp/localsend_koreader.pid" then
+                    return "12345"
+                end
+                if path == "/proc/12345/cmdline" then
+                    return "/opt/localsend\0recv\0"
+                end
                 return orig_readFromFile(path)
             end
         end

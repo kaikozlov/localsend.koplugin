@@ -27,24 +27,24 @@ run host `go test` or host `busted`; that bypasses the KOReader runtime and lets
 machine-specific toolchains hide bugs.
 
 ```bash
-make setup              # One-time: pull koplugin-dev image
-make test               # All Lua + Go tests (quiet; failures + summaries)
-make test V=1           # Same, with full busted/go -v output
-make test-lua           # Lua tests via busted-koreader (real KOReader)
-make test-lua-filter FILTER="pattern"  # Focused Lua run in Docker
-make test-go            # Go tests in Docker
-make test-go-race       # Go tests with race detector in Docker
-make test-go-integration # Go integration tests in Docker
-make lint               # luacheck + golangci-lint in Docker
-make fmt                # stylua + go fmt in Docker
-make shell              # Interactive container shell
-make help               # List all targets
-./test.sh               # Quiet Docker wrapper for make test
-./test.sh --verbose     # Verbose Docker wrapper (make test V=1)
+just setup              # One-time: install hooks + pull koplugin-dev image
+just test               # All Lua + Go tests (quiet; failures + summaries)
+V=1 just test           # Same, with full busted/go -v output
+just test-lua           # Lua tests via busted-koreader (real KOReader)
+just test-lua-filter "pattern"  # Focused Lua run in Docker
+just test-go            # Go tests in Docker
+just test-go-race       # Go tests with race detector in Docker
+just test-go-integration # Go integration tests in Docker
+just lint               # luacheck + golangci-lint in Docker
+just fmt                # stylua + go fmt in Docker
+just shell              # Interactive container shell
+just                    # List all recipes
+./test.sh               # Quiet Docker wrapper for just test
+./test.sh --verbose     # Verbose Docker wrapper (V=1 just test)
 ```
 
 Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.03_4` — contains real KOReader Linux runtime.
-Bump `KOPLUGIN_DEV_VERSION` in Makefile when the image updates.
+Bump `koplugin_dev_version` in `justfile` when the image updates.
 
 ## Architecture
 
@@ -172,7 +172,7 @@ get_test_data_dir()               -- Isolated temp directory
 get_plugin_path()                 -- Path to plugin source under test
 ```
 
-Go integration tests: `//go:build integration` tag, run with `-tags=integration` via Makefile targets.
+Go integration tests: `//go:build integration` tag, run with `-tags=integration` via justfile recipes.
 
 ## Writing Tests
 

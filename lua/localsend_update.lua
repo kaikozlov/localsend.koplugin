@@ -381,7 +381,7 @@ function M.performUpdate(instance, download_url, asset_name, new_version, plugin
     local function startUpdate()
         -- Give UI time to render without racing a still-running binary.
         deps.UIManager:scheduleIn(0, function()
-        M.doPerformUpdate(instance, download_url, asset_name, new_version, plugin_path)
+            M.doPerformUpdate(instance, download_url, asset_name, new_version, plugin_path)
         end)
     end
 
@@ -543,10 +543,7 @@ function M.autoCheckForUpdates(instance, plugin_version, schedule_next)
     local tmp_file = update_cache .. "/auto_update_check.json"
     local status_file = update_cache .. "/auto_update_check.status"
     deps.util.removeFile(status_file)
-    local command = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL)
-        .. " > "
-        .. deps.util.shell_escape({ status_file })
-        .. " 2>/dev/null &"
+    local command = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL) .. " > " .. deps.util.shell_escape({ status_file }) .. " 2>/dev/null &"
     if not commandSucceeded(os.execute(command)) then
         schedule_next()
         return
@@ -740,10 +737,7 @@ function M.checkForUpdates(instance, plugin_version, plugin_path)
         local tmp_file = update_cache .. "/update_check.json"
         local status_file = update_cache .. "/update_check.status"
         deps.util.removeFile(status_file)
-        local command = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL)
-            .. " > "
-            .. deps.util.shell_escape({ status_file })
-            .. " 2>/dev/null &"
+        local command = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL) .. " > " .. deps.util.shell_escape({ status_file }) .. " 2>/dev/null &"
         local launched = os.execute(command)
         if not commandSucceeded(launched) then
             deps.UIManager:show(deps.InfoMessage:new({

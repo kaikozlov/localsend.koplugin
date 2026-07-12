@@ -234,7 +234,8 @@ describe("onDispatcherRegisterActions", function()
             helper.create_instance()
             assert.is_not_nil(registered_actions["toggle_localsend_server"].title)
             assert.truthy(
-                registered_actions["toggle_localsend_server"].title:match("LocalSend") or registered_actions["toggle_localsend_server"].title:match("Toggle")
+                registered_actions["toggle_localsend_server"].title:match("LocalSend")
+                    or registered_actions["toggle_localsend_server"].title:match("Toggle")
             )
         end)
 

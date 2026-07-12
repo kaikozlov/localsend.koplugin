@@ -20,8 +20,8 @@ local STOP_POLL_ATTEMPTS = 20 -- 20 * 100ms = 2s
 -- on KOReader exit or a forced plugin stop). usleep_fn is injected via M.init
 -- (ffi/util.usleep); M._sync_usleep is a test seam to bypass real sleeping.
 local SYNC_STOP_POLL_US = 50 * 1000 -- 50 ms per poll
-local SYNC_STOP_GRACE_POLLS = 20    -- 20 * 50 ms = 1.0 s graceful window
-local SYNC_STOP_KILL_POLLS = 10     -- 10 * 50 ms = 0.5 s after SIGKILL
+local SYNC_STOP_GRACE_POLLS = 20 -- 20 * 50 ms = 1.0 s graceful window
+local SYNC_STOP_KILL_POLLS = 10 -- 10 * 50 ms = 0.5 s after SIGKILL
 
 local usleep_fn
 M._sync_usleep = nil
