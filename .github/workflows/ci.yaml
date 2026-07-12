@@ -22,8 +22,14 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/just" --version
 
-      - name: Pull koplugin-dev image
-        run: docker pull ghcr.io/kaikozlov/koplugin-dev:v2026.03_4
+      - name: Set up development image
+        run: just setup
 
-      - name: Run all tests in koplugin-dev
+      - name: Check formatting
+        run: just fmt-check
+
+      - name: Run linters
+        run: just lint
+
+      - name: Run tests
         run: just test
