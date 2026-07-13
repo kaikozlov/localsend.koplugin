@@ -138,6 +138,36 @@ local function commandSucceeded(result)
     return result == true or result == 0
 end
 
+-- Build an asynchronous curl command whose completion marker appears atomically.
+-- Shell redirection creates its target before curl starts, so polling that file
+-- directly can observe an empty value while the request is still in flight.
+local function buildBackgroundCurlCommand(output_file, status_file, url)
+    local pending_status_file = status_file .. ".tmp"
+    deps.util.removeFile(status_file)
+    deps.util.removeFile(pending_status_file)
+    local command = "( "
+        .. M.buildCurlCommand(output_file, url)
+        .. " > "
+        .. deps.util.shell_escape({ pending_status_file })
+        .. " 2>/dev/null; "
+        .. deps.util.shell_escape({ "mv", "-f", pending_status_file, status_file })
+        .. " ) &"
+    return command, pending_status_file
+end
+
+-- Return a status only after curl has produced one complete HTTP code. This is
+-- also a defensive guard for stale or partially written files from older builds.
+local function readCompletedHTTPStatus(status_file)
+    if not deps.util.pathExists(status_file) then
+        return nil
+    end
+    local value = deps.util.readFromFile(status_file)
+    if type(value) ~= "string" then
+        return nil
+    end
+    return value:match("^%s*(%d%d%d)%s*$")
+end
+
 -- Copy to a sibling temporary file and rename only after a checked copy.
 -- Rename on the same filesystem is atomic, so a failed update leaves the
 -- previously working plugin file intact.
@@ -542,17 +572,16 @@ function M.autoCheckForUpdates(instance, plugin_version, schedule_next)
     deps.util.makePath(update_cache)
     local tmp_file = update_cache .. "/auto_update_check.json"
     local status_file = update_cache .. "/auto_update_check.status"
-    deps.util.removeFile(status_file)
-    local command = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL) .. " > " .. deps.util.shell_escape({ status_file }) .. " 2>/dev/null &"
+    local command, pending_status_file = buildBackgroundCurlCommand(tmp_file, status_file, M.GITHUB_RELEASE_URL)
     if not commandSucceeded(os.execute(command)) then
         schedule_next()
         return
     end
     local attempts = 124
     local function poll()
-        if deps.util.pathExists(status_file) then
+        local http_code = readCompletedHTTPStatus(status_file)
+        if http_code then
             instance.update_check_poll_task = nil
-            local http_code = deps.util.readFromFile(status_file)
             deps.util.removeFile(status_file)
             M.doAutoCheckForUpdates(instance, plugin_version, schedule_next, http_code, tmp_file)
             return
@@ -560,6 +589,9 @@ function M.autoCheckForUpdates(instance, plugin_version, schedule_next)
         attempts = attempts - 1
         if attempts <= 0 then
             instance.update_check_poll_task = nil
+            deps.util.removeFile(status_file)
+            deps.util.removeFile(pending_status_file)
+            deps.util.removeFile(tmp_file)
             schedule_next()
             return
         end
@@ -736,8 +768,7 @@ function M.checkForUpdates(instance, plugin_version, plugin_path)
         deps.util.makePath(update_cache)
         local tmp_file = update_cache .. "/update_check.json"
         local status_file = update_cache .. "/update_check.status"
-        deps.util.removeFile(status_file)
-        local command = M.buildCurlCommand(tmp_file, M.GITHUB_RELEASE_URL) .. " > " .. deps.util.shell_escape({ status_file }) .. " 2>/dev/null &"
+        local command, pending_status_file = buildBackgroundCurlCommand(tmp_file, status_file, M.GITHUB_RELEASE_URL)
         local launched = os.execute(command)
         if not commandSucceeded(launched) then
             deps.UIManager:show(deps.InfoMessage:new({
@@ -749,9 +780,9 @@ function M.checkForUpdates(instance, plugin_version, plugin_path)
 
         local attempts = 124 -- 31 seconds at 250 ms, just beyond curl --max-time.
         local function poll()
-            if deps.util.pathExists(status_file) then
+            local http_code = readCompletedHTTPStatus(status_file)
+            if http_code then
                 instance.update_check_poll_task = nil
-                local http_code = deps.util.readFromFile(status_file)
                 deps.util.removeFile(status_file)
                 M.doCheckForUpdates(instance, plugin_version, plugin_path, http_code, tmp_file, true)
                 return
@@ -759,6 +790,9 @@ function M.checkForUpdates(instance, plugin_version, plugin_path)
             attempts = attempts - 1
             if attempts <= 0 then
                 instance.update_check_poll_task = nil
+                deps.util.removeFile(status_file)
+                deps.util.removeFile(pending_status_file)
+                deps.util.removeFile(tmp_file)
                 deps.UIManager:show(deps.InfoMessage:new({
                     icon = "notice-warning",
                     text = deps._("Update check timed out."),

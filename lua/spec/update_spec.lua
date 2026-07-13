@@ -392,7 +392,44 @@ describe("Self-Update", function()
             local command = helper.find_execute_call("update_check%.status")
             assert.is_truthy(command)
             assert.matches("&$", command)
+            assert.matches("update_check%.status%.tmp", command)
+            assert.matches("mv", command)
             assert.is_true(#helper.state.scheduled_tasks > 0)
+        end)
+
+        it("waits for the background curl status before processing a manual check", function()
+            local status_file = "/tmp/koreader-test-data/cache/localsend/update_check.status"
+            file_contents[status_file] = ""
+            file_contents["/tmp/koreader-test-data/cache/localsend/update_check.json"] = [[
+                {"tag_name":"v1.4.0","body":"Current release","assets":[
+                    {"name":"localsend-koplugin-armv7.zip","browser_download_url":"https://example.com/armv7.zip"}
+                ]}
+            ]]
+
+            local instance = helper.create_instance()
+            instance:checkForUpdates()
+
+            local first_poll = helper.state.scheduled_tasks[#helper.state.scheduled_tasks]
+            first_poll.callback()
+
+            assert.is_nil(helper.find_notification("Failed to check"))
+            assert.is_function(instance.update_check_poll_task)
+
+            file_contents[status_file] = "20"
+            local second_poll = helper.state.scheduled_tasks[#helper.state.scheduled_tasks]
+            second_poll.callback()
+
+            assert.is_nil(helper.find_notification("Failed to check"))
+            assert.is_function(instance.update_check_poll_task)
+
+            file_contents[status_file] = "200"
+            local third_poll = helper.state.scheduled_tasks[#helper.state.scheduled_tasks]
+            third_poll.callback()
+
+            local reinstall = helper.find_dialog("ConfirmBox")
+            assert.is_truthy(reinstall)
+            assert.matches("Reinstall anyway", reinstall.text)
+            assert.is_nil(instance.update_check_poll_task)
         end)
     end)
 
@@ -879,6 +916,33 @@ describe("Self-Update", function()
         it("should have _unscheduleUpdateCheck method", function()
             local instance = helper.create_instance()
             assert.is_function(instance._unscheduleUpdateCheck, "_unscheduleUpdateCheck helper should exist")
+        end)
+
+        it("waits for the background curl status before processing an automatic check", function()
+            local status_file = "/tmp/koreader-test-data/cache/localsend/auto_update_check.status"
+            file_contents[status_file] = ""
+            file_contents["/tmp/koreader-test-data/cache/localsend/auto_update_check.json"] = [[
+                {"tag_name":"v1.4.0","body":"Current release"}
+            ]]
+            local scheduled_next = 0
+            local instance = helper.create_instance()
+
+            require("localsend_update").autoCheckForUpdates(instance, "v1.4.0", function()
+                scheduled_next = scheduled_next + 1
+            end)
+
+            local first_poll = helper.state.scheduled_tasks[#helper.state.scheduled_tasks]
+            first_poll.callback()
+
+            assert.equals(0, scheduled_next)
+            assert.is_function(instance.update_check_poll_task)
+
+            file_contents[status_file] = "200"
+            local second_poll = helper.state.scheduled_tasks[#helper.state.scheduled_tasks]
+            second_poll.callback()
+
+            assert.equals(1, scheduled_next)
+            assert.is_nil(instance.update_check_poll_task)
         end)
     end)
 
