@@ -207,3 +207,37 @@ Principles:
 - **No sleep-based synchronization**: Use channels, waitgroups, or polling with timeout
 
 When fixing bugs: write failing test first, then fix. Prevents regression.
+
+## Cursor Cloud specific instructions
+
+The startup update script only runs `go mod download`. `go`, `just`, `docker`,
+and the pinned `koplugin-dev` image are preinstalled in the VM snapshot.
+
+**Docker daemon is NOT auto-started.** All `just test`/`lint`/`fmt`/`check`
+recipes run inside the `koplugin-dev` container, so start the daemon once per
+session before using them:
+
+```bash
+sudo dockerd > /tmp/dockerd.log 2>&1 &   # wait ~5s until "API listen on /var/run/docker.sock"
+```
+
+The `ubuntu` user is in the `docker` group, so `docker`/`just` work without
+`sudo` in a fresh shell. Docker 29 is configured with `storage-driver:
+fuse-overlayfs` and `containerd-snapshotter: false` (`/etc/docker/daemon.json`)
+plus iptables-legacy — required for docker-in-docker here; do not change these.
+
+Git hooks are intentionally NOT installed (`just setup`/`install-hooks` would set
+`core.hooksPath`, making every commit run the full `just check` in Docker). Run
+`just check` manually before committing, or run `just setup` if you want the hook.
+
+**Running the Go CLI (host, no Docker needed):** `go build -o localsend .` then
+run subcommands directly. Tests, however, must go through Docker per the policy
+above. Local end-to-end transfer demo (loopback, no external services):
+
+```bash
+./localsend recv -d /tmp/lsrecv -n Demo --webrtc=false --https=false   # terminal 1
+./localsend send --ip 127.0.0.1 --webrtc=false --https=false -f FILE    # terminal 2
+```
+
+`recv` defaults to `--webrtc=true`, which dials the public signaling server
+`wss://public.localsend.org`; pass `--webrtc=false` for offline/local-only runs.
