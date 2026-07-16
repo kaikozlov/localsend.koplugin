@@ -3,28 +3,6 @@
 
 local M = {}
 
--- Shell escape utility to prevent command injection
--- Wraps string in single quotes and escapes any embedded single quotes
--- DEPRECATED: Use util.args() from KOReader's util module instead.
--- This function is kept for testing and backward compatibility.
-function M.shellEscape(str)
-    if str == nil then
-        return "''"
-    end
-    -- Single quote escape: replace ' with '\''
-    return "'" .. str:gsub("'", "'\\''") .. "'"
-end
-
--- Convert a table of arguments to a shell-escaped command string
--- This mimics KOReader's util.args() for use in tests
-function M.args(t)
-    local escaped = {}
-    for _, v in ipairs(t) do
-        table.insert(escaped, M.shellEscape(tostring(v)))
-    end
-    return table.concat(escaped, " ")
-end
-
 -- Validate that a path is safe for shell operations
 function M.isValidPath(path)
     if path == nil or path == "" then

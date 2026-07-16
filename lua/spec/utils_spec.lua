@@ -9,35 +9,6 @@ describe("LocalSend Utils", function()
         lsutils = require("localsend_utils")
     end)
 
-    describe("shellEscape", function()
-        it("wraps simple strings in single quotes", function()
-            assert.equal("'hello'", lsutils.shellEscape("hello"))
-        end)
-
-        it("handles nil input", function()
-            assert.equal("''", lsutils.shellEscape(nil))
-        end)
-
-        it("handles empty string", function()
-            assert.equal("''", lsutils.shellEscape(""))
-        end)
-
-        it("escapes embedded single quotes", function()
-            assert.equal("'it'\\''s'", lsutils.shellEscape("it's"))
-        end)
-
-        it("handles paths with spaces", function()
-            assert.equal("'/path/to/my file.txt'", lsutils.shellEscape("/path/to/my file.txt"))
-        end)
-
-        it("neutralizes shell metacharacters", function()
-            -- These should be safe inside single quotes
-            assert.equal("'test;echo bad'", lsutils.shellEscape("test;echo bad"))
-            assert.equal("'test|cat'", lsutils.shellEscape("test|cat"))
-            assert.equal("'test$(whoami)'", lsutils.shellEscape("test$(whoami)"))
-        end)
-    end)
-
     describe("isValidPath", function()
         it("rejects nil path", function()
             assert.is_false(lsutils.isValidPath(nil))
