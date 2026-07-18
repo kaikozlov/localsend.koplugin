@@ -37,8 +37,11 @@ The device is reachable, but the LocalSend receiver is not listening.
    and restores the normal receiver afterward.
 2. If the receiver check fails, use its **View log** action or open **Advanced →
    Backend log**.
-3. On older Kindles, verify that you installed the `arm-legacy` package — the
-   `armv7` binary will not run on 32-bit-only hardware.
+3. On older Kindles, verify that you installed the package matching the device
+   architecture. `arm-legacy` is for older ARM instruction sets; it does not
+   reduce the Linux syscall requirements of the Go runtime.
+4. If the backend log reports `epollwait` failure 38 (`ENOSYS`) or another
+   missing syscall, see [Legacy Linux kernel compatibility](LEGACY_KERNEL_COMPATIBILITY.md).
 
 ### Device not discovered
 

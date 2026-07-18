@@ -18,10 +18,16 @@ just release
 just release -p
 ```
 
+`just release` applies the 32-bit ARM runtime compatibility overlay required
+by older Kindle Linux 2.6.31 kernels. The manual command below is suitable only
+for devices with a modern Linux kernel. See
+[Legacy Linux kernel compatibility](LEGACY_KERNEL_COMPATIBILITY.md) for the
+support boundary, known syscall risks, and release verification requirements.
+
 Or build manually:
 
 ```bash
-# armv7 (32-bit)
+# armv7 (32-bit, for modern Linux kernels)
 GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -ldflags="-s -w" -o localsend
 
 # arm64 (64-bit)
