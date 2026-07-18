@@ -9,19 +9,93 @@ local M = {}
 -- Dependencies container (set via M.init)
 local deps = {}
 
+-- Kindle firmware (and many other devices) ship iptables under /usr/sbin or
+-- /sbin. Prefer those absolute paths so a slim KOReader PATH that omits sbin
+-- does not make the plugin silently skip firewall management.
+local IPTABLES_CANDIDATES = {
+    "/usr/sbin/iptables",
+    "/sbin/iptables",
+}
+
+-- Cached resolution: nil = not probed, false = missing, string = binary path.
+local resolved_iptables = nil
+local resolved_check_support = nil
+
 -- Initialize module with dependencies
 -- @param d table Dependencies: { Device, util, logger }
 function M.init(d)
     deps = d
+    resolved_iptables = nil
+    resolved_check_support = nil
+end
+
+local function normalizeCommandStatus(result, kind, code)
+    if result == true then
+        return 0
+    end
+    if type(result) == "number" then
+        -- Lua 5.1 returns the wait status while newer Lua versions return the
+        -- exit code separately. Test doubles return the exit code directly.
+        return result > 255 and math.floor(result / 256) or result
+    end
+    if result == nil and kind == "exit" and type(code) == "number" then
+        return code
+    end
+    return nil
+end
+
+local function commandStatus(cmd)
+    return normalizeCommandStatus(os.execute(cmd))
 end
 
 local function execute(cmd)
-    local result = os.execute(cmd)
-    return result == 0
+    return commandStatus(cmd) == 0
+end
+
+-- Resolve the iptables binary once per init. Absolute paths first, then PATH.
+local function resolveIptables()
+    if resolved_iptables ~= nil then
+        if resolved_iptables == false then
+            return nil
+        end
+        return resolved_iptables
+    end
+
+    for _, path in ipairs(IPTABLES_CANDIDATES) do
+        if deps.util.pathExists(path) then
+            resolved_iptables = path
+            return path
+        end
+    end
+
+    if execute("command -v iptables >/dev/null 2>&1") then
+        resolved_iptables = "iptables"
+        return "iptables"
+    end
+
+    resolved_iptables = false
+    return nil
 end
 
 local function iptablesAvailable()
-    return execute("command -v iptables >/dev/null 2>&1")
+    return resolveIptables() ~= nil
+end
+
+local function iptablesBin()
+    return resolveIptables() or "iptables"
+end
+
+-- Probe behavior rather than parsing a version string. A supported -C returns
+-- 0 when this harmless rule exists or 1 when it does not; legacy iptables
+-- rejects the command itself with status 2.
+local function iptablesSupportsCheck()
+    if resolved_check_support ~= nil then
+        return resolved_check_support
+    end
+    local command = deps.util.shell_escape({ iptablesBin(), "-C", "INPUT", "-j", "ACCEPT" }) .. " 2>/dev/null"
+    local status = commandStatus(command)
+    resolved_check_support = status == 0 or status == 1
+    return resolved_check_support
 end
 
 local function ruleLabel(rule_args)
@@ -110,38 +184,114 @@ local function allRules(port, use_webrtc)
     return rules
 end
 
--- Check if an iptables rule exists.
-local function iptablesRuleExists(rule_args)
-    local cmd_args = { "iptables", "-C" }
-    for _, arg in ipairs(rule_args) do
-        table.insert(cmd_args, arg)
+local function ruleArg(rule_args, name)
+    for i, arg in ipairs(rule_args) do
+        if arg == name then
+            return rule_args[i + 1]
+        end
     end
-    return execute(deps.util.shell_escape(cmd_args) .. " 2>/dev/null")
 end
 
--- Add iptables rule only if it doesn't already exist.
--- @return boolean ok, string detail
-local function iptablesAddIfMissing(rule_args)
-    if iptablesRuleExists(rule_args) then
-        return true, "exists"
+local function readCommand(cmd)
+    local handle = io.popen(cmd)
+    if not handle then
+        return nil
     end
-    local cmd_args = { "iptables", "-A" }
+    local ok, output = pcall(handle.read, handle, "*a")
+    handle:close()
+    if not ok or type(output) ~= "string" then
+        return nil
+    end
+    return output
+end
+
+-- iptables v1.3.8 on the affected Kindle predates -C/--check. Fall back to
+-- the stable, numeric chain listing and match the user-visible rule effect:
+-- ACCEPT for the expected protocol and source/destination port.
+local function listedRuleExists(rule_args)
+    local chain = rule_args[1]
+    local proto = ruleArg(rule_args, "-p")
+    local target = ruleArg(rule_args, "-j")
+    local dport = ruleArg(rule_args, "--dport")
+    local sport = ruleArg(rule_args, "--sport")
+    if not chain or not proto or not target or (not dport and not sport) then
+        return false
+    end
+
+    local command = deps.util.shell_escape({ iptablesBin(), "-L", chain, "-n" }) .. " 2>/dev/null"
+    local output = readCommand(command)
+    if not output then
+        return false
+    end
+
+    local prefix = "^%s*" .. target:lower() .. "%s+" .. proto:lower() .. "%s+"
+    local port = tostring(dport or sport):lower()
+    local singular = (dport and "dpt:" or "spt:") .. port
+    local plural = (dport and "dpts:" or "spts:") .. port
+    for line in output:gmatch("[^\r\n]+") do
+        line = line:lower()
+        if line:match(prefix) and (line:find(singular, 1, true) or line:find(plural, 1, true)) then
+            return true
+        end
+    end
+    return false
+end
+
+local function ruleCommand(action, rule_args)
+    local cmd_args = { iptablesBin(), action }
     for _, arg in ipairs(rule_args) do
         table.insert(cmd_args, arg)
     end
-    if execute(deps.util.shell_escape(cmd_args) .. " 2>/dev/null") then
+    return deps.util.shell_escape(cmd_args) .. " 2>/dev/null"
+end
+
+local function exactRuleExists(rule_args)
+    return commandStatus(ruleCommand("-C", rule_args)) == 0
+end
+
+-- Delete only the exact plugin rule. A status of 1 means no matching rule
+-- remains; other failures are reported instead of being mistaken for absence.
+local function iptablesDelete(rule_args)
+    local command = ruleCommand("-D", rule_args)
+    for _ = 1, 64 do
+        local status = commandStatus(command)
+        if status == 1 then
+            return true
+        end
+        if status ~= 0 then
+            return false
+        end
+    end
+    deps.logger.warn("[LocalSend] Firewall cleanup stopped after 64 duplicate rules: " .. ruleLabel(rule_args))
+    return false
+end
+
+-- Check user-visible reachability. Modern iptables supports exact -C matching;
+-- legacy implementations use a non-owning chain-listing fallback for diagnostics.
+local function iptablesRuleExists(rule_args)
+    if iptablesSupportsCheck() then
+        return exactRuleExists(rule_args)
+    end
+    return listedRuleExists(rule_args)
+end
+
+-- Add one exact plugin rule. Without -C, first remove exact stale copies and
+-- then append once; a similar-looking foreign rule can neither suppress this
+-- add nor be removed by plugin cleanup.
+-- @return boolean ok, string detail
+local function iptablesAddIfMissing(rule_args)
+    if iptablesSupportsCheck() then
+        if exactRuleExists(rule_args) then
+            return true, "exists"
+        end
+    elseif not iptablesDelete(rule_args) then
+        return false, ruleLabel(rule_args)
+    end
+
+    if execute(ruleCommand("-A", rule_args)) then
         return true, "added"
     end
     return false, ruleLabel(rule_args)
-end
-
--- Delete iptables rule (silently ignores if rule doesn't exist)
-local function iptablesDelete(rule_args)
-    local cmd_args = { "iptables", "-D" }
-    for _, arg in ipairs(rule_args) do
-        table.insert(cmd_args, arg)
-    end
-    return execute(deps.util.shell_escape(cmd_args) .. " 2>/dev/null")
 end
 
 local function unmanagedResult(detail)
@@ -188,10 +338,18 @@ function M.closeFirewall(port)
     end
 
     port = tostring(port)
+    local failures = {}
     -- Always remove WebRTC rules during cleanup, even when WebRTC is currently off,
     -- so old rules do not survive a setting change.
     for _, rule in ipairs(allRules(port, true)) do
-        iptablesDelete(rule)
+        if not iptablesDelete(rule) then
+            table.insert(failures, ruleLabel(rule))
+        end
+    end
+    if #failures > 0 then
+        local detail = "failed to delete " .. table.concat(failures, ", ")
+        deps.logger.err("[LocalSend] Firewall close failed for port " .. port .. ": " .. detail)
+        return { managed = true, ok = false, detail = detail }
     end
     deps.logger.dbg("[LocalSend] Firewall closed for port " .. port)
     return { managed = true, ok = true, detail = "iptables rules closed" }
