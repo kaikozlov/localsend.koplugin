@@ -79,6 +79,8 @@ strings "$FW_DIR/kindle-firmware-5.6.1.1/rootfs/usr/bin/curl" \
 
 This firmware contains EGLIBC 2.12.1, BusyBox 1.17.1, and curl 7.33.0. A libc export such as `accept4` or `epoll_pwait` is not proof that the kernel implements the syscall: libc may provide a wrapper that receives `ENOSYS` from the kernel.
 
+That curl/OpenSSL build also cannot complete a TLS handshake with the receiver's Ed25519 certificate. Phone and laptop LocalSend clients can, so transfers may succeed while an HTTPS `curl` self-check fails. **Check LocalSend** therefore falls back to process and TCP listener evidence when the local API probe cannot get an HTTP status.
+
 ### 2. Recover the kernel symbols
 
 The extracted `vmlinux` is empty, but `zImage` is an uncompressed ARM kernel image with a compressed `kallsyms` table. The table was recovered with `vmlinux-to-elf` commit `19683fb95b29cd31362d49e6f48ab8368f96cbdf`:

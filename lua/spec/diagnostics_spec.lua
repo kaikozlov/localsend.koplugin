@@ -973,6 +973,113 @@ describe("LocalSend diagnostics", function()
             assert.is_true(report.server.self_test.ok)
         end)
 
+        it("falls back to process and TCP listener evidence when the API probe cannot connect", function()
+            -- Legacy Kindle curl cannot handshake Ed25519 HTTPS certs, so the
+            -- API probe fails even though the receiver is listening and phone
+            -- transfers succeed.
+            files["/mnt/us/documents"] = ""
+            files["/proc/net/tcp"] = "  sl  local_address rem_address   st\n   0: 00000000:D045 00000000:0000 0A\n"
+            files["/proc/net/udp"] = "  sl  local_address rem_address   st\n   1: 00000000:D045 00000000:0000 07\n"
+            _G.io.popen = function(cmd)
+                if cmd:match("curl") then
+                    return fake_file("000")
+                end
+                if cmd:match("%-%-version") then
+                    return fake_file(TEST_BINARY_VERSION .. " linux/arm\n")
+                end
+                if cmd:match("iptables") then
+                    return fake_file("")
+                end
+                return fake_file("")
+            end
+            local instance = helper.create_instance()
+            instance.use_https = true
+            local running = false
+            instance.isRunning = function()
+                return running
+            end
+            instance.start = function(_, silent)
+                assert.is_true(silent)
+                running = true
+            end
+            instance.stopServer = function(_, options)
+                running = false
+                options.callback(true)
+            end
+            local diagnostics = require("localsend_diagnostics")
+            diagnostics._setAsyncCollectOverride(nil)
+            local report
+
+            diagnostics.collectAsync(instance, function(value)
+                report = value
+            end)
+
+            assert.is_not_nil(report)
+            assert.is_true(report.server.self_test.ok)
+            assert.truthy(report.server.self_test.detail:match("listening"))
+            assert.truthy(report.server.self_test.detail:match("API probe"))
+            assert.truthy(report.server.self_test.detail:match("connection error"))
+            assert.equals("healthy", diagnostics.classifyReport(instance, report).id)
+
+            -- The report should describe the fallback accurately, not claim the
+            -- API responded.
+            local text = diagnostics.getReportText(instance, report)
+            assert.truthy(text:match("Real receiver starts and is listening on its port"))
+            assert.is_nil(text:match("local API responds"))
+        end)
+
+        it("does not treat a failed API probe as healthy without a TCP listener", function()
+            files["/mnt/us/documents"] = ""
+            files["/proc/net/tcp"] = "  sl  local_address rem_address   st\n"
+            files["/proc/net/udp"] = "  sl  local_address rem_address   st\n   1: 00000000:D045 00000000:0000 07\n"
+            _G.io.popen = function(cmd)
+                if cmd:match("curl") then
+                    return fake_file("000")
+                end
+                if cmd:match("%-%-version") then
+                    return fake_file(TEST_BINARY_VERSION .. " linux/arm\n")
+                end
+                if cmd:match("iptables") then
+                    return fake_file("")
+                end
+                return fake_file("")
+            end
+            local instance = helper.create_instance()
+            instance.use_https = true
+            local running = false
+            instance.isRunning = function()
+                return running
+            end
+            instance.start = function(_, silent)
+                assert.is_true(silent)
+                running = true
+            end
+            instance.stopServer = function(_, options)
+                running = false
+                options.callback(true)
+            end
+            local diagnostics = require("localsend_diagnostics")
+            diagnostics._setAsyncCollectOverride(nil)
+            local report
+
+            -- Drain the readiness poll until the lifecycle test finishes.
+            diagnostics.collectAsync(instance, function(value)
+                report = value
+            end)
+            local guard = 0
+            while report == nil and guard < 60 do
+                guard = guard + 1
+                local task = helper.state.scheduled_tasks[#helper.state.scheduled_tasks]
+                assert.is_not_nil(task)
+                task.callback()
+            end
+
+            assert.is_not_nil(report)
+            assert.is_false(report.server.self_test.ok)
+            assert.truthy(report.server.self_test.detail:match("connection error"))
+            assert.equals("server", diagnostics.classifyReport(instance, report).id)
+        end)
+
         it("preserves the failure log before the lifecycle start replaces it", function()
             files["/tmp/localsend_server.out"] = "original upload failure: unexpected EOF\n"
             local instance = helper.create_instance()

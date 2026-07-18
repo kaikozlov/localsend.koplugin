@@ -12,7 +12,10 @@ the LocalSend receiver is running and provides these guided paths:
 - **Check LocalSend** — checks Wi-Fi, the installed receiver program, receive
   folder, server lifecycle, and firewall. If the normal receiver is running, the
   check stops it, starts and probes the receiver through the plugin's real
-  lifecycle, then restores its original running/stopped state. It shows one plain-language conclusion and a
+  lifecycle, then restores its original running/stopped state. The readiness
+  probe prefers a local HTTP(S) API response; on older devices whose system curl
+  cannot complete the HTTPS handshake, it falls back to confirming the receiver
+  process is running and listening on TCP. It shows one plain-language conclusion and a
   relevant action. The full report remains available through **Technical details**.
 - **Can't find a device?** — explains how to prepare the other device, then tests
   LocalSend discovery. If necessary, the receiver is restarted briefly and

@@ -139,6 +139,24 @@ local function probeLocalAPI(instance, host)
     return "HTTP " .. output
 end
 
+local function localAPIProbeSucceeded(probe)
+    local code = probe and probe:match("^HTTP (%d+)")
+    return code and code:sub(1, 1) == "2" or false
+end
+
+-- An HTTP status means curl completed a request. Connection/TLS failures and
+-- missing curl do not produce one, and those are the only cases where the
+-- process/listener fallback may declare the receiver started.
+local function localAPIProbeAnswered(probe)
+    return probe and probe:match("^HTTP %d%d%d") ~= nil
+end
+
+-- The check passed on process/listener evidence rather than a real API response.
+-- This only happens when the API probe is present but never returned HTTP 2xx.
+local function selfTestUsedFallback(self_test)
+    return self_test and self_test.api_probe ~= nil and not localAPIProbeSucceeded(self_test.api_probe)
+end
+
 local function redactNetworkInfo(value)
     value = tostring(value or "unavailable")
     value = value:gsub("MAC:%s*[^\n]+", "MAC: [redacted]")
@@ -226,6 +244,52 @@ local function listenerStatus(instance)
         end
     end
     return { ok = found, detail = found and table.concat(scopes, ", ") or "no TCP/UDP listener found in /proc/net" }
+end
+
+local function tcpListenerReady(listeners)
+    -- UDP alone can mean discovery is up before the HTTP(S) API listens.
+    return listeners and listeners.ok and tostring(listeners.detail or ""):match("tcp") ~= nil
+end
+
+-- Older Kindles ship curl/OpenSSL that cannot handshake the receiver's Ed25519
+-- certificate, so HTTPS API probes fail even while transfers from modern clients
+-- succeed. When curl never gets an HTTP status, fall back to process + TCP
+-- listener evidence instead of claiming the receiver did not start.
+local function fallbackReceiverReady(instance, pid_file)
+    local process
+    if pid_file then
+        local pid = tonumber(readFirstLine(pid_file) or "")
+        if not pid then
+            process = { running = false, detail = "no receiver PID" }
+        else
+            local proc_path = "/proc/" .. tostring(pid)
+            if not deps.util.pathExists(proc_path) then
+                process = { running = false, pid = pid, detail = "stale receiver PID" }
+            else
+                process = {
+                    running = true,
+                    pid = pid,
+                    detail = sanitizeCmdline(readFile(proc_path .. "/cmdline") or "unavailable"),
+                }
+            end
+        end
+    else
+        process = receiverProcessStatus()
+    end
+    local listeners = listenerStatus(instance)
+    if process.running and tcpListenerReady(listeners) then
+        return {
+            ok = true,
+            process = process,
+            listeners = listeners,
+            detail = "listening (" .. tostring(listeners.detail) .. ")",
+        }
+    end
+    return {
+        ok = false,
+        process = process,
+        listeners = listeners,
+    }
 end
 
 local function captureEvidence()
@@ -381,10 +445,23 @@ local function activeServerProbe(instance)
     local probe = "failed (no response)"
     for i = 1, 5 do
         probe = probeLocalAPI(instance)
-        local code = probe and probe:match("^HTTP (%d+)")
-        if code and code:sub(1, 1) == "2" then
+        if localAPIProbeSucceeded(probe) then
             stopDiagnosticServer(instance)
             return { ok = true, detail = probe, log_path = DIAG_SERVER_OUTPUT_FILE }
+        end
+        if not localAPIProbeAnswered(probe) then
+            local fallback = fallbackReceiverReady(instance, DIAG_SERVER_PID_FILE)
+            if fallback.ok then
+                stopDiagnosticServer(instance)
+                return {
+                    ok = true,
+                    detail = fallback.detail .. "; API probe: " .. tostring(probe),
+                    log_path = DIAG_SERVER_OUTPUT_FILE,
+                    process = fallback.process,
+                    listeners = fallback.listeners,
+                    api_probe = probe,
+                }
+            end
         end
         if i < 5 then
             os.execute("sleep 1")
@@ -802,18 +879,32 @@ function M.collectAsync(instance, callback)
         instance:start(true)
         local function poll(attempt)
             local probe = probeLocalAPI(instance)
-            local code = probe and probe:match("^HTTP (%d+)")
-            if code and code:sub(1, 1) == "2" then
+            local fallback = nil
+            if not localAPIProbeSucceeded(probe) and not localAPIProbeAnswered(probe) then
+                fallback = fallbackReceiverReady(instance)
+            end
+            if localAPIProbeSucceeded(probe) or (fallback and fallback.ok) then
                 local network_info = safeCall(function()
                     return deps.Device and deps.Device.retrieveNetworkInfo and deps.Device:retrieveNetworkInfo() or nil
                 end, nil)
+                local detail, process, listeners
+                if localAPIProbeSucceeded(probe) then
+                    detail = probe
+                    process = receiverProcessStatus()
+                    listeners = listenerStatus(instance)
+                else
+                    detail = fallback.detail .. "; API probe: " .. tostring(probe)
+                    process = fallback.process
+                    listeners = fallback.listeners
+                end
                 local server_probe = {
                     ok = true,
-                    detail = probe,
+                    detail = detail,
                     log_path = constants.SERVER_OUTPUT_FILE,
                     lan_probes = probeLANAPIs(instance, network_info),
-                    process = receiverProcessStatus(),
-                    listeners = listenerStatus(instance),
+                    process = process,
+                    listeners = listeners,
+                    api_probe = probe,
                 }
                 local firewall_probe = firewallStatus()
                 if was_running then
@@ -823,7 +914,15 @@ function M.collectAsync(instance, callback)
                     stopTestReceiver(server_probe, firewall_probe)
                 end
             elseif attempt >= 50 then
-                local server_probe = { ok = false, detail = probe, log_path = constants.SERVER_OUTPUT_FILE }
+                local failed = fallback or fallbackReceiverReady(instance)
+                local server_probe = {
+                    ok = false,
+                    detail = probe,
+                    log_path = constants.SERVER_OUTPUT_FILE,
+                    process = failed.process,
+                    listeners = failed.listeners,
+                    api_probe = probe,
+                }
                 local firewall_probe = firewallStatus()
                 instance:stopServer({
                     callback = function()
@@ -968,7 +1067,14 @@ function M.formatReport(report)
     table.insert(lines, "Autostart: " .. boolLabel(report.settings.autostart))
 
     addSection(lines, "Receiver lifecycle test")
-    table.insert(lines, statusLabel(report.server.self_test and report.server.self_test.ok, "Real receiver starts and local API responds"))
+    local self_test_ok = report.server.self_test and report.server.self_test.ok
+    local lifecycle_label = "Real receiver starts and local API responds"
+    if self_test_ok and selfTestUsedFallback(report.server.self_test) then
+        -- Passed on process/listener evidence because the local API probe is
+        -- unavailable on this device (e.g. curl cannot do Ed25519 TLS).
+        lifecycle_label = "Real receiver starts and is listening on its port"
+    end
+    table.insert(lines, statusLabel(self_test_ok, lifecycle_label))
     table.insert(lines, "Result: " .. tostring(report.server.self_test and report.server.self_test.detail or "unknown"))
     local lan_probes = report.server.self_test and report.server.self_test.lan_probes or {}
     if #lan_probes == 0 then
