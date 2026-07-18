@@ -34,6 +34,7 @@ just test-filter "pattern"  # Focused Lua run in Docker
 just test-go            # Go tests in Docker
 just test-go-race       # Go tests with race detector in Docker
 just test-go-integration # Go integration tests in Docker
+just test-armcompat     # QEMU/seccomp audit of packaged legacy ARM binary
 just lint               # luacheck + golangci-lint in Docker
 just fmt                # stylua + go fmt in Docker
 just check              # fmt + lint + test in one container (pre-commit)
@@ -41,7 +42,7 @@ just shell              # Interactive container shell
 just                    # List all recipes
 ```
 
-Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.03_4` — contains real KOReader Linux runtime.
+Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.03_6` — contains real KOReader Linux runtime and QEMU user-mode tooling.
 Bump `koplugin_dev_version` in `justfile` when the image updates.
 
 Shared recipes are vendored at `just/shared.just` (from koplugin-dev). Refresh with

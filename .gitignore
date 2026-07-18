@@ -11,8 +11,10 @@ web/dist
 build
 *.zip
 
-# testdat
+# testdata (Go convention); keep the armcompat seccomp launcher tracked
 testdata
+!tools/armcompat/testdata/
+!tools/armcompat/testdata/**
 
 .DS_Store
 

@@ -8,13 +8,13 @@
 #   just test      # run all tests (quiet; V=1 for verbose)
 #   just lint      # lint everything
 #   just shell     # drop into the container
-#   just release   # cross-compile ARM + package release zips (host Go)
+#   just release   # cross-compile ARM + package release zips in Docker
 #
 # When shared recipes change upstream:
 #   just sync-shared   # refresh just/shared.just (then commit)
 
 plugin_name := "localsend"
-koplugin_dev_version := "v2026.03_4"
+koplugin_dev_version := "v2026.03_6"
 # Git ref used by `just sync-shared` (recipe source). Independent of the image pin.
 koplugin_dev_ref := env("KOPLUGIN_DEV_REF", "main")
 # Go CLI owns the repo root; the installable .koplugin lives under lua/.
@@ -57,13 +57,22 @@ sync-shared:
 # Build (product-specific)
 # =============================================================================
 
+# Run the deterministic QEMU/seccomp audit against both packaged 32-bit ARM binaries.
+# Requires a completed release build so the exact shipped binaries are exercised.
+[group('test')]
+test-armcompat:
+    {{ _run }} env GOFLAGS=-buildvcs=false bash /opt/plugin/tools/armcompat/audit.sh
+
 # Cross-compiles three ARM targets (arm-legacy/armv7/arm64) with buildArchTag
 # injected via ldflags, then packages each binary with the Lua source into a
-# release zip. Mirrors .github/workflows/koplugin.yaml → build/*.zip.
-# Requires host Go (CGO_ENABLED=0 cross-compile) and host `zip`.
+# release zip. Runs in the pinned koplugin-dev image used by tests and CI.
 # Usage: just release [-p|--package]   (-p = package only, reuse build/bin)
 [group('build')]
 release *args='':
+    {{ _run }} env GOFLAGS=-buildvcs=false just --justfile /opt/plugin/justfile _release {{ args }}
+
+[private]
+_release *args='':
     #!/usr/bin/env bash
     set -euo pipefail
 
@@ -84,6 +93,11 @@ release *args='':
     bin_dir="$build_dir/bin"
     pkg="localsend.koplugin"
     stage="$build_dir/$pkg"
+
+    # Docker runs as root, but generated artifacts should remain manageable by
+    # the checkout owner on the host, including after a failed release build.
+    source_owner="$(stat -c '%u:%g' .)"
+    trap 'if [ -e "$build_dir" ]; then chown -R "$source_owner" "$build_dir"; fi' EXIT
 
     if $package_only; then
         for arch in arm-legacy armv7 arm64; do
@@ -107,11 +121,17 @@ release *args='':
 
     if ! $package_only; then
         echo "Cross-compiling ARM binaries..."
+        # Amazon's Linux 2.6.31 Kindle kernels omit epoll_pwait and ARM
+        # accept4 (ENOSYS). Build 32-bit packages with a scoped GOROOT overlay
+        # that restores epoll_wait and Go's former accept fallback.
+        compat_overlay="$(go run ./tools/armcompat -output-dir "$build_dir/arm-runtime-compat")"
         CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 \
-            go build -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=arm-legacy" \
+            go build -overlay="$compat_overlay" \
+            -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=arm-legacy" \
             -o build/bin/localsend-arm-legacy .
         CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
-            go build -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=armv7" \
+            go build -overlay="$compat_overlay" \
+            -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=armv7" \
             -o build/bin/localsend-armv7 .
         CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
             go build -ldflags="-s -w -X localsend-cli/cmd.buildArchTag=arm64" \

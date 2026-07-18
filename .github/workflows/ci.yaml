@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: Docker Test Suite
+    name: Docker Test and Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -33,3 +33,9 @@ jobs:
 
       - name: Run tests
         run: just test
+
+      - name: Build release artifacts
+        run: just release
+
+      - name: Audit legacy ARM compatibility
+        run: just test-armcompat

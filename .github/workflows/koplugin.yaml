@@ -15,12 +15,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version: "1.26.5"
-          cache: true
-
       - name: Install just
         run: |
           set -euo pipefail
@@ -29,8 +23,14 @@ jobs:
             | bash -s -- --to "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Set up development image
+        run: just setup
+
       - name: Build release artifacts
         run: just release
+
+      - name: Audit legacy ARM compatibility
+        run: just test-armcompat
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
