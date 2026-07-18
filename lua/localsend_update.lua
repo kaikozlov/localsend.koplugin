@@ -11,18 +11,21 @@ M.GITHUB_RELEASE_URL = "https://api.github.com/repos/kaikozlov/localsend.koplugi
 M.REINSTALL_MARKER_FILE = ".reinstall_required"
 M.TMP_TELEMETRY_PATTERN = "fm-out-*"
 M.CACHE_SUBDIR = "localsend"
+M.MAX_CURL_ERROR_BYTES = 500
 
 -- Dependencies container (set via M.init)
 local deps = {}
 
 -- Path configuration (set via M.init)
 local cache_dir = nil
+local ca_bundle_path = nil
 
 -- Initialize module with dependencies
--- @param d table Dependencies: { UIManager, InfoMessage, Notification, NetworkMgr, util, ffiutil, json, logger, T, _, cache_dir }
+-- @param d table Dependencies: { UIManager, InfoMessage, Notification, NetworkMgr, util, ffiutil, json, logger, T, _, cache_dir, ca_bundle_path }
 function M.init(d)
     deps = d
     cache_dir = d.cache_dir
+    ca_bundle_path = d.ca_bundle_path
 end
 
 -- Persist and mirror update availability state.
@@ -112,14 +115,25 @@ function M.clearTmpTelemetryFiles()
     end
 end
 
+-- Use KOReader's maintained Mozilla trust store when the installed package
+-- provides one. Older Kindle firmware bundles can no longer validate GitHub's
+-- current certificate chain; falling back to curl's default preserves support
+-- for KOReader installations that predate the bundled CA file.
+local function addCABundleArgs(args)
+    if ca_bundle_path and deps.util.pathExists(ca_bundle_path) then
+        table.insert(args, "--cacert")
+        table.insert(args, ca_bundle_path)
+    end
+end
+
 -- Build a curl command for fetching JSON from a URL
 -- @param output_file string Path to write response body
 -- @param url string URL to fetch
 -- @return string Shell-escaped curl command that outputs HTTP status code
 function M.buildCurlCommand(output_file, url)
-    return deps.util.shell_escape({
+    local args = {
         "curl",
-        "-s",
+        "-sS",
         "-o",
         output_file,
         "-w",
@@ -130,8 +144,10 @@ function M.buildCurlCommand(output_file, url)
         "30",
         "-H",
         "Accept: application/vnd.github.v3+json",
-        url,
-    })
+    }
+    addCABundleArgs(args)
+    table.insert(args, url)
+    return deps.util.shell_escape(args)
 end
 
 local function commandSucceeded(result)
@@ -143,16 +159,42 @@ end
 -- directly can observe an empty value while the request is still in flight.
 local function buildBackgroundCurlCommand(output_file, status_file, url)
     local pending_status_file = status_file .. ".tmp"
+    local error_file = status_file .. ".error"
     deps.util.removeFile(status_file)
     deps.util.removeFile(pending_status_file)
+    deps.util.removeFile(error_file)
     local command = "( "
         .. M.buildCurlCommand(output_file, url)
         .. " > "
         .. deps.util.shell_escape({ pending_status_file })
-        .. " 2>/dev/null; "
+        .. " 2> "
+        .. deps.util.shell_escape({ error_file })
+        .. "; if [ ! -s "
+        .. deps.util.shell_escape({ pending_status_file })
+        .. " ]; then printf '000' > "
+        .. deps.util.shell_escape({ pending_status_file })
+        .. "; fi; "
         .. deps.util.shell_escape({ "mv", "-f", pending_status_file, status_file })
         .. " ) &"
-    return command, pending_status_file
+    return command, pending_status_file, error_file
+end
+
+local function readCurlError(error_file)
+    if not error_file or not deps.util.pathExists(error_file) then
+        return nil
+    end
+    local value = deps.util.readFromFile(error_file)
+    if type(value) ~= "string" then
+        return nil
+    end
+    value = value:gsub("[\r\n]+", " "):gsub("^%s+", ""):gsub("%s+$", "")
+    if value == "" then
+        return nil
+    end
+    if #value > M.MAX_CURL_ERROR_BYTES then
+        value = value:sub(1, M.MAX_CURL_ERROR_BYTES) .. "..."
+    end
+    return value
 end
 
 -- Return a status only after curl has produced one complete HTTP code. This is
@@ -236,12 +278,15 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     local update_cache = getUpdateCacheDir()
     local tmp_zip = update_cache .. "/localsend_update.zip"
     local tmp_extract = update_cache .. "/extract"
+    local download_error_file = update_cache .. "/download.error"
 
-    -- Download the zip
-    local cmd = deps.util.shell_escape({
+    -- Download the zip. Keep curl's status on stdout for io.popen, while
+    -- capturing a bounded diagnostic for failures such as TLS status 000.
+    deps.util.removeFile(download_error_file)
+    local download_args = {
         "curl",
         "-L",
-        "-s",
+        "-sS",
         "-o",
         tmp_zip,
         "-w",
@@ -250,8 +295,10 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
         "30",
         "--max-time",
         "120",
-        download_url,
-    })
+    }
+    addCABundleArgs(download_args)
+    table.insert(download_args, download_url)
+    local cmd = deps.util.shell_escape(download_args) .. " 2> " .. deps.util.shell_escape({ download_error_file })
 
     local handle = io.popen(cmd)
     if not handle then
@@ -263,6 +310,8 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     end
     local ok, http_code = pcall(handle.read, handle, "*a")
     handle:close()
+    local curl_error = readCurlError(download_error_file)
+    deps.util.removeFile(download_error_file)
     if not ok then
         deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
@@ -272,9 +321,13 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
     end
 
     if http_code ~= "200" then
+        local message = deps.T(deps._("Download failed.\nHTTP status: %1"), http_code)
+        if curl_error then
+            message = message .. "\n\n" .. deps.T(deps._("Details: %1"), curl_error)
+        end
         deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
-            text = deps.T(deps._("Download failed.\nHTTP status: %1"), http_code),
+            text = message,
         }))
         deps.util.removeFile(tmp_zip)
         return
@@ -498,7 +551,7 @@ end
 -- @param instance table LocalSend instance
 -- @param plugin_version string Current plugin version
 -- @param schedule_next function Callback to schedule next check
-function M.doAutoCheckForUpdates(instance, plugin_version, schedule_next, supplied_http_code, supplied_tmp_file)
+function M.doAutoCheckForUpdates(instance, plugin_version, schedule_next, supplied_http_code, supplied_tmp_file, supplied_error)
     local update_cache = getUpdateCacheDir()
     local tmp_file = supplied_tmp_file or (update_cache .. "/update_check.json")
     local http_code = supplied_http_code
@@ -525,7 +578,7 @@ function M.doAutoCheckForUpdates(instance, plugin_version, schedule_next, suppli
     deps.G_reader_settings:saveSetting("LocalSend_last_update_check", instance.last_update_check)
 
     if http_code ~= "200" then
-        deps.logger.dbg("[LocalSend] Auto update check failed, HTTP:", http_code)
+        deps.logger.dbg("[LocalSend] Auto update check failed, HTTP:", http_code, supplied_error or "")
         deps.util.removeFile(tmp_file)
         schedule_next()
         return
@@ -572,7 +625,7 @@ function M.autoCheckForUpdates(instance, plugin_version, schedule_next)
     deps.util.makePath(update_cache)
     local tmp_file = update_cache .. "/auto_update_check.json"
     local status_file = update_cache .. "/auto_update_check.status"
-    local command, pending_status_file = buildBackgroundCurlCommand(tmp_file, status_file, M.GITHUB_RELEASE_URL)
+    local command, pending_status_file, error_file = buildBackgroundCurlCommand(tmp_file, status_file, M.GITHUB_RELEASE_URL)
     if not commandSucceeded(os.execute(command)) then
         schedule_next()
         return
@@ -583,7 +636,9 @@ function M.autoCheckForUpdates(instance, plugin_version, schedule_next)
         if http_code then
             instance.update_check_poll_task = nil
             deps.util.removeFile(status_file)
-            M.doAutoCheckForUpdates(instance, plugin_version, schedule_next, http_code, tmp_file)
+            local curl_error = readCurlError(error_file)
+            deps.util.removeFile(error_file)
+            M.doAutoCheckForUpdates(instance, plugin_version, schedule_next, http_code, tmp_file, curl_error)
             return
         end
         attempts = attempts - 1
@@ -591,6 +646,7 @@ function M.autoCheckForUpdates(instance, plugin_version, schedule_next)
             instance.update_check_poll_task = nil
             deps.util.removeFile(status_file)
             deps.util.removeFile(pending_status_file)
+            deps.util.removeFile(error_file)
             deps.util.removeFile(tmp_file)
             schedule_next()
             return
@@ -605,7 +661,7 @@ end
 -- @param instance table LocalSend instance
 -- @param plugin_version string Current plugin version
 -- @param plugin_path string Path to plugin directory
-function M.doCheckForUpdates(instance, plugin_version, plugin_path, supplied_http_code, supplied_tmp_file, suppress_progress)
+function M.doCheckForUpdates(instance, plugin_version, plugin_path, supplied_http_code, supplied_tmp_file, suppress_progress, supplied_error)
     if not suppress_progress then
         deps.UIManager:show(deps.InfoMessage:new({
             text = deps._("Checking for updates..."),
@@ -638,9 +694,13 @@ function M.doCheckForUpdates(instance, plugin_version, plugin_path, supplied_htt
     end
 
     if http_code ~= "200" then
+        local message = deps.T(deps._("Failed to check for updates.\nHTTP status: %1\n\nPlease check your internet connection."), http_code)
+        if supplied_error then
+            message = message .. "\n\n" .. deps.T(deps._("Details: %1"), supplied_error)
+        end
         deps.UIManager:show(deps.InfoMessage:new({
             icon = "notice-warning",
-            text = deps.T(deps._("Failed to check for updates.\nHTTP status: %1\n\nPlease check your internet connection."), http_code),
+            text = message,
         }))
         deps.util.removeFile(tmp_file)
         return
@@ -768,7 +828,7 @@ function M.checkForUpdates(instance, plugin_version, plugin_path)
         deps.util.makePath(update_cache)
         local tmp_file = update_cache .. "/update_check.json"
         local status_file = update_cache .. "/update_check.status"
-        local command, pending_status_file = buildBackgroundCurlCommand(tmp_file, status_file, M.GITHUB_RELEASE_URL)
+        local command, pending_status_file, error_file = buildBackgroundCurlCommand(tmp_file, status_file, M.GITHUB_RELEASE_URL)
         local launched = os.execute(command)
         if not commandSucceeded(launched) then
             deps.UIManager:show(deps.InfoMessage:new({
@@ -784,7 +844,9 @@ function M.checkForUpdates(instance, plugin_version, plugin_path)
             if http_code then
                 instance.update_check_poll_task = nil
                 deps.util.removeFile(status_file)
-                M.doCheckForUpdates(instance, plugin_version, plugin_path, http_code, tmp_file, true)
+                local curl_error = readCurlError(error_file)
+                deps.util.removeFile(error_file)
+                M.doCheckForUpdates(instance, plugin_version, plugin_path, http_code, tmp_file, true, curl_error)
                 return
             end
             attempts = attempts - 1
@@ -792,6 +854,7 @@ function M.checkForUpdates(instance, plugin_version, plugin_path)
                 instance.update_check_poll_task = nil
                 deps.util.removeFile(status_file)
                 deps.util.removeFile(pending_status_file)
+                deps.util.removeFile(error_file)
                 deps.util.removeFile(tmp_file)
                 deps.UIManager:show(deps.InfoMessage:new({
                     icon = "notice-warning",

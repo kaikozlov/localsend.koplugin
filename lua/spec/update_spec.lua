@@ -13,6 +13,7 @@ describe("Self-Update", function()
     local NetworkMgr = require("ui/network/manager")
     local orig_isOnline, orig_isConnected, orig_runWhenOnline
     local orig_textviewer
+    local ca_bundle_path = "/tmp/koreader-test-data/data/ca-bundle.crt"
 
     setup(function()
         helper.setup_complete()
@@ -118,6 +119,7 @@ describe("Self-Update", function()
                 }
             end
             if cmd:match("curl") then
+                http_responses.last_curl_command = cmd
                 return {
                     read = function()
                         return http_responses.code
@@ -397,6 +399,53 @@ describe("Self-Update", function()
             assert.is_true(#helper.state.scheduled_tasks > 0)
         end)
 
+        it("captures curl errors instead of discarding the failure reason", function()
+            local instance = helper.create_instance()
+            instance:checkForUpdates()
+
+            local command = helper.find_execute_call("update_check%.status")
+            assert.is_truthy(command)
+            assert.matches("update_check%.status%.error", command)
+            assert.is_nil(command:match("2>/dev/null"))
+        end)
+
+        it("uses KOReader's CA bundle for update checks when available", function()
+            file_contents[ca_bundle_path] = "test CA bundle"
+
+            local instance = helper.create_instance()
+            instance:checkForUpdates()
+
+            local command = helper.find_execute_call("update_check%.status")
+            assert.is_truthy(command)
+            assert.matches("%-%-cacert", command)
+            assert.matches("/tmp/koreader%-test%-data/data/ca%-bundle%.crt", command)
+        end)
+
+        it("uses curl's default trust store when KOReader's CA bundle is unavailable", function()
+            local instance = helper.create_instance()
+            instance:checkForUpdates()
+
+            local command = helper.find_execute_call("update_check%.status")
+            assert.is_truthy(command)
+            assert.is_nil(command:match("%-%-cacert"))
+        end)
+
+        it("shows the curl failure reason for HTTP status 000", function()
+            local update = require("localsend_update")
+            local instance = helper.create_instance()
+            update.doCheckForUpdates(
+                instance,
+                "v1.4.1",
+                "/tmp/koreader-test-data/plugins/localsend.koplugin",
+                "000",
+                "/tmp/koreader-test-data/cache/localsend/update_check.json",
+                true,
+                "curl: (35) TLS handshake failed"
+            )
+
+            assert.is_truthy(helper.find_notification("TLS handshake failed"))
+        end)
+
         it("waits for the background curl status before processing a manual check", function()
             local status_file = "/tmp/koreader-test-data/cache/localsend/update_check.status"
             file_contents[status_file] = ""
@@ -490,6 +539,7 @@ describe("Self-Update", function()
             helper.create_instance()
             local command = update.buildCurlCommand("/tmp/update.json", "https://example.com/latest")
             assert.matches("%-%-max%-time", command)
+            assert.matches("%-sS", command)
         end)
     end)
 
@@ -504,6 +554,30 @@ describe("Self-Update", function()
     -- doPerformUpdate
     -- =======================================================================
     describe("doPerformUpdate", function()
+        it("uses KOReader's CA bundle for release downloads when available", function()
+            file_contents[ca_bundle_path] = "test CA bundle"
+
+            local instance = helper.create_instance()
+            instance:doPerformUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
+
+            local command = http_responses.last_curl_command
+            assert.is_truthy(command)
+            assert.matches("%-%-cacert", command)
+            assert.matches("/tmp/koreader%-test%-data/data/ca%-bundle%.crt", command)
+            assert.matches("%-sS", command)
+            assert.matches("2> '/tmp/koreader%-test%-data/cache/localsend/download%.error'", command)
+        end)
+
+        it("shows curl's failure reason when a release download fails", function()
+            http_responses.code = "000"
+            file_contents["/tmp/koreader-test-data/cache/localsend/download.error"] = "curl: (35) TLS handshake failed"
+
+            local instance = helper.create_instance()
+            instance:doPerformUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
+
+            assert.is_truthy(helper.find_notification("TLS handshake failed"))
+        end)
+
         it("cleans up on download failure", function()
             http_responses.code = "500"
 

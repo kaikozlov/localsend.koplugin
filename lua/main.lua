@@ -62,6 +62,7 @@ local validateDeviceName = lsutils.validateDeviceName
 
 local data_dir = DataStorage:getFullDataDir()
 local cache_dir = data_dir .. "/cache"
+local ca_bundle_path = data_dir .. "/data/ca-bundle.crt"
 local plugin_path = data_dir .. "/plugins/localsend.koplugin"
 
 -- ServerState is now in localsend_state.lua module (nil in recovery mode)
@@ -115,6 +116,7 @@ local function initUpdateModule()
         _ = _,
         G_reader_settings = G_reader_settings,
         cache_dir = cache_dir,
+        ca_bundle_path = ca_bundle_path,
     })
 end
 
