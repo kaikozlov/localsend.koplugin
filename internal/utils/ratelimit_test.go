@@ -41,15 +41,21 @@ func TestRateLimiter_IsBlocked_AfterMaxAttempts(t *testing.T) {
 }
 
 func TestRateLimiter_IsBlocked_ExpiredBlock(t *testing.T) {
-	rl := NewRateLimiter(3, 1*time.Millisecond)
+	clock := NewFakeClock()
+	blockDur := time.Second
+	rl := NewRateLimiter(3, blockDur, WithClock(clock.Now))
 
 	// Record max attempts
 	for i := 0; i < 3; i++ {
 		rl.RecordAttempt("192.168.1.1")
 	}
 
-	// Wait for block to expire
-	time.Sleep(5 * time.Millisecond)
+	if !rl.IsBlocked("192.168.1.1") {
+		t.Fatal("Client should be blocked after max attempts")
+	}
+
+	// Advance past the block window to expire it
+	clock.Advance(blockDur + time.Millisecond)
 
 	if rl.IsBlocked("192.168.1.1") {
 		t.Error("Client should not be blocked after expiry")
@@ -97,15 +103,17 @@ func TestRateLimiter_Clear(t *testing.T) {
 }
 
 func TestRateLimiter_CleanupExpired_BlockedEntries(t *testing.T) {
-	rl := NewRateLimiter(3, 1*time.Millisecond)
+	clock := NewFakeClock()
+	blockDur := time.Second
+	rl := NewRateLimiter(3, blockDur, WithClock(clock.Now))
 
 	// Block a client
 	for i := 0; i < 3; i++ {
 		rl.RecordAttempt("192.168.1.1")
 	}
 
-	// Wait for expiry
-	time.Sleep(5 * time.Millisecond)
+	// Advance past the block window to expire it
+	clock.Advance(blockDur + time.Millisecond)
 
 	cleaned := rl.CleanupExpired()
 
@@ -118,13 +126,15 @@ func TestRateLimiter_CleanupExpired_BlockedEntries(t *testing.T) {
 }
 
 func TestRateLimiter_CleanupExpired_PartialAttempts(t *testing.T) {
-	rl := NewRateLimiter(3, 1*time.Millisecond)
+	clock := NewFakeClock()
+	blockDur := time.Second
+	rl := NewRateLimiter(3, blockDur, WithClock(clock.Now))
 
 	// Record partial attempt
 	rl.RecordAttempt("192.168.1.1")
 
-	// Wait for expiry
-	time.Sleep(5 * time.Millisecond)
+	// Advance past the staleness window
+	clock.Advance(blockDur + time.Millisecond)
 
 	cleaned := rl.CleanupExpired()
 

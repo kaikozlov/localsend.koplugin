@@ -10,21 +10,23 @@ import (
 // TestFileReceiver_cleanupExpiredPINAttempts_RemovesExpiredBlocks verifies that
 // blocked IPs with expired blocks are removed during cleanup.
 func TestFileReceiver_cleanupExpiredPINAttempts_RemovesExpiredBlocks(t *testing.T) {
-	// Use a very short block duration for testing
-	rl := utils.NewRateLimiter(maxPINAttempts, 1*time.Millisecond)
+	clock := utils.NewFakeClock()
+	blockDur := time.Second
+	rl := utils.NewRateLimiter(maxPINAttempts, blockDur, utils.WithClock(clock.Now))
 
 	// Record max attempts to trigger block
 	for i := 0; i < maxPINAttempts; i++ {
 		rl.RecordAttempt("192.168.1.1")
 	}
 
-	// Verify it's blocked
+	// Deterministically blocked immediately: with a controllable clock there is
+	// no real-time window between setting blockedAt and the IsBlocked check.
 	if !rl.IsBlocked("192.168.1.1") {
 		t.Fatal("IP should be blocked after max attempts")
 	}
 
-	// Wait for block to expire
-	time.Sleep(5 * time.Millisecond)
+	// Advance past the block window to expire it
+	clock.Advance(blockDur + time.Millisecond)
 
 	// Run cleanup
 	cleaned := rl.CleanupExpired()
@@ -41,14 +43,15 @@ func TestFileReceiver_cleanupExpiredPINAttempts_RemovesExpiredBlocks(t *testing.
 // TestFileReceiver_cleanupExpiredPINAttempts_RemovesStalePartialAttempts verifies that
 // partial attempts (not yet blocked) with old lastAttempt are removed.
 func TestFileReceiver_cleanupExpiredPINAttempts_RemovesStalePartialAttempts(t *testing.T) {
-	// Use a very short block duration for testing
-	rl := utils.NewRateLimiter(maxPINAttempts, 1*time.Millisecond)
+	clock := utils.NewFakeClock()
+	blockDur := time.Second
+	rl := utils.NewRateLimiter(maxPINAttempts, blockDur, utils.WithClock(clock.Now))
 
 	// Record a partial attempt (not blocked)
 	rl.RecordAttempt("192.168.1.1")
 
-	// Wait for entry to become stale
-	time.Sleep(5 * time.Millisecond)
+	// Advance so the entry becomes stale
+	clock.Advance(blockDur + time.Millisecond)
 
 	// Run cleanup
 	cleaned := rl.CleanupExpired()
@@ -65,8 +68,8 @@ func TestFileReceiver_cleanupExpiredPINAttempts_RemovesStalePartialAttempts(t *t
 // TestFileReceiver_cleanupExpiredPINAttempts_KeepsActiveEntries verifies that
 // recent entries are NOT removed during cleanup.
 func TestFileReceiver_cleanupExpiredPINAttempts_KeepsActiveEntries(t *testing.T) {
-	// Use a longer block duration so entries don't expire
-	rl := utils.NewRateLimiter(maxPINAttempts, 1*time.Hour)
+	clock := utils.NewFakeClock()
+	rl := utils.NewRateLimiter(maxPINAttempts, 1*time.Hour, utils.WithClock(clock.Now))
 
 	// Recent blocked IP (should be kept)
 	for i := 0; i < maxPINAttempts; i++ {
@@ -76,7 +79,7 @@ func TestFileReceiver_cleanupExpiredPINAttempts_KeepsActiveEntries(t *testing.T)
 	// Recent partial attempt (should be kept)
 	rl.RecordAttempt("192.168.1.2")
 
-	// Run cleanup
+	// Run cleanup (clock not advanced: both entries are recent)
 	cleaned := rl.CleanupExpired()
 
 	// Verify both entries are still present
@@ -94,7 +97,8 @@ func TestFileReceiver_cleanupExpiredPINAttempts_KeepsActiveEntries(t *testing.T)
 // TestFileReceiver_cleanupExpiredPINAttempts_EmptyNoOp verifies that
 // cleanup handles empty rate limiter gracefully (no panic).
 func TestFileReceiver_cleanupExpiredPINAttempts_EmptyNoOp(t *testing.T) {
-	rl := utils.NewRateLimiter(maxPINAttempts, pinBlockDuration)
+	clock := utils.NewFakeClock()
+	rl := utils.NewRateLimiter(maxPINAttempts, pinBlockDuration, utils.WithClock(clock.Now))
 
 	// This should not panic
 	cleaned := rl.CleanupExpired()
@@ -108,16 +112,17 @@ func TestFileReceiver_cleanupExpiredPINAttempts_EmptyNoOp(t *testing.T) {
 // TestFileReceiver_cleanupExpiredPINAttempts_MixedEntries verifies cleanup
 // correctly handles a mix of expired and active entries.
 func TestFileReceiver_cleanupExpiredPINAttempts_MixedEntries(t *testing.T) {
-	// Use a short block duration for expired entries
-	rl := utils.NewRateLimiter(maxPINAttempts, 1*time.Millisecond)
+	clock := utils.NewFakeClock()
+	blockDur := time.Second
+	rl := utils.NewRateLimiter(maxPINAttempts, blockDur, utils.WithClock(clock.Now))
 
 	// Add entry that will expire
 	rl.RecordAttempt("expired-partial")
 
-	// Wait for it to become stale
-	time.Sleep(5 * time.Millisecond)
+	// Advance so it becomes stale
+	clock.Advance(blockDur + time.Millisecond)
 
-	// Add recent entries (after the stale entry)
+	// Add recent entries (recorded after the clock advanced, so they're fresh)
 	for i := 0; i < maxPINAttempts; i++ {
 		rl.RecordAttempt("recent-blocked")
 	}

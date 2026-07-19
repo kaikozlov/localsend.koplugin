@@ -21,6 +21,21 @@ type RateLimiter struct {
 	mu            sync.RWMutex
 	maxAttempts   int
 	blockDuration time.Duration
+	now           func() time.Time // current time; defaults to time.Now, overridable via WithClock
+}
+
+// Option configures a RateLimiter.
+type Option func(*RateLimiter)
+
+// WithClock overrides the function used to read the current time. It defaults
+// to time.Now; tests inject a controllable clock (e.g. FakeClock) so expiry
+// behaviour is deterministic and free of real-time sleeps.
+func WithClock(now func() time.Time) Option {
+	return func(rl *RateLimiter) {
+		if now != nil {
+			rl.now = now
+		}
+	}
 }
 
 // attemptInfo tracks failed attempts for a client.
@@ -35,12 +50,18 @@ type attemptInfo struct {
 // Parameters:
 //   - maxAttempts: number of failed attempts before blocking
 //   - blockDuration: how long to block after max attempts
-func NewRateLimiter(maxAttempts int, blockDuration time.Duration) *RateLimiter {
-	return &RateLimiter{
+//   - opts: optional configuration (e.g. WithClock)
+func NewRateLimiter(maxAttempts int, blockDuration time.Duration, opts ...Option) *RateLimiter {
+	rl := &RateLimiter{
 		attempts:      make(map[string]*attemptInfo),
 		maxAttempts:   maxAttempts,
 		blockDuration: blockDuration,
+		now:           time.Now,
 	}
+	for _, opt := range opts {
+		opt(rl)
+	}
+	return rl
 }
 
 // IsBlocked returns true if the client is currently blocked due to
@@ -56,7 +77,7 @@ func (rl *RateLimiter) IsBlocked(clientID string) bool {
 
 	// Check if block has expired
 	if info.count >= rl.maxAttempts {
-		if time.Since(info.blockedAt) > rl.blockDuration {
+		if rl.now().Sub(info.blockedAt) > rl.blockDuration {
 			delete(rl.attempts, clientID) // Clear expired block
 			return false
 		}
@@ -77,10 +98,11 @@ func (rl *RateLimiter) RecordAttempt(clientID string) bool {
 		rl.attempts[clientID] = info
 	}
 
+	now := rl.now()
 	info.count++
-	info.lastAttempt = time.Now()
+	info.lastAttempt = now
 	if info.count >= rl.maxAttempts {
-		info.blockedAt = time.Now()
+		info.blockedAt = now
 		slog.Warn("Rate limit reached, blocking client", "clientID", clientID, "duration", rl.blockDuration)
 		return true
 	}
@@ -104,7 +126,7 @@ func (rl *RateLimiter) CleanupExpired() int {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	now := time.Now()
+	now := rl.now()
 	cleaned := 0
 	for clientID, info := range rl.attempts {
 		// Remove blocked entries whose block has expired
