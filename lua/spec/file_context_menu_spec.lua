@@ -185,4 +185,43 @@ describe("File Context Menu Integration", function()
             assert.is_true(row[1].enabled_func())
         end)
     end)
+
+    describe("file_dialog_button setting", function()
+        local instance
+
+        before_each(function()
+            instance, current_fm = helper.load_via_filemanager()
+        end)
+
+        it("defaults to on, so the button is shown", function()
+            assert.is_true(instance.file_dialog_button)
+
+            local row_func = get_localsend_row_func(current_fm)
+            assert.is_not_nil(row_func)
+
+            local row = row_func("/book.epub", true, nil)
+            assert.is_table(row)
+            assert.equals("Send with LocalSend", row[1].text)
+        end)
+
+        it("suppresses the button when disabled (row_func returns nil)", function()
+            local row_func = get_localsend_row_func(current_fm)
+            assert.is_not_nil(row_func)
+
+            instance.file_dialog_button = false
+            assert.is_nil(row_func("/book.epub", true, nil))
+            assert.is_nil(row_func("/folder", false, nil))
+        end)
+
+        it("shows the button again when re-enabled", function()
+            local row_func = get_localsend_row_func(current_fm)
+            instance.file_dialog_button = false
+            assert.is_nil(row_func("/book.epub", true, nil))
+
+            instance.file_dialog_button = true
+            local row = row_func("/book.epub", true, nil)
+            assert.is_table(row)
+            assert.equals("Send with LocalSend", row[1].text)
+        end)
+    end)
 end)

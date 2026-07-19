@@ -164,6 +164,7 @@ function LocalSend:init()
     self.ext_dirs = G_reader_settings:readSetting("LocalSend_ext_dirs") or {} -- Extension routing: ext -> dir
     self.routing_accept_all = G_reader_settings:isTrue("LocalSend_routing_accept_all") -- Accept unrouted files to default dir
     self.routing_enabled = G_reader_settings:isTrue("LocalSend_routing_enabled") -- Whether routing is active
+    self.file_dialog_button = G_reader_settings:nilOrTrue("LocalSend_file_dialog_button") -- file context-menu button (on by default)
 
     -- Auto update check settings
     self.auto_update_check = G_reader_settings:nilOrTrue("LocalSend_auto_update_check")
@@ -573,6 +574,7 @@ function LocalSend:deletePluginSettings()
         "LocalSend_ext_dirs",
         "LocalSend_routing_accept_all",
         "LocalSend_routing_enabled",
+        "LocalSend_file_dialog_button",
         "LocalSend_auto_update_check",
         "LocalSend_update_check_interval_hours",
         "LocalSend_last_update_check",
@@ -1488,6 +1490,19 @@ function LocalSend:_buildMainMenu()
                 help_text = _("Connect to public signaling server for WebRTC transfers. Requires internet access."),
             },
             {
+                text = _("Show 'Send with LocalSend' in file menu"),
+                checked_func = function()
+                    return self.file_dialog_button
+                end,
+                callback = function()
+                    self.file_dialog_button = not self.file_dialog_button
+                    G_reader_settings:flipNilOrTrue("LocalSend_file_dialog_button")
+                end,
+                help_text = _(
+                    "Add a 'Send with LocalSend' action to the long-press menu for files and folders in the file browser, History, and Collections."
+                ),
+            },
+            {
                 text = _("Rotate certificates"),
                 keep_menu_open = true,
                 callback = function()
@@ -1773,6 +1788,9 @@ function LocalSend:_registerFileDialogButton()
     -- --preserve-structure). Ignore is_file: History/Collections/FileSearcher
     -- always pass true anyway, and FileManager folders should remain eligible.
     local function row_func(file, _is_file, _book_props)
+        if not self.file_dialog_button then
+            return nil
+        end
         return {
             {
                 text = _("Send with LocalSend"),

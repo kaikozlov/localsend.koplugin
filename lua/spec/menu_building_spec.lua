@@ -317,6 +317,17 @@ describe("Menu Building", function()
                 end
             end
             assert.is_false(found_troubleshooting_in_settings, "Troubleshooting should not be nested under Settings")
+
+            -- 'Send with LocalSend' file-menu toggle lives in Settings and is on by default.
+            local found_file_dialog_toggle = false
+            for _, item in ipairs(settings_item.sub_item_table) do
+                if item.text == "Show 'Send with LocalSend' in file menu" then
+                    found_file_dialog_toggle = true
+                    assert.is_function(item.checked_func, "file-menu toggle needs a checked_func")
+                    assert.is_true(item.checked_func(), "file-menu toggle should default to on")
+                end
+            end
+            assert.is_true(found_file_dialog_toggle, "Settings should contain the file-menu toggle")
         end)
 
         it("builds a user-oriented troubleshooting submenu with advanced details", function()
