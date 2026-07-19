@@ -353,6 +353,16 @@ function LocalSend:init()
 
     self.ui.menu:registerToMainMenu(self)
     self:onDispatcherRegisterActions()
+
+    -- Register "Send with LocalSend" in file long-press dialogs.
+    -- Uses FileManager.addFileDialogButtons on the FileManager / History /
+    -- Collections / FileSearcher class tables (CoverBrowser pattern), so the
+    -- button appears in all four surfaces from both FileManager and ReaderUI.
+    -- remove-then-add on every init() refreshes the callback closure after
+    -- widget recreation. Skip mock/test UIs that lack these surfaces.
+    if not RECOVERY_MODE and self.ui and (self.ui.addFileDialogButtons or self.ui.history or self.ui.collections or self.ui.filesearcher) then
+        self:_registerFileDialogButton()
+    end
 end
 
 -- Recovery mode initialization - minimal setup for reinstall capability
@@ -399,6 +409,8 @@ end
 --   before returning. Normal disable keeps the async path since UIManager is
 --   still running and we don't want to block the UI.
 function LocalSend:stopPlugin(force)
+    -- Drop context-menu buttons on disable/unload so a stale closure cannot linger.
+    self:_unregisterFileDialogButton()
     if force then
         self:onExit()
     elseif self:isRunning() then
@@ -981,7 +993,8 @@ function LocalSend:showRecentTransfers()
 end
 
 -- Send file flow functions (delegated to localsend_sender module)
-function LocalSend:showFileSendFlow()
+-- @param preset_file string|nil Optional file path to send directly (skips picker)
+function LocalSend:showFileSendFlow(preset_file)
     if lssender then
         -- Open firewall for scanning (needs UDP 53317 for multicast discovery)
         -- Note: Firewall is opened temporarily; we don't close it after since:
@@ -990,7 +1003,7 @@ function LocalSend:showFileSendFlow()
         -- 3. If receiver is also running, ports are already open
         -- 4. Ports are closed on KOReader exit anyway
         self:openFirewall()
-        lssender.showFileSendFlow(self)
+        lssender.showFileSendFlow(self, preset_file)
     end
 end
 
@@ -1501,7 +1514,7 @@ function LocalSend:_buildMainMenu()
             callback = function()
                 self:showFileSendFlow()
             end,
-            help_text = _("Send a file to another LocalSend device on the network."),
+            help_text = _("Send a file or folder to another LocalSend device on the network."),
         })
 
         -- Send current book (only in reader view)
@@ -1727,6 +1740,69 @@ function LocalSend:onDispatcherRegisterActions()
         reader = true,
         separator = true,
     })
+end
+
+-- =========================================================================
+-- File Context Menu (long-press file dialog)
+-- =========================================================================
+
+-- Stable row_id for FileManager.addFileDialogButtons / removeFileDialogButtons.
+local FILE_DIALOG_ROW_ID = "localsend_send"
+
+local function fileDialogButtonTargets()
+    local FileManager = require("apps/filemanager/filemanager")
+    return FileManager,
+        {
+            FileManager,
+            require("apps/filemanager/filemanagerhistory"),
+            require("apps/filemanager/filemanagercollection"),
+            require("apps/filemanager/filemanagerfilesearcher"),
+        }
+end
+
+-- Register a "Send with LocalSend" button into file long-press dialogs.
+-- CoverBrowser pattern: store buttons on the class tables for FileManager,
+-- History, Collections, and FileSearcher. remove-then-add refreshes the
+-- callback closure whenever init() recreates the plugin widget.
+function LocalSend:_registerFileDialogButton()
+    local FileManager, targets = fileDialogButtonTargets()
+
+    -- Files and folders are both sendable (CLI walks folders with
+    -- --preserve-structure). Ignore is_file: History/Collections/FileSearcher
+    -- always pass true anyway, and FileManager folders should remain eligible.
+    local function row_func(file, _is_file, _book_props)
+        return {
+            {
+                text = _("Send with LocalSend"),
+                enabled_func = function()
+                    return ServerState ~= nil and not ServerState.send_in_progress
+                end,
+                callback = function()
+                    -- Close the file_dialog (topmost visible widget) before
+                    -- launching the send flow, so the device picker isn't
+                    -- stacked on top of it.
+                    local top_widget = UIManager:getTopmostVisibleWidget()
+                    if top_widget then
+                        UIManager:close(top_widget)
+                    end
+                    self:showFileSendFlow(file)
+                end,
+            },
+        }
+    end
+
+    for _, widget in ipairs(targets) do
+        FileManager.removeFileDialogButtons(widget, FILE_DIALOG_ROW_ID)
+        FileManager.addFileDialogButtons(widget, FILE_DIALOG_ROW_ID, row_func)
+    end
+end
+
+-- Remove the file dialog button from all registered surfaces.
+function LocalSend:_unregisterFileDialogButton()
+    local FileManager, targets = fileDialogButtonTargets()
+    for _, widget in ipairs(targets) do
+        FileManager.removeFileDialogButtons(widget, FILE_DIALOG_ROW_ID)
+    end
 end
 
 -- Expose ServerState for testing purposes

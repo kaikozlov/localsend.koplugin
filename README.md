@@ -33,7 +33,9 @@ A KOReader plugin that enables sending and receiving files between devices using
 1. Go to **Menu → Network → LocalSend**
 2. Tap **Send file...** or **Send current book**
 3. Select a target device from the discovered list
-4. Choose a file to send (if using "Send file...")
+4. Choose a file or folder to send (if using "Send file...")
+
+Or long-press a file or folder in File Manager (also History, Collections, or File Search) and tap **Send with LocalSend**, then choose a target device.
 
 ### Settings
 

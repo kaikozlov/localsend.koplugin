@@ -237,6 +237,44 @@ describe("localsend_sender", function()
             assert.is_false(scan_called)
             assert.equals(0, #helper.state.os_execute_calls)
         end)
+
+        it("PathChooser allows selecting files and directories", function()
+            local discovery = require("localsend_discovery")
+            local orig_scan = discovery.scanDevices
+            local orig_selector = discovery.showDeviceSelector
+
+            discovery.scanDevices = function(callback, _options)
+                callback({
+                    {
+                        type = "lan",
+                        ip = "192.168.1.50",
+                        alias = "Phone",
+                        protocol = "https",
+                    },
+                })
+            end
+            discovery.showDeviceSelector = function(devices, onSelect, _onRetry)
+                onSelect(devices[1])
+            end
+
+            local ok, err = pcall(function()
+                sender.showFileSendFlow({
+                    getPickerStartPath = function(_, path)
+                        return path
+                    end,
+                    save_dir = "/tmp",
+                })
+
+                local chooser = helper.find_dialog("PathChooser")
+                assert.is_not_nil(chooser)
+                assert.is_true(chooser.select_file)
+                assert.is_true(chooser.select_directory)
+            end)
+
+            discovery.scanDevices = orig_scan
+            discovery.showDeviceSelector = orig_selector
+            assert.is_true(ok, err)
+        end)
     end)
 
     describe("error categorization", function()

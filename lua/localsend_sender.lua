@@ -314,7 +314,7 @@ function M.sendFile(device, filepath, pin, callback, options)
     deps.UIManager:scheduleIn(constants.SEND_POLL_INTERVAL, checkSendComplete)
 end
 
--- Show file picker for sending
+-- Show picker for sending a file or folder
 -- @param device table Target device
 -- @param start_path string Optional start path for picker
 -- @param callback function Called with success boolean and message string
@@ -331,9 +331,11 @@ local function showFilePicker(device, start_path, callback, options)
     local picker = deps.PathChooser:new({
         path = start_path,
         select_file = true,
-        select_directory = false,
+        -- CLI/protocol walk directories (preserve-structure by default); keep the
+        -- picker aligned with the long-press "Send with LocalSend" button.
+        select_directory = true,
         onConfirm = function(filepath)
-            -- Send the file
+            -- Send the selected file or folder
             M.sendFile(device, filepath, nil, callback, options)
         end,
         close_callback = function()
