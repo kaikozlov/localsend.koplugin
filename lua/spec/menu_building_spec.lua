@@ -273,6 +273,7 @@ describe("Menu Building", function()
                         found_toggle = true
                     elseif text:match("Recent transfers") then
                         found_transfers = true
+                        assert.is_true(item.keep_menu_open, "Recent transfers should keep menu open")
                     elseif text:match("Save directory") then
                         found_save_dir = true
                     end
@@ -284,6 +285,7 @@ describe("Menu Building", function()
                         found_updates = true
                     elseif item.text == "About LocalSend" then
                         found_about = true
+                        assert.is_true(item.keep_menu_open, "About should keep menu open")
                     end
                 end
             end

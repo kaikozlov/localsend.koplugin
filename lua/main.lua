@@ -1361,6 +1361,7 @@ function LocalSend:_buildMainMenu()
         enabled_func = function()
             return self._cached_transfer_count > 0
         end,
+        keep_menu_open = true,
         callback = function()
             self:showRecentTransfers()
         end,
@@ -1542,6 +1543,7 @@ function LocalSend:_buildMainMenu()
     -- About
     table.insert(menu, {
         text = _("About LocalSend"),
+        keep_menu_open = true,
         callback = function()
             self:showAbout()
         end,
