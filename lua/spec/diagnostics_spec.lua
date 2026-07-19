@@ -1021,11 +1021,21 @@ describe("LocalSend diagnostics", function()
             assert.truthy(report.server.self_test.detail:match("connection error"))
             assert.equals("healthy", diagnostics.classifyReport(instance, report).id)
 
+            -- The LAN address probes use the same curl, so they must not report a
+            -- misleading "failed (connection error)" when the self-test passed via
+            -- fallback; the addresses are recorded without claiming a probe result.
+            assert.is_not_nil(report.server.self_test.lan_probes)
+            assert.is_true(#report.server.self_test.lan_probes > 0)
+            assert.truthy(report.server.self_test.lan_probes[1].detail:match("not probed"))
+            assert.is_nil(report.server.self_test.lan_probes[1].detail:match("connection error"))
+
             -- The report should describe the fallback accurately, not claim the
             -- API responded.
             local text = diagnostics.getReportText(instance, report)
             assert.truthy(text:match("Real receiver starts and is listening on its port"))
             assert.is_nil(text:match("local API responds"))
+            assert.truthy(text:match("LAN address probe 192%.168%.1%.100: not probed"))
+            assert.is_nil(text:match("LAN address probe.-failed"))
         end)
 
         it("does not treat a failed API probe as healthy without a TCP listener", function()

@@ -887,21 +887,31 @@ function M.collectAsync(instance, callback)
                 local network_info = safeCall(function()
                     return deps.Device and deps.Device.retrieveNetworkInfo and deps.Device:retrieveNetworkInfo() or nil
                 end, nil)
-                local detail, process, listeners
+                local detail, process, listeners, lan_probes
                 if localAPIProbeSucceeded(probe) then
                     detail = probe
                     process = receiverProcessStatus()
                     listeners = listenerStatus(instance)
+                    lan_probes = probeLANAPIs(instance, network_info)
                 else
                     detail = fallback.detail .. "; API probe: " .. tostring(probe)
                     process = fallback.process
                     listeners = fallback.listeners
+                    -- The local curl cannot reach the receiver's HTTPS API on this
+                    -- device (the same reason this self-test used the process/listener
+                    -- fallback), so probing the LAN IP would just reproduce that
+                    -- failure. Record the addresses without claiming a probe result so
+                    -- the report does not contradict the "ready" conclusion.
+                    lan_probes = {}
+                    for _, ip in ipairs(extractIPv4s(network_info)) do
+                        table.insert(lan_probes, { ip = ip, detail = "not probed (local API probe unavailable on this device)" })
+                    end
                 end
                 local server_probe = {
                     ok = true,
                     detail = detail,
                     log_path = constants.SERVER_OUTPUT_FILE,
-                    lan_probes = probeLANAPIs(instance, network_info),
+                    lan_probes = lan_probes,
                     process = process,
                     listeners = listeners,
                     api_probe = probe,
