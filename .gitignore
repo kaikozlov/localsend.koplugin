@@ -35,7 +35,11 @@ localsend-armhf
 .lua_env/
 
 # i18n test fixtures: the localsend_i18n spec writes these throwaway fake-language
-# .po files into lua/locale/ at setup and removes them at teardown. Listed here so
-# a crashed test run can never leave them in the working tree.
+# catalogues beside the loader at setup and removes them at teardown. Listed here
+# so a crashed test run can never leave them in the working tree.
 lua/locale/zz.po
 lua/locale/z3.po
+lua/locale/zc.po
+lua/locale/z0.po
+lua/locale/zi.po
+lua/localsend_locale_zx.lua

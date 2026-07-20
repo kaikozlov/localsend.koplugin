@@ -227,6 +227,44 @@ function M.copyFileAtomically(src, dst)
     return deps.util.pathExists(dst)
 end
 
+-- Replace a directory through sibling staging and backup directories. This
+-- keeps the previous catalogue available if copying or renaming the new one
+-- fails and removes translations deleted by a newer release.
+function M.copyDirectoryAtomically(src, dst)
+    local tmp = dst .. ".localsend-update-tmp"
+    local backup = dst .. ".localsend-update-backup"
+    local function removeTree(path)
+        return commandSucceeded(os.execute(deps.util.shell_escape({ "rm", "-rf", path })))
+    end
+
+    if not removeTree(tmp) or not removeTree(backup) then
+        return false
+    end
+    if not commandSucceeded(os.execute(deps.util.shell_escape({ "cp", "-R", src, tmp }))) then
+        removeTree(tmp)
+        return false
+    end
+
+    local had_destination = deps.util.pathExists(dst)
+    if had_destination and not commandSucceeded(os.execute(deps.util.shell_escape({ "mv", dst, backup }))) then
+        removeTree(tmp)
+        return false
+    end
+
+    if not commandSucceeded(os.execute(deps.util.shell_escape({ "mv", tmp, dst }))) or not deps.util.pathExists(dst) then
+        removeTree(tmp)
+        if had_destination then
+            os.execute(deps.util.shell_escape({ "mv", backup, dst }))
+        end
+        return false
+    end
+
+    if had_destination then
+        removeTree(backup)
+    end
+    return true
+end
+
 -- Detect device architecture for selecting the right binary
 -- @return string|nil Architecture name: "arm64", "armv7", "arm-legacy", or nil
 function M.getDeviceArch()
@@ -420,6 +458,20 @@ function M.doPerformUpdate(instance, download_url, asset_name, new_version, plug
         if not process_ok then
             deps.logger.err("[LocalSend] Error processing lua files:", process_err)
         end
+    end
+
+    -- Replace the complete translation catalogue so OTA updates install new
+    -- languages and remove catalogues no longer shipped by the release.
+    local locale_src = extracted_plugin .. "/locale"
+    local locale_dst = plugin_path .. "/locale"
+    if deps.util.pathExists(locale_src) then
+        if not M.copyDirectoryAtomically(locale_src, locale_dst) then
+            copy_failed = true
+            deps.logger.err("[LocalSend] Failed to copy translation catalogues")
+        end
+    else
+        copy_failed = true
+        deps.logger.err("[LocalSend] Translation catalogues missing from update package")
     end
 
     -- Make binary executable

@@ -2,9 +2,10 @@ require("busted.runner")()
 
 -- Tests for localsend_i18n.lua — the plugin-local translation loader.
 --
--- Hermetic: writes throwaway fake-language .po files ("zz" = 2-form,
--- "z3" = Polish-style 3-form) into the loader's own locale dir at setup and
--- removes them at teardown, so no real translation file is ever touched.
+-- Hermetic: writes throwaway fake-language .po files into the loader's own
+-- locale dir at setup and removes them at teardown, so no real translation file
+-- is ever touched. The fixtures cover two-form, zero-form, nested three-form,
+-- and malformed plural rules.
 -- Language is selected via G_reader_settings:saveSetting("language", …) and
 -- restored in teardown so nothing leaks into other specs.
 
@@ -16,14 +17,13 @@ describe("localsend_i18n", function()
     -- The loader resolves its locale dir from its own source path via
     -- debug.getinfo; replicate that here so the fixtures land exactly where the
     -- loader will read them, regardless of cwd or how the module was required.
-    local function loader_locale_dir()
+    local function loader_dir()
         local src = debug.getinfo(I18n.translate, "S").source:gsub("^@", "")
-        local dir = src:match("^(.*)/[^/]*$") or src:match("^(.*)\\[^\\]*$") or "."
-        return dir .. "/locale"
+        return src:match("^(.*)/[^/]*$") or src:match("^(.*)\\[^\\]*$") or "."
     end
 
-    local function write_fixture(name, content)
-        local path = loader_locale_dir() .. "/" .. name
+    local function write_fixture(name, content, root_level)
+        local path = loader_dir() .. (root_level and "/" or "/locale/") .. name
         local f = assert(io.open(path, "w"))
         f:write(content)
         f:close()
@@ -40,6 +40,13 @@ msgstr ""
 
 msgid "i18n:sentinel:singular"
 msgstr "zz-translated"
+
+#, fuzzy
+msgid "i18n:sentinel:fuzzy"
+msgstr "zz-fuzzy"
+
+msgid "i18n:sentinel:escaped"
+msgstr "line one\nline two \\ path \"quote\""
 
 msgid "%1 item"
 msgid_plural "%1 items"
@@ -62,11 +69,57 @@ msgstr[1] "z3-few"
 msgstr[2] "z3-many"
 ]]
 
+    -- "zc": Czech's nested ternary form, as used by real KOReader plugins.
+    local ZC_PO = [[
+msgid ""
+msgstr ""
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : (n>=2 && n<=4 ? 1 : 2));\n"
+
+msgid "%1 nested item"
+msgid_plural "%1 nested items"
+msgstr[0] "zc-one"
+msgstr[1] "zc-few"
+msgstr[2] "zc-many"
+]]
+
+    -- "z0": languages such as Chinese always select plural form zero.
+    local Z0_PO = [[
+msgid ""
+msgstr ""
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "%1 zero item"
+msgid_plural "%1 zero items"
+msgstr[0] "z0-only"
+]]
+
+    -- "zi": malformed or unsafe expressions must not execute or crash the UI.
+    local ZI_PO = [[
+msgid ""
+msgstr ""
+"Plural-Forms: nplurals=2; plural=(error(\"must not execute\"));\n"
+
+msgid "%1 invalid item"
+msgid_plural "%1 invalid items"
+msgstr[0] "zi-one"
+msgstr[1] "zi-many"
+]]
+
+    -- "zx": package compatibility copy used by pre-i18n OTA updaters.
+    local ZX_PO = [[
+msgid "i18n:sentinel:compatibility"
+msgstr "zx-compatible"
+]]
+
     setup(function()
         I18n = require("localsend_i18n")
         saved_lang = G_reader_settings:readSetting("language")
         table.insert(fixture_paths, write_fixture("zz.po", ZZ_PO))
         table.insert(fixture_paths, write_fixture("z3.po", Z3_PO))
+        table.insert(fixture_paths, write_fixture("zc.po", ZC_PO))
+        table.insert(fixture_paths, write_fixture("z0.po", Z0_PO))
+        table.insert(fixture_paths, write_fixture("zi.po", ZI_PO))
+        table.insert(fixture_paths, write_fixture("localsend_locale_zx.lua", ZX_PO, true))
     end)
 
     teardown(function()
@@ -99,9 +152,24 @@ msgstr[2] "z3-many"
             assert.are.equal("i18n:sentinel:unknown", I18n.translate("i18n:sentinel:unknown"))
         end)
 
+        it("ignores fuzzy catalogue entries", function()
+            G_reader_settings:saveSetting("language", "zz")
+            assert.are.equal("i18n:sentinel:fuzzy", I18n.translate("i18n:sentinel:fuzzy"))
+        end)
+
+        it("decodes standard PO string escapes", function()
+            G_reader_settings:saveSetting("language", "zz")
+            assert.are.equal('line one\nline two \\ path "quote"', I18n.translate("i18n:sentinel:escaped"))
+        end)
+
         it("falls back from a region code to the language prefix (zz_ZZ -> zz)", function()
             G_reader_settings:saveSetting("language", "zz_ZZ")
             assert.are.equal("zz-translated", I18n.translate("i18n:sentinel:singular"))
+        end)
+
+        it("loads the root compatibility catalogue used by legacy OTA updates", function()
+            G_reader_settings:saveSetting("language", "zx")
+            assert.are.equal("zx-compatible", I18n.translate("i18n:sentinel:compatibility"))
         end)
 
         it("skips loading entirely for English and returns the msgid", function()
@@ -142,6 +210,25 @@ msgstr[2] "z3-many"
             assert.are.equal("z3-many", I18n.ngettext("%1 item", "%1 items", 12))
             assert.are.equal("z3-few", I18n.ngettext("%1 item", "%1 items", 22))
             assert.are.equal("z3-many", I18n.ngettext("%1 item", "%1 items", 100))
+        end)
+
+        it("honours nested ternary plural forms", function()
+            G_reader_settings:saveSetting("language", "zc")
+            assert.are.equal("zc-one", I18n.ngettext("%1 nested item", "%1 nested items", 1))
+            assert.are.equal("zc-few", I18n.ngettext("%1 nested item", "%1 nested items", 3))
+            assert.are.equal("zc-many", I18n.ngettext("%1 nested item", "%1 nested items", 5))
+        end)
+
+        it("honours a numeric zero plural rule", function()
+            G_reader_settings:saveSetting("language", "z0")
+            assert.are.equal("z0-only", I18n.ngettext("%1 zero item", "%1 zero items", 1))
+            assert.are.equal("z0-only", I18n.ngettext("%1 zero item", "%1 zero items", 9))
+        end)
+
+        it("rejects unsafe plural expressions and uses the default rule", function()
+            G_reader_settings:saveSetting("language", "zi")
+            assert.are.equal("zi-one", I18n.ngettext("%1 invalid item", "%1 invalid items", 1))
+            assert.are.equal("zi-many", I18n.ngettext("%1 invalid item", "%1 invalid items", 5))
         end)
 
         it("falls back to the core singular/plural for untranslated plurals", function()

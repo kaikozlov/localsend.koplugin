@@ -45,108 +45,252 @@ local _dir = (debug.getinfo(1, "S").source:match("^@(.+/)") or "./")
 -- Supports msgid / msgid_plural / msgstr[N], multiline continuations, escape
 -- sequences, and the Plural-Forms header.
 -- ---------------------------------------------------------------------------
--- Convert a C-style ternary "c ? a : b" to the Lua idiom
--- "(c and (a) or (b))", recursing into nested ternaries. Plural-form branches
--- are always integer literals in real catalogs, so the and/or idiom is safe
--- (0 is truthy in Lua, unlike most languages).
-local function ternaryToLua(s)
-    local function findQuestion(str)
-        local depth = 0
-        for i = 1, #str do
-            local c = str:sub(i, i)
-            if c == "(" then
-                depth = depth + 1
-            elseif c == ")" then
-                depth = depth - 1
-            elseif c == "?" and depth == 0 then
-                return i
-            end
-        end
-        return nil
-    end
-
-    local q = findQuestion(s)
-    if not q then
-        return s
-    end
-
-    local depth = 0
-    local colon = nil
-    for i = q + 1, #s do
-        local c = s:sub(i, i)
-        if c == "(" then
-            depth = depth + 1
-        elseif c == ")" then
-            depth = depth - 1
-        elseif c == ":" and depth == 0 then
-            colon = i
-            break
-        end
-    end
-
-    if not colon then
-        return s
-    end
-
-    local cond = s:sub(1, q - 1)
-    local truthy = s:sub(q + 1, colon - 1)
-    local falsy = s:sub(colon + 1)
-    return "(" .. ternaryToLua(cond) .. " and (" .. ternaryToLua(truthy) .. ") or (" .. ternaryToLua(falsy) .. "))"
-end
-
--- Compile a gettext Plural-Forms header value to a function(n) -> integer
--- plural index. Accepts the full header value, e.g.
---   "nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);"
--- and handles both predicate forms ("plural=(n != 1)") and full C ternary
--- forms (Polish/Russian/etc.). Returns nil if it cannot be compiled, in which
--- case ngettext() falls back to the n==1 ? singular : plural default (correct
--- for English/Portuguese-style 2-form languages).
+-- Parse gettext's small C-like plural-expression language instead of passing
+-- catalogue content to loadstring(). Besides avoiding arbitrary Lua execution,
+-- this handles numeric rules (plural=0) and nested ternaries consistently.
 local function compilePluralForm(plural_forms)
     if type(plural_forms) ~= "string" then
         return nil
     end
-    -- Capture just the "plural=(...)" clause. %b() matches balanced parens, so
-    -- ternary bodies with inner grouping come out whole.
-    local expr = plural_forms:match("plural=(%b())")
-    if not expr then
-        -- Some catalogs omit the wrapping parens: "plural=n != 1;"
-        expr = plural_forms:match("plural=([^;]+)")
-    end
-    if not expr or expr == "" then
-        return nil
-    end
-    expr = expr:gsub("^%(", ""):gsub("%)$", "") -- strip wrapping parens
 
-    -- Normalise C operators to Lua.
-    expr = expr:gsub("!=", "~=")
-    expr = expr:gsub("&&", " and ")
-    expr = expr:gsub("%|%|", " or ")
-    expr = expr:gsub("!([^=])", "not %1") -- bare logical not (after != handled)
-
-    local body
-    if expr:find("?", 1, true) then
-        body = "return " .. ternaryToLua(expr)
-    else
-        -- Pure predicate (e.g. "n ~= 1"): coerce the boolean to a 0/1 index.
-        body = "return (" .. expr .. ") and 1 or 0"
-    end
-
-    local loader = loadstring or load
-    local fn = loader("return function(n) " .. body .. " end")
-    if not fn then
+    local nplurals = tonumber(plural_forms:match("nplurals%s*=%s*(%d+)%s*;"))
+    local expr = plural_forms:match("plural%s*=%s*(.-)%s*;")
+    if not nplurals or nplurals < 1 or not expr or expr == "" then
         return nil
     end
 
-    local ok, plural_fn = pcall(fn)
-    if not ok or type(plural_fn) ~= "function" then
+    local tokens = {}
+    local i = 1
+    while i <= #expr do
+        local c = expr:sub(i, i)
+        if c:match("%s") then
+            i = i + 1
+        elseif c:match("%d") then
+            local value = expr:match("^%d+", i)
+            table.insert(tokens, { kind = "number", value = tonumber(value) })
+            i = i + #value
+        elseif c == "n" then
+            table.insert(tokens, { kind = "name", value = c })
+            i = i + 1
+        else
+            local two = expr:sub(i, i + 1)
+            if two == "||" or two == "&&" or two == "==" or two == "!=" or two == "<=" or two == ">=" then
+                table.insert(tokens, { kind = "operator", value = two })
+                i = i + 2
+            elseif c:match("[?:()!<>+*/%%-]") then
+                table.insert(tokens, { kind = "operator", value = c })
+                i = i + 1
+            else
+                return nil
+            end
+        end
+        if #tokens > 256 then
+            return nil
+        end
+    end
+    table.insert(tokens, { kind = "eof", value = "" })
+
+    local pos = 1
+    local parseConditional
+    local function current(value)
+        local token = tokens[pos]
+        return token and (value == nil or token.value == value) and token or nil
+    end
+    local function accept(value)
+        local token = current(value)
+        if token then
+            pos = pos + 1
+        end
+        return token
+    end
+    local function truthy(value)
+        if type(value) == "number" then
+            return value ~= 0
+        end
+        return value == true
+    end
+    local function boolNumber(value)
+        return value and 1 or 0
+    end
+    local function binary(operator, left, right)
+        if operator == "||" then
+            return function(n)
+                if truthy(left(n)) then
+                    return 1
+                end
+                return boolNumber(truthy(right(n)))
+            end
+        elseif operator == "&&" then
+            return function(n)
+                if not truthy(left(n)) then
+                    return 0
+                end
+                return boolNumber(truthy(right(n)))
+            end
+        elseif operator == "==" then
+            return function(n)
+                return boolNumber(left(n) == right(n))
+            end
+        elseif operator == "!=" then
+            return function(n)
+                return boolNumber(left(n) ~= right(n))
+            end
+        elseif operator == "<" then
+            return function(n)
+                return boolNumber(left(n) < right(n))
+            end
+        elseif operator == "<=" then
+            return function(n)
+                return boolNumber(left(n) <= right(n))
+            end
+        elseif operator == ">" then
+            return function(n)
+                return boolNumber(left(n) > right(n))
+            end
+        elseif operator == ">=" then
+            return function(n)
+                return boolNumber(left(n) >= right(n))
+            end
+        elseif operator == "+" then
+            return function(n)
+                return left(n) + right(n)
+            end
+        elseif operator == "-" then
+            return function(n)
+                return left(n) - right(n)
+            end
+        elseif operator == "*" then
+            return function(n)
+                return left(n) * right(n)
+            end
+        elseif operator == "/" then
+            return function(n)
+                local divisor = right(n)
+                if divisor == 0 then
+                    return 0 / 0
+                end
+                local quotient = left(n) / divisor
+                return quotient < 0 and math.ceil(quotient) or math.floor(quotient)
+            end
+        elseif operator == "%" then
+            return function(n)
+                return left(n) % right(n)
+            end
+        end
+    end
+
+    local function parsePrimary()
+        local token = current()
+        if token.kind == "number" then
+            pos = pos + 1
+            local value = token.value
+            return function()
+                return value
+            end
+        elseif token.kind == "name" then
+            pos = pos + 1
+            return function(n)
+                return n
+            end
+        elseif accept("(") then
+            local nested = parseConditional()
+            if not nested or not accept(")") then
+                return nil
+            end
+            return nested
+        end
         return nil
     end
-    -- Guard: a malformed expression that compiles but returns a non-number
-    -- would index the msgstr[] table with the wrong key type.
-    if type(plural_fn(1)) ~= "number" then
+
+    local function parseUnary()
+        if accept("!") then
+            local operand = parseUnary()
+            return operand and function(n)
+                return boolNumber(not truthy(operand(n)))
+            end or nil
+        elseif accept("+") then
+            return parseUnary()
+        elseif accept("-") then
+            local operand = parseUnary()
+            return operand and function(n)
+                return -operand(n)
+            end or nil
+        end
+        return parsePrimary()
+    end
+
+    local function parseBinary(nextParser, operators)
+        local left = nextParser()
+        if not left then
+            return nil
+        end
+        while operators[current().value] do
+            local operator = current().value
+            pos = pos + 1
+            local right = nextParser()
+            if not right then
+                return nil
+            end
+            left = binary(operator, left, right)
+        end
+        return left
+    end
+
+    local function parseMultiplicative()
+        return parseBinary(parseUnary, { ["*"] = true, ["/"] = true, ["%"] = true })
+    end
+    local function parseAdditive()
+        return parseBinary(parseMultiplicative, { ["+"] = true, ["-"] = true })
+    end
+    local function parseRelational()
+        return parseBinary(parseAdditive, { ["<"] = true, ["<="] = true, [">"] = true, [">="] = true })
+    end
+    local function parseEquality()
+        return parseBinary(parseRelational, { ["=="] = true, ["!="] = true })
+    end
+    local function parseAnd()
+        return parseBinary(parseEquality, { ["&&"] = true })
+    end
+    local function parseOr()
+        return parseBinary(parseAnd, { ["||"] = true })
+    end
+
+    parseConditional = function()
+        local condition = parseOr()
+        if not condition then
+            return nil
+        end
+        if not accept("?") then
+            return condition
+        end
+        local when_true = parseConditional()
+        if not when_true or not accept(":") then
+            return nil
+        end
+        local when_false = parseConditional()
+        if not when_false then
+            return nil
+        end
+        return function(n)
+            return truthy(condition(n)) and when_true(n) or when_false(n)
+        end
+    end
+
+    local evaluator = parseConditional()
+    if not evaluator or current().kind ~= "eof" then
         return nil
     end
-    return plural_fn
+
+    return function(n)
+        if type(n) ~= "number" then
+            return nil
+        end
+        local ok, result = pcall(evaluator, n)
+        if not ok or type(result) ~= "number" or result ~= result or result < 0 or result >= nplurals then
+            return nil
+        end
+        return math.floor(result)
+    end
 end
 
 local function parsePO(path)
@@ -157,12 +301,13 @@ local function parsePO(path)
 
     local map = {}
     local pluralizer = nil
-    local entry = { msgid = nil, msgid_plural = nil, msgstrs = {} }
+    local entry = { msgid = nil, msgid_plural = nil, msgstrs = {}, fuzzy = false }
     local current_field = nil
+    local pending_fuzzy = false
 
     local function flush()
         if not entry.msgid then
-            entry = { msgid = nil, msgid_plural = nil, msgstrs = {} }
+            entry = { msgid = nil, msgid_plural = nil, msgstrs = {}, fuzzy = false }
             current_field = nil
             return
         end
@@ -178,7 +323,7 @@ local function parsePO(path)
                     break
                 end
             end
-        else
+        elseif not entry.fuzzy then
             if entry.msgid_plural then
                 local trans = {}
                 for idx, str in pairs(entry.msgstrs) do
@@ -197,22 +342,71 @@ local function parsePO(path)
             end
         end
 
-        entry = { msgid = nil, msgid_plural = nil, msgstrs = {} }
+        entry = { msgid = nil, msgid_plural = nil, msgstrs = {}, fuzzy = false }
         current_field = nil
     end
 
     local function unescape(s)
-        return s:gsub("\\n", "\n"):gsub("\\t", "\t"):gsub('\\"', '"'):gsub("\\\\", "\\")
+        local escapes = {
+            a = "\a",
+            b = "\b",
+            f = "\f",
+            n = "\n",
+            r = "\r",
+            t = "\t",
+            v = "\v",
+            ["\\"] = "\\",
+            ['"'] = '"',
+        }
+        local result = {}
+        local pos = 1
+        while pos <= #s do
+            local slash = s:find("\\", pos, true)
+            if not slash then
+                table.insert(result, s:sub(pos))
+                break
+            end
+            table.insert(result, s:sub(pos, slash - 1))
+            local escaped = s:sub(slash + 1, slash + 1)
+            if escaped == "" then
+                table.insert(result, "\\")
+                break
+            elseif escaped:match("[0-7]") then
+                local digits = s:match("^[0-7][0-7]?[0-7]?", slash + 1)
+                table.insert(result, string.char(tonumber(digits, 8)))
+                pos = slash + 1 + #digits
+            elseif escaped == "x" then
+                local digits = s:match("^[0-9a-fA-F]+", slash + 2)
+                if digits then
+                    table.insert(result, string.char(tonumber(digits, 16) % 256))
+                    pos = slash + 2 + #digits
+                else
+                    table.insert(result, "x")
+                    pos = slash + 2
+                end
+            else
+                table.insert(result, escapes[escaped] or escaped)
+                pos = slash + 2
+            end
+        end
+        return table.concat(result)
     end
 
     for line in f:lines() do
         local text = line:match("^%s*(.-)%s*$")
         if text == "" then
             flush()
-        -- Comment lines ("^#") match none of the branches below and are skipped.
+            pending_fuzzy = false
+        elseif text:match("^#,") then
+            if text:match("[, ]fuzzy[, ]") or text:match("[, ]fuzzy$") then
+                pending_fuzzy = true
+            end
+        -- Other comment lines match none of the branches below and are skipped.
         elseif text:match('^msgid%s+"') then
             flush()
             entry.msgid = unescape(text:match('^msgid%s+"(.*)"') or "")
+            entry.fuzzy = pending_fuzzy
+            pending_fuzzy = false
             current_field = "msgid"
         elseif text:match('^msgid_plural%s+"') then
             entry.msgid_plural = unescape(text:match('^msgid_plural%s+"(.*)"') or "")
@@ -278,15 +472,26 @@ local function loadTranslations()
     end
 
     local function try(name)
-        local path = _dir .. "locale/" .. name .. ".po"
-        local entries, pluralizer = parsePO(path)
-        if entries and next(entries) then
-            local n = 0
-            for _ in pairs(entries) do
-                n = n + 1
+        if not name:match("^[%w_@.%-]+$") then
+            return nil
+        end
+        local paths = {
+            _dir .. "locale/" .. name .. ".po",
+            -- Releases also stage each .po as a root-level .lua-named data file.
+            -- LocalSend versions predating i18n only copied root *.lua files
+            -- during OTA updates, so this keeps direct upgrades translatable.
+            _dir .. "localsend_locale_" .. name .. ".lua",
+        }
+        for _, path in ipairs(paths) do
+            local entries, pluralizer = parsePO(path)
+            if entries and next(entries) then
+                local n = 0
+                for _ in pairs(entries) do
+                    n = n + 1
+                end
+                logger.info("localsend i18n: loaded " .. path .. " — " .. n .. " strings")
+                return { entries = entries, plural = pluralizer }
             end
-            logger.info("localsend i18n: loaded " .. path .. " — " .. n .. " strings")
-            return { entries = entries, plural = pluralizer }
         end
     end
 
@@ -340,8 +545,9 @@ local function ngettext(msgid, msgid_plural, n)
         if type(entry) == "table" then
             local idx
             if t.plural then
-                idx = t.plural(n) or 0
-            else
+                idx = t.plural(n)
+            end
+            if idx == nil then
                 idx = (n == 1) and 0 or 1
             end
             local translated = entry[idx]

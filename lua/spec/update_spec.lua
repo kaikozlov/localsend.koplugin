@@ -194,6 +194,9 @@ describe("Self-Update", function()
             if path:match("/tmp/koreader%-test%-data/plugins/localsend.koplugin/.*%.lua$") then
                 return true
             end
+            if path == "/tmp/koreader-test-data/plugins/localsend.koplugin/locale" then
+                return true
+            end
             if path:match("/tmp/koreader%-test%-data/plugins/localsend.koplugin/localsend$") then
                 return true
             end
@@ -544,9 +547,10 @@ describe("Self-Update", function()
     end)
 
     describe("atomic installation", function()
-        it("provides a checked atomic replacement helper", function()
+        it("provides checked atomic replacement helpers", function()
             local update = require("localsend_update")
             assert.is_function(update.copyFileAtomically)
+            assert.is_function(update.copyDirectoryAtomically)
         end)
     end)
 
@@ -603,6 +607,7 @@ describe("Self-Update", function()
             instance:doPerformUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
             assert.is_truthy(helper.find_execute_call("unzip"), "Should run unzip")
             assert.is_truthy(helper.find_execute_call("^'cp'"), "Should copy files")
+            assert.is_truthy(helper.find_execute_call("'cp' '%-R'.*/locale"), "Should copy translation catalogues")
             assert.is_truthy(helper.find_execute_call("'chmod' '%+x'"), "Should make binary executable")
         end)
 
@@ -613,6 +618,22 @@ describe("Self-Update", function()
             instance:doPerformUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
 
             assert.is_truthy(helper.find_notification("successfully"))
+        end)
+
+        it("rejects an update package without translation catalogues", function()
+            setup_successful_download()
+            local successful_path_exists = package.loaded["util"].pathExists
+            package.loaded["util"].pathExists = function(path)
+                if path == "/tmp/koreader-test-data/cache/localsend/extract/localsend.koplugin/locale" then
+                    return false
+                end
+                return successful_path_exists(path)
+            end
+
+            local instance = helper.create_instance()
+            instance:doPerformUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
+
+            assert.is_truthy(helper.find_notification("partially failed"))
         end)
 
         it("handles extraction failure gracefully", function()
@@ -764,6 +785,9 @@ describe("Self-Update", function()
                     return true
                 end
                 if path == "/tmp/koreader-test-data/plugins/localsend.koplugin/_meta.lua" then
+                    return true
+                end
+                if path == "/tmp/koreader-test-data/plugins/localsend.koplugin/locale" then
                     return true
                 end
                 -- Additional lua file copy "fails"

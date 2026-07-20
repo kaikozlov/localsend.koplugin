@@ -70,11 +70,11 @@ When reporting a bug, include the generated support report. It snapshots LocalSe
 
 ### Translations
 
-The plugin ships its own translations under `locale/`, independent of KOReader's core language packs. The UI language follows KOReader's **Language** setting automatically. Any string without a translation falls back to English, and shared KOReader UI words that happen to appear here still use KOReader's own translation.
+The plugin ships its own translations from `lua/locale/`, independent of KOReader's core language packs. The UI language follows KOReader's **Language** setting automatically. Any string without a plugin translation falls back through KOReader's catalogue and then to English.
 
 **Adding a language** (no code changes required):
 
-1. Copy `locale/localsend.pot` to `locale/<lang>.po` (e.g. `locale/pt_PT.po`). Use the locale code matching KOReader's language list.
+1. Copy `lua/locale/localsend.pot` to `lua/locale/<lang>.po` (e.g. `lua/locale/pt_PT.po`). Use the locale code matching KOReader's language list.
 2. Fill in the `msgstr` values. Plural-aware strings use `msgid` / `msgid_plural` with `msgstr[0]`, `msgstr[1]`, … — include a `Plural-Forms:` header so the right form is picked per language.
 3. Commit the `.po` file. It is bundled into releases automatically.
 
