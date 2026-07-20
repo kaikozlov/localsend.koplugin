@@ -72,7 +72,7 @@ audit_archive() {
     fi
     chmod +x "$release_binary"
 
-    version_output="$(qemu-arm -r 2.6.31-rt11-lab126 "$release_binary" --version)"
+    version_output="$(qemu-arm -r 2.6.22.19-lab126 "$release_binary" --version)"
     if [[ "$version_output" != *"linux/$arch"* ]]; then
         echo "armcompat audit ($arch): unexpected release identity: $version_output" >&2
         exit 1
@@ -81,12 +81,13 @@ audit_archive() {
     printf 'legacy kernel transfer audit (%s)\n' "$arch" >"$case_dir/input.txt"
 
     "$fault_launcher" \
-        qemu-arm -r 2.6.31-rt11-lab126 -strace \
+        qemu-arm -r 2.6.22.19-lab126 -strace \
         "$release_binary" recv \
         --https=false --webrtc=false \
         --devname "AuditKindle-$arch" \
         --dir "$case_dir/received" \
         --config-dir "$case_dir/config" \
+        --on-transfer "printf callback-ok > '$case_dir/callback.txt'" \
         >"$case_dir/receiver.out" 2>"$trace" &
     server_pid=$!
 
@@ -122,6 +123,19 @@ audit_archive() {
         exit 1
     fi
 
+    for _ in $(seq 1 100); do
+        if [[ -f "$case_dir/callback.txt" ]]; then
+            break
+        fi
+        sleep 0.05
+    done
+    if [[ "$(cat "$case_dir/callback.txt" 2>/dev/null || true)" != "callback-ok" ]]; then
+        echo "armcompat audit ($arch): on-transfer callback did not run" >&2
+        tail -80 "$case_dir/receiver.out" >&2 || true
+        tail -80 "$trace" >&2 || true
+        exit 1
+    fi
+
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
     server_pid=""
@@ -134,14 +148,18 @@ audit_archive() {
         echo "armcompat audit ($arch): guest trace still calls epoll_pwait" >&2
         exit 1
     fi
-    if ! rg -q 'accept4\(.*errno=38' "$trace"; then
-        echo "armcompat audit ($arch): fault injection did not force accept4 ENOSYS" >&2
-        exit 1
-    fi
-    if ! rg -q 'accept\(' "$trace"; then
-        echo "armcompat audit ($arch): guest trace did not fall back to legacy accept" >&2
-        exit 1
-    fi
+    for modern_syscall in epoll_create1 eventfd2 accept4 pipe2 dup3; do
+        if ! rg -q "$modern_syscall\\(.*errno=38" "$trace"; then
+            echo "armcompat audit ($arch): fault injection did not force $modern_syscall ENOSYS" >&2
+            exit 1
+        fi
+    done
+    for legacy_syscall in epoll_create eventfd accept pipe dup2; do
+        if ! rg -q "$legacy_syscall\\(" "$trace"; then
+            echo "armcompat audit ($arch): guest trace did not call legacy $legacy_syscall" >&2
+            exit 1
+        fi
+    done
     if ! rg -q 'getrandom\(.*errno=38' "$trace"; then
         echo "armcompat audit ($arch): getrandom ENOSYS fault was not exercised" >&2
         exit 1

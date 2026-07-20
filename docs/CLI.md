@@ -19,8 +19,8 @@ just release -p
 ```
 
 `just release` applies the 32-bit ARM runtime compatibility overlay required
-by older Kindle Linux 2.6.31 kernels. The manual command below is suitable only
-for devices with a modern Linux kernel. See
+by older Kindle vendor Linux 2.6 kernels. The manual command below is suitable
+only for devices with a modern Linux kernel. See
 [Legacy Linux kernel compatibility](LEGACY_KERNEL_COMPATIBILITY.md) for the
 support boundary, known syscall risks, and release verification requirements.
 

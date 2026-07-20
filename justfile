@@ -158,9 +158,9 @@ _release *args='':
 
     if ! $package_only; then
         echo "Cross-compiling ARM binaries..."
-        # Amazon's Linux 2.6.31 Kindle kernels omit epoll_pwait and ARM
-        # accept4 (ENOSYS). Build 32-bit packages with a scoped GOROOT overlay
-        # that restores epoll_wait and Go's former accept fallback.
+        # Amazon's legacy Kindle kernels omit modern ARM epoll, eventfd,
+        # accept, pipe, and dup variants. Build 32-bit packages with a scoped
+        # GOROOT overlay that restores the corresponding legacy syscall paths.
         compat_overlay="$(go run ./tools/armcompat -output-dir "$build_dir/arm-runtime-compat")"
         CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=5 \
             go build -overlay="$compat_overlay" \

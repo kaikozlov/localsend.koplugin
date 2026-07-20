@@ -1,6 +1,6 @@
 // Command armcompat creates a Go build overlay for 32-bit ARM release
-// binaries. It replaces epoll_pwait with epoll_wait and restores Go's former
-// ARM fallback from accept4 to accept for older Kindle kernels.
+// binaries. It restores the legacy epoll, eventfd, accept, pipe, and dup
+// syscall paths required by older Kindle kernels.
 package main
 
 import (
@@ -15,19 +15,30 @@ import (
 )
 
 const (
-	currentRuntimeSourcePath = "src/internal/runtime/syscall/linux/syscall_linux.go"
-	pollSourcePath           = "src/internal/poll/sock_cloexec.go"
-	syscallSourcePath        = "src/syscall/syscall_linux.go"
-	patchedRuntimeSourceName = "runtime_syscall_linux.go.overlay"
-	patchedPollSourceName    = "sock_cloexec.go.overlay"
-	patchedSyscallSourceName = "syscall_linux.go.overlay"
-	patchedGuardSourceName   = "arm_only_guard.go.overlay"
-	guardVirtualSourceName   = "armcompat_overlay_guard.go"
-	overlayFileName          = "overlay.json"
+	currentRuntimeSourcePath   = "src/internal/runtime/syscall/linux/syscall_linux.go"
+	pollSourcePath             = "src/internal/poll/sock_cloexec.go"
+	syscallSourcePath          = "src/syscall/syscall_linux.go"
+	forkPipeSourcePath         = "src/syscall/forkpipe2.go"
+	execLinuxSourcePath        = "src/syscall/exec_linux.go"
+	patchedRuntimeSourceName   = "runtime_syscall_linux.go.overlay"
+	patchedPollSourceName      = "sock_cloexec.go.overlay"
+	patchedSyscallSourceName   = "syscall_linux.go.overlay"
+	patchedForkPipeSourceName  = "forkpipe2.go.overlay"
+	patchedExecLinuxSourceName = "exec_linux.go.overlay"
+	patchedGuardSourceName     = "arm_only_guard.go.overlay"
+	guardVirtualSourceName     = "armcompat_overlay_guard.go"
+	overlayFileName            = "overlay.json"
 
-	// __NR_epoll_wait for the 32-bit ARM EABI. This overlay is only passed to
-	// GOARCH=arm builds; syscall numbers differ on other architectures.
-	armEpollWaitSyscall = 252
+	// Legacy syscall and fcntl constants for the 32-bit ARM EABI. This overlay
+	// is only passed to GOARCH=arm builds; syscall numbers differ elsewhere.
+	armEpollCreateSyscall = 250
+	armEpollWaitSyscall   = 252
+	armEventfdSyscall     = 351
+	armENOSYS             = 38
+	armFSetFD             = 2
+	armFGetFL             = 3
+	armFSetFL             = 4
+	armFDCloexec          = 1
 )
 
 // The overlay contains ARM EABI syscall numbers and must never be reused by a
@@ -48,6 +59,74 @@ func findRuntimeSource(goroot string) (string, error) {
 	return requiredSource(goroot, currentRuntimeSourcePath)
 }
 
+const currentRuntimeEpollCreate = `func EpollCreate1(flags int32) (fd int32, errno uintptr) {
+	r1, _, e := Syscall6(SYS_EPOLL_CREATE1, uintptr(flags), 0, 0, 0, 0, 0)
+	return int32(r1), e
+}`
+
+const legacyRuntimeEpollCreate = `func EpollCreate1(flags int32) (fd int32, errno uintptr) {
+	r1, _, e := Syscall6(SYS_EPOLL_CREATE1, uintptr(flags), 0, 0, 0, 0, 0)
+	fd = int32(r1)
+	if e != armENOSYS {
+		return fd, e
+	}
+	if flags &^ EPOLL_CLOEXEC != 0 {
+		return fd, e
+	}
+
+	r1, _, e = Syscall6(armEpollCreateSyscall, 1, 0, 0, 0, 0, 0)
+	fd = int32(r1)
+	if e != 0 || flags&EPOLL_CLOEXEC == 0 {
+		return fd, e
+	}
+	_, _, e = Syscall6(SYS_FCNTL, uintptr(fd), armFSetFD, armFDCloexec, 0, 0, 0)
+	if e != 0 {
+		Close(int(fd))
+		return -1, e
+	}
+	return fd, 0
+}`
+
+const currentRuntimeEventfd = `func Eventfd(initval, flags int32) (fd int32, errno uintptr) {
+	r1, _, e := Syscall6(SYS_EVENTFD2, uintptr(initval), uintptr(flags), 0, 0, 0, 0)
+	return int32(r1), e
+}`
+
+const legacyRuntimeEventfd = `func Eventfd(initval, flags int32) (fd int32, errno uintptr) {
+	r1, _, e := Syscall6(SYS_EVENTFD2, uintptr(initval), uintptr(flags), 0, 0, 0, 0)
+	fd = int32(r1)
+	if e != armENOSYS {
+		return fd, e
+	}
+	if flags &^ (EFD_CLOEXEC | EFD_NONBLOCK) != 0 {
+		return fd, e
+	}
+
+	r1, _, e = Syscall6(armEventfdSyscall, uintptr(initval), 0, 0, 0, 0, 0)
+	fd = int32(r1)
+	if e != 0 {
+		return fd, e
+	}
+	if flags&EFD_CLOEXEC != 0 {
+		_, _, e = Syscall6(SYS_FCNTL, uintptr(fd), armFSetFD, armFDCloexec, 0, 0, 0)
+		if e != 0 {
+			Close(int(fd))
+			return -1, e
+		}
+	}
+	if flags&EFD_NONBLOCK != 0 {
+		r1, _, e = Syscall6(SYS_FCNTL, uintptr(fd), armFGetFL, 0, 0, 0, 0)
+		if e == 0 {
+			_, _, e = Syscall6(SYS_FCNTL, uintptr(fd), armFSetFL, r1|uintptr(EFD_NONBLOCK), 0, 0, 0)
+		}
+		if e != 0 {
+			Close(int(fd))
+			return -1, e
+		}
+	}
+	return fd, 0
+}`
+
 func patchRuntimeSource(source []byte) ([]byte, error) {
 	text := string(source)
 	call := "Syscall6(SYS_EPOLL_PWAIT, uintptr(epfd),"
@@ -58,9 +137,29 @@ func patchRuntimeSource(source []byte) ([]byte, error) {
 	if strings.Count(text, function) != 1 {
 		return nil, errors.New("go runtime source does not contain exactly one EpollWait function")
 	}
+	if strings.Count(text, currentRuntimeEpollCreate) != 1 {
+		return nil, errors.New("go runtime source does not contain exactly one expected EpollCreate1 implementation")
+	}
+	if strings.Count(text, currentRuntimeEventfd) != 1 {
+		return nil, errors.New("go runtime source does not contain exactly one expected Eventfd implementation")
+	}
 
-	text = strings.Replace(text, function,
-		fmt.Sprintf("const armEpollWaitSyscall = %d\n\n%s", armEpollWaitSyscall, function), 1)
+	constants := fmt.Sprintf(`const (
+	armEpollCreateSyscall = %d
+	armEpollWaitSyscall   = %d
+	armEventfdSyscall     = %d
+	armENOSYS              = %d
+	armFSetFD              = %d
+	armFGetFL              = %d
+	armFSetFL              = %d
+	armFDCloexec           = %d
+)
+
+`, armEpollCreateSyscall, armEpollWaitSyscall, armEventfdSyscall, armENOSYS,
+		armFSetFD, armFGetFL, armFSetFL, armFDCloexec)
+	text = strings.Replace(text, currentRuntimeEpollCreate,
+		constants+legacyRuntimeEpollCreate, 1)
+	text = strings.Replace(text, currentRuntimeEventfd, legacyRuntimeEventfd, 1)
 	text = strings.Replace(text, call, "Syscall6(armEpollWaitSyscall, uintptr(epfd),", 1)
 	return []byte(text), nil
 }
@@ -144,12 +243,142 @@ func Accept(fd int) (nfd int, sa Sockaddr, err error) {
 	return
 }`
 
+const currentSyscallPipe = `func Pipe2(p []int, flags int) error {
+	if len(p) != 2 {
+		return EINVAL
+	}
+	var pp [2]_C_int
+	err := pipe2(&pp, flags)
+	if err == nil {
+		p[0] = int(pp[0])
+		p[1] = int(pp[1])
+	}
+	return err
+}`
+
+const legacyPipeHelper = `func legacyPipe(p []int) error {
+	if len(p) != 2 {
+		return EINVAL
+	}
+	var pp [2]_C_int
+	_, _, errno := RawSyscall(SYS_PIPE, uintptr(unsafe.Pointer(&pp)), 0, 0)
+	if errno != 0 {
+		return errno
+	}
+	p[0] = int(pp[0])
+	p[1] = int(pp[1])
+	if _, err := fcntl(p[0], F_SETFD, FD_CLOEXEC); err != nil {
+		Close(p[0])
+		Close(p[1])
+		return err
+	}
+	if _, err := fcntl(p[1], F_SETFD, FD_CLOEXEC); err != nil {
+		Close(p[0])
+		Close(p[1])
+		return err
+	}
+	return nil
+}`
+
 func patchSyscallSource(source []byte) ([]byte, error) {
 	text := string(source)
 	if strings.Count(text, currentSyscallAccept) != 1 {
 		return nil, errors.New("go syscall source does not contain exactly one expected Accept implementation")
 	}
-	return []byte(strings.Replace(text, currentSyscallAccept, legacySyscallAccept, 1)), nil
+	if strings.Count(text, currentSyscallPipe) != 1 {
+		return nil, errors.New("go syscall source does not contain exactly one expected Pipe2 implementation")
+	}
+	text = strings.Replace(text, currentSyscallPipe,
+		currentSyscallPipe+"\n\n"+legacyPipeHelper, 1)
+	text = strings.Replace(text, currentSyscallAccept, legacySyscallAccept, 1)
+	return []byte(text), nil
+}
+
+const currentForkExecPipe = `func forkExecPipe(p []int) error {
+	return Pipe2(p, O_CLOEXEC)
+}`
+
+const legacyForkExecPipe = `func forkExecPipe(p []int) error {
+	err := Pipe2(p, O_CLOEXEC)
+	if err != ENOSYS {
+		return err
+	}
+	// forkExec calls this while holding ForkLock, so the legacy pipe and
+	// close-on-exec setup remain atomic with respect to concurrent forks.
+	return legacyPipe(p)
+}`
+
+func patchForkPipeSource(source []byte) ([]byte, error) {
+	text := string(source)
+	if strings.Count(text, currentForkExecPipe) != 1 {
+		return nil, errors.New("go fork pipe source does not contain exactly one expected forkExecPipe implementation")
+	}
+	return []byte(strings.Replace(text, currentForkExecPipe, legacyForkExecPipe, 1)), nil
+}
+
+const currentExecDupPipe = `_, _, err1 = RawSyscall(SYS_DUP3, uintptr(pipe), uintptr(nextfd), O_CLOEXEC)
+		if err1 != 0 {
+			goto childerror
+		}`
+
+const legacyExecDupPipe = `_, _, err1 = RawSyscall(SYS_DUP3, uintptr(pipe), uintptr(nextfd), O_CLOEXEC)
+		if err1 == ENOSYS {
+			_, _, err1 = RawSyscall(SYS_DUP2, uintptr(pipe), uintptr(nextfd), 0)
+			if err1 == 0 {
+				_, _, err1 = RawSyscall(fcntl64Syscall, uintptr(nextfd), F_SETFD, FD_CLOEXEC)
+			}
+		}
+		if err1 != 0 {
+			goto childerror
+		}`
+
+const currentExecDupMovedFD = `_, _, err1 = RawSyscall(SYS_DUP3, uintptr(fd[i]), uintptr(nextfd), O_CLOEXEC)
+			if err1 != 0 {
+				goto childerror
+			}`
+
+const legacyExecDupMovedFD = `_, _, err1 = RawSyscall(SYS_DUP3, uintptr(fd[i]), uintptr(nextfd), O_CLOEXEC)
+			if err1 == ENOSYS {
+				_, _, err1 = RawSyscall(SYS_DUP2, uintptr(fd[i]), uintptr(nextfd), 0)
+				if err1 == 0 {
+					_, _, err1 = RawSyscall(fcntl64Syscall, uintptr(nextfd), F_SETFD, FD_CLOEXEC)
+				}
+			}
+			if err1 != 0 {
+				goto childerror
+			}`
+
+const currentExecDupTargetFD = `_, _, err1 = RawSyscall(SYS_DUP3, uintptr(fd[i]), uintptr(i), 0)
+		if err1 != 0 {
+			goto childerror
+		}`
+
+const legacyExecDupTargetFD = `_, _, err1 = RawSyscall(SYS_DUP3, uintptr(fd[i]), uintptr(i), 0)
+		if err1 == ENOSYS {
+			_, _, err1 = RawSyscall(SYS_DUP2, uintptr(fd[i]), uintptr(i), 0)
+		}
+		if err1 != 0 {
+			goto childerror
+		}`
+
+func patchExecLinuxSource(source []byte) ([]byte, error) {
+	text := string(source)
+	replacements := []struct {
+		current string
+		legacy  string
+		name    string
+	}{
+		{currentExecDupPipe, legacyExecDupPipe, "child status pipe dup3"},
+		{currentExecDupMovedFD, legacyExecDupMovedFD, "moved descriptor dup3"},
+		{currentExecDupTargetFD, legacyExecDupTargetFD, "target descriptor dup3"},
+	}
+	for _, replacement := range replacements {
+		if strings.Count(text, replacement.current) != 1 {
+			return nil, fmt.Errorf("go exec source does not contain exactly one expected %s implementation", replacement.name)
+		}
+		text = strings.Replace(text, replacement.current, replacement.legacy, 1)
+	}
+	return []byte(text), nil
 }
 
 func requiredSource(goroot, relativePath string) (string, error) {
@@ -189,6 +418,14 @@ func generateOverlay(goroot, outputDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	forkPipePath, err := requiredSource(goroot, forkPipeSourcePath)
+	if err != nil {
+		return "", err
+	}
+	execLinuxPath, err := requiredSource(goroot, execLinuxSourcePath)
+	if err != nil {
+		return "", err
+	}
 
 	patchedRuntime, err := readAndPatch(runtimePath, "Go runtime", patchRuntimeSource)
 	if err != nil {
@@ -199,6 +436,14 @@ func generateOverlay(goroot, outputDir string) (string, error) {
 		return "", err
 	}
 	patchedSyscall, err := readAndPatch(syscallPath, "Go syscall", patchSyscallSource)
+	if err != nil {
+		return "", err
+	}
+	patchedForkPipe, err := readAndPatch(forkPipePath, "Go fork pipe", patchForkPipeSource)
+	if err != nil {
+		return "", err
+	}
+	patchedExecLinux, err := readAndPatch(execLinuxPath, "Go exec", patchExecLinuxSource)
 	if err != nil {
 		return "", err
 	}
@@ -220,6 +465,8 @@ func generateOverlay(goroot, outputDir string) (string, error) {
 		{runtimePath, patchedRuntimeSourceName, patchedRuntime},
 		{pollPath, patchedPollSourceName, patchedPoll},
 		{syscallPath, patchedSyscallSourceName, patchedSyscall},
+		{forkPipePath, patchedForkPipeSourceName, patchedForkPipe},
+		{execLinuxPath, patchedExecLinuxSourceName, patchedExecLinux},
 		{guardPath, patchedGuardSourceName, []byte(armOnlyGuardSource)},
 	}
 	replacements := make(map[string]string, len(patches))
