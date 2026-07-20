@@ -57,6 +57,26 @@ sync-shared:
 # Build (product-specific)
 # =============================================================================
 
+# Regenerate the translation template (lua/locale/localsend.pot) from source.
+# Run this after adding or changing any user-facing string wrapped in _() /
+# deps._() / N_() / deps.N_(). Requires xgettext (gettext-tools) on the host.
+# Commit the regenerated .pot alongside the string changes.
+[group('build')]
+pot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(grep -oP 'version = "\K[^"]+' lua/_meta.lua)"
+    mkdir -p lua/locale
+    xgettext --language=Lua --from-code=UTF-8 \
+      --keyword=_ --keyword=deps._ --keyword=N_:1,2 --keyword=deps.N_:1,2 \
+      --add-comments=TRANSLATORS: \
+      --package-name=localsend --package-version="$version" \
+      --msgid-bugs-address=https://github.com/kaikozlov/localsend.koplugin/issues \
+      -o lua/locale/localsend.pot lua/*.lua
+    # Drop the fuzzy template marker so the header is not flagged as untranslated.
+    sed -i '/^#, fuzzy$/d' lua/locale/localsend.pot
+    echo "Wrote lua/locale/localsend.pot"
+
 # Run the deterministic QEMU/seccomp audit against both packaged 32-bit ARM binaries.
 # Requires a completed release build so the exact shipped binaries are exercised.
 [group('test')]
@@ -117,6 +137,8 @@ _release *args='':
 
     # Stage Lua plugin source and license (shared by every zip)
     cp lua/*.lua "$stage/"
+    # Translation catalogues: localsend_i18n.lua loads locale/<lang>.po at runtime.
+    cp -r lua/locale "$stage/"
     cp LICENSE "$stage/"
 
     if ! $package_only; then

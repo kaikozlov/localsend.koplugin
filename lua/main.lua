@@ -12,7 +12,9 @@ local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local ffiutil = require("ffi/util")
 local logger = require("logger")
 local util = require("util")
-local _ = require("gettext")
+local I18n = require("localsend_i18n")
+local _ = I18n.translate
+local N_ = I18n.ngettext
 local T = ffiutil.template
 local json = require("json")
 local PluginShare = require("pluginshare")
@@ -114,6 +116,7 @@ local function initUpdateModule()
         logger = logger,
         T = T,
         _ = _,
+        N_ = N_,
         G_reader_settings = G_reader_settings,
         cache_dir = cache_dir,
         ca_bundle_path = ca_bundle_path,
@@ -195,6 +198,7 @@ function LocalSend:init()
             logger = logger,
             T = T,
             _ = _,
+            N_ = N_,
             G_reader_settings = G_reader_settings,
             Version = Version,
         })
@@ -210,6 +214,7 @@ function LocalSend:init()
             logger = logger,
             T = T,
             _ = _,
+            N_ = N_,
         })
     end
 
@@ -223,6 +228,7 @@ function LocalSend:init()
             logger = logger,
             T = T,
             _ = _,
+            N_ = N_,
             G_reader_settings = G_reader_settings,
         })
     end
@@ -247,6 +253,7 @@ function LocalSend:init()
             logger = logger,
             T = T,
             _ = _,
+            N_ = N_,
         }, {
             binary_path = binary_path,
             plugin_path = plugin_path,
@@ -267,6 +274,7 @@ function LocalSend:init()
             logger = logger,
             T = T,
             _ = _,
+            N_ = N_,
         }, {
             binary_path = binary_path,
         })
@@ -284,6 +292,7 @@ function LocalSend:init()
             logger = logger,
             T = T,
             _ = _,
+            N_ = N_,
             G_reader_settings = G_reader_settings,
         }, {
             binary_path = binary_path,
@@ -1429,9 +1438,9 @@ function LocalSend:_buildMainMenu()
                     end
                     if count > 0 then
                         if self.routing_enabled then
-                            return T(_("File type routing (%1 rules)"), count)
+                            return T(N_("File type routing (%1 rule)", "File type routing (%1 rules)", count), count)
                         else
-                            return T(_("File type routing (disabled, %1 rules)"), count)
+                            return T(N_("File type routing (disabled, %1 rule)", "File type routing (disabled, %1 rules)", count), count)
                         end
                     else
                         return _("File type routing")

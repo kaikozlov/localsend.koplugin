@@ -707,7 +707,7 @@ local function formatCheckSummary(checks)
         end
     end
     if failed == 0 then
-        table.insert(lines, deps.T(deps._("Result: all %1 checks passed"), passed))
+        table.insert(lines, deps.T(deps.N_("Result: all %1 check passed", "Result: all %1 checks passed", passed), passed))
     else
         table.insert(lines, deps.T(deps._("Result: %1 passed, %2 to fix"), passed, failed))
     end

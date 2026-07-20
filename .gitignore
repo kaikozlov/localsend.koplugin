@@ -33,3 +33,9 @@ dist
 # Binaries
 localsend-armhf
 .lua_env/
+
+# i18n test fixtures: the localsend_i18n spec writes these throwaway fake-language
+# .po files into lua/locale/ at setup and removes them at teardown. Listed here so
+# a crashed test run can never leave them in the working tree.
+lua/locale/zz.po
+lua/locale/z3.po

@@ -1,4 +1,4 @@
-local _ = require("gettext")
+local _ = require("localsend_i18n").translate
 return {
     name = "localsend",
     fullname = _("LocalSend"),

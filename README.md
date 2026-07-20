@@ -68,6 +68,24 @@ For common symptoms and fixes (connection refused, device not discovered, HTTP 4
 
 When reporting a bug, include the generated support report. It snapshots LocalSend evidence before running lifecycle checks, includes the tail of KOReader's `crash.log`, and redacts Wi-Fi SSIDs, MAC addresses, and PIN values by default. Review device aliases, file names, routing paths, and private IP addresses before posting publicly.
 
+### Translations
+
+The plugin ships its own translations under `locale/`, independent of KOReader's core language packs. The UI language follows KOReader's **Language** setting automatically. Any string without a translation falls back to English, and shared KOReader UI words that happen to appear here still use KOReader's own translation.
+
+**Adding a language** (no code changes required):
+
+1. Copy `locale/localsend.pot` to `locale/<lang>.po` (e.g. `locale/pt_PT.po`). Use the locale code matching KOReader's language list.
+2. Fill in the `msgstr` values. Plural-aware strings use `msgid` / `msgid_plural` with `msgstr[0]`, `msgstr[1]`, … — include a `Plural-Forms:` header so the right form is picked per language.
+3. Commit the `.po` file. It is bundled into releases automatically.
+
+The catalogue is a plain text `.po` (no compilation step). To regenerate the template after adding or changing user-facing strings wrapped in `_()` / `deps._()` / `N_()`:
+
+```sh
+just pot
+```
+
+Requires `xgettext` (gettext-tools). See [issue #14](https://github.com/kaikozlov/localsend.koplugin/issues/14) to coordinate new translations.
+
 ### Compatibility
 
 > **Kindle users:** Works best with firmware 5.16.3+. Older versions may also work as of v1.0.7.
