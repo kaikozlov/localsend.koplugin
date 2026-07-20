@@ -816,6 +816,14 @@ end
 function LocalSend:validateDeviceName(name)
     local valid, err = validateDeviceName(name)
     if not valid and err then
+        -- Keep these msgids literal so xgettext includes validation failures in
+        -- the plugin catalogue. The utility remains UI-independent and returns
+        -- its stable English errors; translation happens at this UI boundary.
+        if err == "Device name is too long (max 64 characters)." then
+            return false, _("Device name is too long (max 64 characters).")
+        elseif err == "Device name can only contain letters, numbers, spaces, hyphens, underscores, and apostrophes." then
+            return false, _("Device name can only contain letters, numbers, spaces, hyphens, underscores, and apostrophes.")
+        end
         return false, _(err)
     end
     return valid

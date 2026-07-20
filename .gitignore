@@ -38,6 +38,7 @@ localsend-armhf
 # catalogues beside the loader at setup and removes them at teardown. Listed here
 # so a crashed test run can never leave them in the working tree.
 lua/locale/zz.po
+lua/locale/en_ZZ.po
 lua/locale/z3.po
 lua/locale/zc.po
 lua/locale/z0.po

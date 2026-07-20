@@ -56,6 +56,17 @@ msgstr[0] "zz-one"
 msgstr[1] "zz-many"
 ]]
 
+    -- "en_ZZ": an English regional variant. KOReader's en_GB is a translated
+    -- locale, so only source English (C/en/en_US) should bypass plugin loading.
+    local EN_ZZ_PO = [[
+msgid ""
+msgstr ""
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "i18n:sentinel:british"
+msgstr "en-ZZ-translated"
+]]
+
     -- "z3": 3-form plural (Polish rule). Exercises the ternary plural compiler.
     local Z3_PO = [[
 msgid ""
@@ -113,6 +124,7 @@ msgstr[1] "zi-many"
         saved_lang = G_reader_settings:readSetting("language")
         saved_logger_info = logger.info
         table.insert(fixture_paths, write_fixture("zz.po", ZZ_PO))
+        table.insert(fixture_paths, write_fixture("en_ZZ.po", EN_ZZ_PO))
         table.insert(fixture_paths, write_fixture("z3.po", Z3_PO))
         table.insert(fixture_paths, write_fixture("zc.po", ZC_PO))
         table.insert(fixture_paths, write_fixture("z0.po", Z0_PO))
@@ -179,9 +191,14 @@ msgstr[1] "zi-many"
             }, messages)
         end)
 
-        it("skips loading entirely for English and returns the msgid", function()
+        it("skips loading entirely for source English and returns the msgid", function()
             G_reader_settings:saveSetting("language", "en")
             assert.are.equal("i18n:sentinel:singular", I18n.translate("i18n:sentinel:singular"))
+        end)
+
+        it("loads a catalogue for an English regional locale", function()
+            G_reader_settings:saveSetting("language", "en_ZZ")
+            assert.are.equal("en-ZZ-translated", I18n.translate("i18n:sentinel:british"))
         end)
 
         it("does not touch global gettext state (core _ still callable as a table)", function()
@@ -242,6 +259,19 @@ msgstr[1] "zi-many"
             G_reader_settings:saveSetting("language", "zz")
             assert.are.equal("uniq-singular", I18n.ngettext("uniq-singular", "uniq-plural", 1))
             assert.are.equal("uniq-plural", I18n.ngettext("uniq-singular", "uniq-plural", 9))
+        end)
+    end)
+
+    describe("catalogue template", function()
+        it("includes device-name validation failures", function()
+            local f = assert(io.open(loader_dir() .. "/locale/localsend.pot", "r"))
+            local pot = f:read("*a")
+            f:close()
+
+            assert.is_truthy(pot:find('msgid "Device name is too long (max 64 characters)."', 1, true))
+            -- xgettext wraps this long msgid across quoted continuation lines.
+            assert.is_truthy(pot:find('"Device name can only contain letters, numbers, spaces, hyphens, underscores, "', 1, true))
+            assert.is_truthy(pot:find('"and apostrophes."', 1, true))
         end)
     end)
 

@@ -448,7 +448,7 @@ local function detectLang()
     if type(lang) == "string" and lang ~= "" then
         return lang
     end
-    local lc = os.getenv("LANG") or os.getenv("LC_ALL") or os.getenv("LC_MESSAGES") or ""
+    local lc = os.getenv("LANGUAGE") or os.getenv("LC_ALL") or os.getenv("LC_MESSAGES") or os.getenv("LANG") or ""
     lang = lc:match("^([a-zA-Z_]+)")
     return lang or "en"
 end
@@ -467,7 +467,9 @@ local function loadTranslations()
     _loaded = true
 
     local lang = detectLang()
-    if lang == "en" or lang:match("^en_") then
+    -- KOReader uses C (and occasionally en/en_US) for source English, while
+    -- en_GB is a real translated locale and may have a plugin catalogue.
+    if lang == "C" or lang == "POSIX" or lang == "en" or lang:match("^en_US[.@]") or lang == "en_US" then
         return nil
     end
 
