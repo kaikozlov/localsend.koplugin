@@ -70,33 +70,9 @@ When reporting a bug, include the generated support report. It snapshots LocalSe
 
 ### Translations
 
-The plugin ships its own translations from `lua/locale/`, independent of KOReader's core language packs. The UI language follows KOReader's **Language** setting automatically. Any string without a plugin translation falls back through KOReader's catalogue and then to English.
+The plugin ships its own translations from `lua/locale/`, independent of KOReader's core language packs. The UI language follows KOReader's **Language** setting automatically.
 
-KOReader manages its translations with standard GNU gettext catalogues and Weblate. Until LocalSend has its own Weblate component, translations are contributed as `.po` files through pull requests.
-
-**Adding a language** (no code changes required):
-
-1. Create the catalogue with `msginit`, using the locale code from KOReader's language list:
-
-   ```sh
-   msginit --no-translator --locale=pt_PT \
-     --input=lua/locale/localsend.pot \
-     --output-file=lua/locale/pt_PT.po
-   ```
-
-   A gettext-aware editor such as Poedit, Lokalize, or Virtaal can be used instead. Verify the generated `Language` and `Plural-Forms` headers; some `msginit` versions normalize `pt_PT` to `pt`, while KOReader and the plugin catalogue filename use `pt_PT`.
-2. Fill in the `msgstr` values. Preserve placeholders such as `%1`; plural entries use `msgstr[0]`, `msgstr[1]`, and any additional forms required by the language.
-3. Run `just i18n-check`, then commit the `.po` file. Catalogues are bundled into releases automatically.
-
-After adding or changing user-facing strings wrapped in `_()` / `deps._()` / `N_()`, regenerate the template and merge it into existing translations:
-
-```sh
-just pot
-msgmerge --update --backup=none lua/locale/<lang>.po lua/locale/localsend.pot
-just i18n-check
-```
-
-The plugin reads plain-text `.po` catalogues directly at runtime, so no compiled `.mo` is shipped. The commands above require GNU gettext-tools (`xgettext`, `msginit`, `msgmerge`, and `msgfmt`). See [issue #14](https://github.com/kaikozlov/localsend.koplugin/issues/14) to coordinate new translations.
+Want to help translate? Translations are contributed as `.po` files via pull requests — see the **[Translations guide](lua/locale/README.md)** for how to add a language, update strings, and validate your work.
 
 ### Compatibility
 
