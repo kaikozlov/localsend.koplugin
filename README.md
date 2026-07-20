@@ -76,9 +76,9 @@ Want to help translate? Translations are contributed as `.po` files via pull req
 
 ### Compatibility
 
-> **Kindle users:** Works best with firmware 5.16.3+. Older versions may also work as of v1.0.7.
+> **Kindle users:** Works best with firmware 5.16.3+. As of v1.4.2, support for older devices has been expanded, including earlier firmware and the legacy 2.6 kernel (e.g. Kindle Paperwhite 1st Gen).
 
-Reported working on: Kindle Paperwhite 10-12th Gen, Kindle Basic 10-11th Gen, Kindle Oasis, Kindle Colorsoft, Kindle Scribe, Kobo Clara/Forma/Libra Colour, Kobo Aura N236.
+Reported working on: Kindle Paperwhite 1st Gen, Kindle Paperwhite 10-12th Gen, Kindle Basic 10-11th Gen, Kindle Oasis, Kindle Colorsoft, Kindle Scribe, Kobo Clara/Forma/Libra Colour, Kobo Aura N236.
 
 ### License
 
