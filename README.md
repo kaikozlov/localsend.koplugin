@@ -72,19 +72,31 @@ When reporting a bug, include the generated support report. It snapshots LocalSe
 
 The plugin ships its own translations from `lua/locale/`, independent of KOReader's core language packs. The UI language follows KOReader's **Language** setting automatically. Any string without a plugin translation falls back through KOReader's catalogue and then to English.
 
+KOReader manages its translations with standard GNU gettext catalogues and Weblate. Until LocalSend has its own Weblate component, translations are contributed as `.po` files through pull requests.
+
 **Adding a language** (no code changes required):
 
-1. Copy `lua/locale/localsend.pot` to `lua/locale/<lang>.po` (e.g. `lua/locale/pt_PT.po`). Use the locale code matching KOReader's language list.
-2. Fill in the `msgstr` values. Plural-aware strings use `msgid` / `msgid_plural` with `msgstr[0]`, `msgstr[1]`, … — include a `Plural-Forms:` header so the right form is picked per language.
-3. Commit the `.po` file. It is bundled into releases automatically.
+1. Create the catalogue with `msginit`, using the locale code from KOReader's language list:
 
-The catalogue is a plain text `.po` (no compilation step). To regenerate the template after adding or changing user-facing strings wrapped in `_()` / `deps._()` / `N_()`:
+   ```sh
+   msginit --no-translator --locale=pt_PT \
+     --input=lua/locale/localsend.pot \
+     --output-file=lua/locale/pt_PT.po
+   ```
+
+   A gettext-aware editor such as Poedit, Lokalize, or Virtaal can be used instead. Verify the generated `Language` and `Plural-Forms` headers; some `msginit` versions normalize `pt_PT` to `pt`, while KOReader and the plugin catalogue filename use `pt_PT`.
+2. Fill in the `msgstr` values. Preserve placeholders such as `%1`; plural entries use `msgstr[0]`, `msgstr[1]`, and any additional forms required by the language.
+3. Run `just i18n-check`, then commit the `.po` file. Catalogues are bundled into releases automatically.
+
+After adding or changing user-facing strings wrapped in `_()` / `deps._()` / `N_()`, regenerate the template and merge it into existing translations:
 
 ```sh
 just pot
+msgmerge --update --backup=none lua/locale/<lang>.po lua/locale/localsend.pot
+just i18n-check
 ```
 
-Requires `xgettext` (gettext-tools). See [issue #14](https://github.com/kaikozlov/localsend.koplugin/issues/14) to coordinate new translations.
+The plugin reads plain-text `.po` catalogues directly at runtime, so no compiled `.mo` is shipped. The commands above require GNU gettext-tools (`xgettext`, `msginit`, `msgmerge`, and `msgfmt`). See [issue #14](https://github.com/kaikozlov/localsend.koplugin/issues/14) to coordinate new translations.
 
 ### Compatibility
 

@@ -57,10 +57,10 @@ sync-shared:
 # Build (product-specific)
 # =============================================================================
 
-# Regenerate the translation template (lua/locale/localsend.pot) from source.
-# Run this after adding or changing any user-facing string wrapped in _() /
-# deps._() / N_() / deps.N_(). Requires xgettext (gettext-tools) on the host.
-# Commit the regenerated .pot alongside the string changes.
+# Run after changing user-facing strings wrapped in _() / deps._() / N_() /
+# deps.N_(). Requires xgettext (gettext-tools) on the host. Commit the result;
+# its standard POT header intentionally matches KOReader's workflow.
+# Regenerate the translation template (lua/locale/localsend.pot).
 [group('build')]
 pot:
     #!/usr/bin/env bash
@@ -69,13 +69,28 @@ pot:
     mkdir -p lua/locale
     xgettext --language=Lua --from-code=UTF-8 \
       --keyword=_ --keyword=deps._ --keyword=N_:1,2 --keyword=deps.N_:1,2 \
-      --add-comments=TRANSLATORS: \
+      --add-comments=@translators \
       --package-name=localsend --package-version="$version" \
       --msgid-bugs-address=https://github.com/kaikozlov/localsend.koplugin/issues \
       -o lua/locale/localsend.pot lua/*.lua
-    # Drop the fuzzy template marker so the header is not flagged as untranslated.
-    sed -i '/^#, fuzzy$/d' lua/locale/localsend.pot
     echo "Wrote lua/locale/localsend.pot"
+
+# Matches KOReader translation CI; requires host gettext-tools (`just pot` does too).
+# Validate every shipped translation catalogue with GNU msgfmt.
+[group('lint')]
+i18n-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob
+    catalogues=(lua/locale/*.po)
+    if (( ${#catalogues[@]} == 0 )); then
+        echo "No translation catalogues to validate"
+        exit 0
+    fi
+    for catalogue in "${catalogues[@]}"; do
+        echo "Checking $catalogue"
+        msgfmt -o /dev/null "$catalogue"
+    done
 
 # Run the deterministic QEMU/seccomp audit against both packaged 32-bit ARM binaries.
 # Requires a completed release build so the exact shipped binaries are exercised.

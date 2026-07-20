@@ -22,6 +22,11 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/just" --version
 
+      - name: Install translation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gettext
+
       - name: Set up development image
         run: just setup
 
@@ -30,6 +35,9 @@ jobs:
 
       - name: Run linters
         run: just lint
+
+      - name: Validate translations
+        run: just i18n-check
 
       - name: Run tests
         run: just test

@@ -23,6 +23,14 @@ jobs:
             | bash -s -- --to "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Install translation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gettext
+
+      - name: Validate translations
+        run: just i18n-check
+
       - name: Set up development image
         run: just setup
 
