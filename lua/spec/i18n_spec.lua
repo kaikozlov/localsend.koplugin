@@ -12,7 +12,9 @@ require("busted.runner")()
 describe("localsend_i18n", function()
     local I18n
     local fixture_paths = {}
+    local logger
     local saved_lang
+    local saved_logger_info
 
     -- The loader resolves its locale dir from its own source path via
     -- debug.getinfo; replicate that here so the fixtures land exactly where the
@@ -22,8 +24,8 @@ describe("localsend_i18n", function()
         return src:match("^(.*)/[^/]*$") or src:match("^(.*)\\[^\\]*$") or "."
     end
 
-    local function write_fixture(name, content, root_level)
-        local path = loader_dir() .. (root_level and "/" or "/locale/") .. name
+    local function write_fixture(name, content)
+        local path = loader_dir() .. "/locale/" .. name
         local f = assert(io.open(path, "w"))
         f:write(content)
         f:close()
@@ -105,24 +107,20 @@ msgstr[0] "zi-one"
 msgstr[1] "zi-many"
 ]]
 
-    -- "zx": package compatibility copy used by pre-i18n OTA updaters.
-    local ZX_PO = [[
-msgid "i18n:sentinel:compatibility"
-msgstr "zx-compatible"
-]]
-
     setup(function()
         I18n = require("localsend_i18n")
+        logger = require("logger")
         saved_lang = G_reader_settings:readSetting("language")
+        saved_logger_info = logger.info
         table.insert(fixture_paths, write_fixture("zz.po", ZZ_PO))
         table.insert(fixture_paths, write_fixture("z3.po", Z3_PO))
         table.insert(fixture_paths, write_fixture("zc.po", ZC_PO))
         table.insert(fixture_paths, write_fixture("z0.po", Z0_PO))
         table.insert(fixture_paths, write_fixture("zi.po", ZI_PO))
-        table.insert(fixture_paths, write_fixture("localsend_locale_zx.lua", ZX_PO, true))
     end)
 
     teardown(function()
+        logger.info = saved_logger_info
         -- Restore the UI language so other specs are unaffected.
         if saved_lang == nil then
             G_reader_settings:delSetting("language")
@@ -167,9 +165,18 @@ msgstr "zx-compatible"
             assert.are.equal("zz-translated", I18n.translate("i18n:sentinel:singular"))
         end)
 
-        it("loads the root compatibility catalogue used by legacy OTA updates", function()
-            G_reader_settings:saveSetting("language", "zx")
-            assert.are.equal("zx-compatible", I18n.translate("i18n:sentinel:compatibility"))
+        it("logs once when no catalogue exists for a non-English locale", function()
+            local messages = {}
+            logger.info = function(message)
+                table.insert(messages, message)
+            end
+            G_reader_settings:saveSetting("language", "zy")
+
+            assert.are.equal("i18n:sentinel:unknown", I18n.translate("i18n:sentinel:unknown"))
+            assert.are.equal("i18n:sentinel:unknown", I18n.translate("i18n:sentinel:unknown"))
+            assert.are.same({
+                "localsend i18n: no catalogue for zy; using KOReader/English fallback",
+            }, messages)
         end)
 
         it("skips loading entirely for English and returns the msgid", function()

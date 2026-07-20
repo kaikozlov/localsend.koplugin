@@ -475,23 +475,15 @@ local function loadTranslations()
         if not name:match("^[%w_@.%-]+$") then
             return nil
         end
-        local paths = {
-            _dir .. "locale/" .. name .. ".po",
-            -- Releases also stage each .po as a root-level .lua-named data file.
-            -- LocalSend versions predating i18n only copied root *.lua files
-            -- during OTA updates, so this keeps direct upgrades translatable.
-            _dir .. "localsend_locale_" .. name .. ".lua",
-        }
-        for _, path in ipairs(paths) do
-            local entries, pluralizer = parsePO(path)
-            if entries and next(entries) then
-                local n = 0
-                for _ in pairs(entries) do
-                    n = n + 1
-                end
-                logger.info("localsend i18n: loaded " .. path .. " — " .. n .. " strings")
-                return { entries = entries, plural = pluralizer }
+        local path = _dir .. "locale/" .. name .. ".po"
+        local entries, pluralizer = parsePO(path)
+        if entries and next(entries) then
+            local n = 0
+            for _ in pairs(entries) do
+                n = n + 1
             end
+            logger.info("localsend i18n: loaded " .. path .. " — " .. n .. " strings")
+            return { entries = entries, plural = pluralizer }
         end
     end
 
@@ -503,6 +495,9 @@ local function loadTranslations()
             end
         end)()
 
+    if not _translations then
+        logger.info("localsend i18n: no catalogue for " .. lang .. "; using KOReader/English fallback")
+    end
     return _translations
 end
 

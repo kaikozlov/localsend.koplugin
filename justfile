@@ -139,17 +139,6 @@ _release *args='':
     cp lua/*.lua "$stage/"
     # Translation catalogues: localsend_i18n.lua loads locale/<lang>.po at runtime.
     cp -r lua/locale "$stage/"
-    # Pre-i18n LocalSend updaters only copy root *.lua files. Stage each .po as
-    # a .lua-named data file too, allowing direct OTA upgrades from old releases.
-    shopt -s nullglob
-    for catalogue in lua/locale/*.po; do
-        lang="$(basename "$catalogue" .po)"
-        case "$lang" in
-            *[!A-Za-z0-9_@.-]*) echo "Invalid locale filename: $catalogue" >&2; exit 1 ;;
-        esac
-        cp "$catalogue" "$stage/localsend_locale_${lang}.lua"
-    done
-    shopt -u nullglob
     cp LICENSE "$stage/"
 
     if ! $package_only; then
