@@ -249,10 +249,13 @@ just test-armcompat
 For each 32-bit ARM package, the audit uses Docker's isolated loopback network,
 requires no Internet access, forces the audited Kindle syscall gaps with the
 seccomp launcher, performs repeated API requests and a complete V2 transfer,
-and rejects the run unless the guest trace contains every modern failure and
-legacy fallback, the on-transfer shell callback completes, and the transferred
-file matches. It also verifies that the ARM overlay fails compilation if reused
-by an arm64 build.
+and rejects the run unless the guest trace contains every modern probe followed
+by its legacy fallback, the on-transfer shell callback completes, and the
+transferred file matches. QEMU writes syscall entries and results separately,
+so the checker deliberately validates probe/fallback ordering rather than
+assuming a concurrent trace line contains both the call and its `ENOSYS` result.
+It also verifies that the ARM overlay fails compilation if reused by an arm64
+build.
 
 For manual investigation, QEMU can force Go to select the audited DXG kernel
 version while tracing guest syscall numbers:
@@ -414,7 +417,7 @@ The current binary contains or can reach syscalls newer than this firmware. The 
 
 The current deterministic workflow verifies receiver startup, repeated API
 requests, a complete V2 transfer, and the on-transfer `os/exec` callback while
-forcing every overlay-covered modern syscall to return `ENOSYS`. This remains
+exercising every overlay-covered modern probe and legacy fallback. This remains
 a scoped workflow audit, not proof that every exported CLI or dependency path
 supports Linux 2.6.22.
 

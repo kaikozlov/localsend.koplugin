@@ -52,7 +52,9 @@ fi
 
 host_binary="$work_dir/localsend-host"
 fault_launcher="$work_dir/kindle-enosys"
+trace_checker="$work_dir/tracecheck"
 go build -buildvcs=false -o "$host_binary" .
+go build -buildvcs=false -o "$trace_checker" ./tools/armcompat/tracecheck
 cc -O2 -Wall -Wextra -o "$fault_launcher" \
     tools/armcompat/testdata/kindle_enosys.c
 
@@ -63,6 +65,7 @@ audit_archive() {
     local release_binary="$case_dir/localsend-$arch"
     local trace="$case_dir/receiver.trace"
     local version_output
+    local trace_error
     local ready
 
     mkdir -p "$case_dir/received" "$case_dir/config"
@@ -140,32 +143,12 @@ audit_archive() {
     wait "$server_pid" 2>/dev/null || true
     server_pid=""
 
-    if ! rg -q 'epoll_wait\(' "$trace"; then
-        echo "armcompat audit ($arch): guest trace did not call epoll_wait" >&2
-        exit 1
-    fi
-    if rg -q 'epoll_pwait\(' "$trace"; then
-        echo "armcompat audit ($arch): guest trace still calls epoll_pwait" >&2
-        exit 1
-    fi
-    for modern_syscall in epoll_create1 eventfd2 accept4 pipe2 dup3; do
-        if ! rg -q "$modern_syscall\\(.*errno=38" "$trace"; then
-            echo "armcompat audit ($arch): fault injection did not force $modern_syscall ENOSYS" >&2
-            exit 1
-        fi
-    done
-    for legacy_syscall in epoll_create eventfd accept pipe dup2; do
-        if ! rg -q "$legacy_syscall\\(" "$trace"; then
-            echo "armcompat audit ($arch): guest trace did not call legacy $legacy_syscall" >&2
-            exit 1
-        fi
-    done
-    if ! rg -q 'getrandom\(.*errno=38' "$trace"; then
-        echo "armcompat audit ($arch): getrandom ENOSYS fault was not exercised" >&2
-        exit 1
-    fi
-    if ! rg -q 'prlimit64\(.*errno=38' "$trace"; then
-        echo "armcompat audit ($arch): prlimit64 ENOSYS fault was not exercised" >&2
+    # QEMU writes syscall entries and results separately, so concurrent guest
+    # threads can split an ENOSYS result away from its syscall line. Validate
+    # each modern-probe/legacy-fallback pair in stream order instead of
+    # assuming that an individual trace line is atomic.
+    if ! trace_error="$("$trace_checker" "$trace" 2>&1)"; then
+        echo "armcompat audit ($arch): ${trace_error#tracecheck: }" >&2
         exit 1
     fi
 
