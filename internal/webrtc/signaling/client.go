@@ -75,29 +75,33 @@ func Connect(uri string, info ClientInfoWithoutID) (*SignalingClient, error) {
 	return ConnectWithContext(context.Background(), uri, info)
 }
 
-// ConnectWithContext establishes a WebSocket connection with context for cancellation.
-func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutID) (*SignalingClient, error) {
-	// Encode client info as base64 JSON in query parameter
+func buildSignalingURL(uri string, info ClientInfoWithoutID) (string, error) {
 	infoJSON, err := json.Marshal(info)
 	if err != nil {
-		return nil, fmt.Errorf("failed to marshal client info: %w", err)
+		return "", fmt.Errorf("failed to marshal client info: %w", err)
 	}
-	encodedInfo := base64.RawURLEncoding.EncodeToString(infoJSON)
-
-	// Build WebSocket URL with query parameter
 	wsURL, err := url.Parse(uri)
 	if err != nil {
-		return nil, fmt.Errorf("invalid signaling server URL: %w", err)
+		return "", fmt.Errorf("invalid signaling server URL: %w", err)
 	}
 	q := wsURL.Query()
-	q.Set("d", encodedInfo)
+	q.Set("d", base64.RawURLEncoding.EncodeToString(infoJSON))
 	wsURL.RawQuery = q.Encode()
+	return wsURL.String(), nil
+}
 
-	slog.Debug("Connecting to signaling server", "url", wsURL.String())
+// ConnectWithContext establishes a WebSocket connection with context for cancellation.
+func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutID) (*SignalingClient, error) {
+	wsURL, err := buildSignalingURL(uri, info)
+	if err != nil {
+		return nil, err
+	}
+
+	slog.Debug("Connecting to signaling server", "url", wsURL)
 
 	// Connect to WebSocket with context
 	dialer := websocket.Dialer{}
-	conn, _, err := dialer.DialContext(ctx, wsURL.String(), nil)
+	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to signaling server: %w", err)
 	}

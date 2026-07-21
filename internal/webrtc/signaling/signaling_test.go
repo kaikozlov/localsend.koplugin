@@ -7,7 +7,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -657,53 +659,6 @@ func TestWsServerHelloWithMultiplePeers(t *testing.T) {
 // Phase 1-3 Implementation Tests
 // =============================================================================
 
-// TestClientInfoEncodingURLSafe verifies that client info encoding uses URL-safe base64.
-// This tests the fix from Phase 1: signaling base64 encoding.
-func TestClientInfoEncodingURLSafe(t *testing.T) {
-	// Test that characters that differ between standard and URL-safe base64 are handled correctly
-	// Standard base64 uses +/ while URL-safe uses -_
-
-	info := ClientInfoWithoutID{
-		Alias:       "Test+Device/Name", // Contains characters that would be + and / in standard base64
-		Version:     "2.3",
-		DeviceModel: "Test Model",
-		DeviceType:  "desktop",
-		Token:       "test-token",
-	}
-
-	// Marshal to JSON
-	infoJSON, err := json.Marshal(info)
-	if err != nil {
-		t.Fatalf("Failed to marshal client info: %v", err)
-	}
-
-	// Encode using URL-safe base64 (what the code should use)
-	encoded := base64.RawURLEncoding.EncodeToString(infoJSON)
-
-	// Verify no standard base64 characters that would need URL encoding
-	if strings.Contains(encoded, "+") {
-		t.Errorf("Encoded string contains '+' which is not URL-safe: %s", encoded)
-	}
-	if strings.Contains(encoded, "/") {
-		t.Errorf("Encoded string contains '/' which is not URL-safe: %s", encoded)
-	}
-
-	// Verify round-trip works
-	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		t.Fatalf("Failed to decode: %v", err)
-	}
-
-	var parsedInfo ClientInfoWithoutID
-	if err := json.Unmarshal(decoded, &parsedInfo); err != nil {
-		t.Fatalf("Failed to unmarshal: %v", err)
-	}
-
-	if parsedInfo.Alias != info.Alias {
-		t.Errorf("Alias = %q; want %q", parsedInfo.Alias, info.Alias)
-	}
-}
-
 // TestNewUpdateMessageFormat verifies UPDATE message format for token refresh.
 func TestNewUpdateMessageFormat(t *testing.T) {
 	info := ClientInfoWithoutID{
@@ -1084,11 +1039,7 @@ func TestConnectWithContextTimeout(t *testing.T) {
 	}
 }
 
-// TestConnectBuildsCorrectURL verifies that Connect builds URL with correct query parameter.
-func TestConnectBuildsCorrectURL(t *testing.T) {
-	// We can't easily test the actual connection without a mock server,
-	// but we can verify the URL building logic by checking the encoded info format.
-
+func TestBuildSignalingURL_EncodesClientInfoAndPreservesQuery(t *testing.T) {
 	info := ClientInfoWithoutID{
 		Alias:       "Test Device",
 		Version:     "2.3",
@@ -1097,35 +1048,28 @@ func TestConnectBuildsCorrectURL(t *testing.T) {
 		Token:       "abc123",
 	}
 
-	// Marshal and encode as the function does
-	infoJSON, err := json.Marshal(info)
+	built, err := buildSignalingURL("wss://example.test/connect?existing=value", info)
 	if err != nil {
-		t.Fatalf("Failed to marshal: %v", err)
+		t.Fatal(err)
 	}
-
-	encoded := base64.RawURLEncoding.EncodeToString(infoJSON)
-
-	// Verify the encoded string is URL-safe
-	if strings.Contains(encoded, "+") || strings.Contains(encoded, "/") || strings.Contains(encoded, "=") {
-		t.Errorf("Encoded info is not URL-safe: %s", encoded)
+	parsedURL, err := url.Parse(built)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// Verify we can decode it back
+	if got := parsedURL.Query().Get("existing"); got != "value" {
+		t.Fatalf("existing query value = %q; want value", got)
+	}
+	encoded := parsedURL.Query().Get("d")
 	decoded, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
-		t.Fatalf("Failed to decode: %v", err)
+		t.Fatalf("decode client info: %v", err)
 	}
-
-	var parsedInfo ClientInfoWithoutID
-	if err := json.Unmarshal(decoded, &parsedInfo); err != nil {
-		t.Fatalf("Failed to unmarshal: %v", err)
+	var got ClientInfoWithoutID
+	if err := json.Unmarshal(decoded, &got); err != nil {
+		t.Fatalf("unmarshal client info: %v", err)
 	}
-
-	if parsedInfo.Alias != info.Alias {
-		t.Errorf("Alias = %q; want %q", parsedInfo.Alias, info.Alias)
-	}
-	if parsedInfo.Token != info.Token {
-		t.Errorf("Token = %q; want %q", parsedInfo.Token, info.Token)
+	if got != info {
+		t.Fatalf("decoded client info = %+v; want %+v", got, info)
 	}
 }
 
@@ -1134,67 +1078,48 @@ func TestConnectBuildsCorrectURL(t *testing.T) {
 // These tests verify the fix for goroutine leaks in SetTokenGenerator.
 // =============================================================================
 
-// TestSetTokenGeneratorMultipleCallsSpawnsMultipleGoroutines tests goroutine spawn prevention.
-// EXPECTED TO FAIL with race detector: Race between SetTokenGenerator writing and goroutine reading.
-// After fix: Should use atomic.Bool to track if goroutine is started and prevent multiple spawns.
-func TestSetTokenGeneratorMultipleCallsSpawnsMultipleGoroutines(t *testing.T) {
-	// Create a minimal client for testing (without actual connection)
+func TestSetTokenGenerator_ConcurrentCallsAreRaceFree(t *testing.T) {
 	client := &SignalingClient{
 		done:     make(chan struct{}),
 		onAnswer: make(map[string]answerCallback),
 	}
+	generator := func() (string, error) { return "token", nil }
 
-	generator := func() (string, error) {
-		return "token", nil
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client.SetTokenGenerator(generator)
+		}()
 	}
-
-	// Call SetTokenGenerator multiple times
-	// BUG: Each call spawns a new goroutine without checking if one is already running
-	// This also causes a data race between writing tokenGenerator and reading it in the goroutine
-	client.SetTokenGenerator(generator)
-	client.SetTokenGenerator(generator)
-	client.SetTokenGenerator(generator)
-
-	// Close the done channel to stop goroutines (don't call Close() as conn is nil)
-	close(client.done)
-
-	// Give goroutines time to exit
-	time.Sleep(50 * time.Millisecond)
-
-	// After fix:
-	// 1. Should have refreshStarted atomic.Bool to prevent multiple goroutines
-	// 2. The data race on tokenGenerator should be fixed
-	// Run with -race flag to verify the race is detected
-	t.Log("Test completed - run with -race flag to detect data races")
+	wg.Wait()
+	if !client.refreshStarted.Load() {
+		t.Fatal("token refresh loop was not marked as started")
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
-// TestSetTokenGeneratorCloseRace tests the close race condition.
-// EXPECTED TO FAIL with race detector: Race between SetTokenGenerator starting goroutine and Close() closing done channel.
-func TestSetTokenGeneratorCloseRace(t *testing.T) {
-	// Run multiple iterations to increase chance of hitting race
-	for i := 0; i < 100; i++ {
+func TestSetTokenGenerator_ConcurrentWithCloseIsRaceFree(t *testing.T) {
+	generator := func() (string, error) { return "token", nil }
+	for range 100 {
 		client := &SignalingClient{
 			done:     make(chan struct{}),
 			onAnswer: make(map[string]answerCallback),
 		}
-
-		generator := func() (string, error) {
-			return "token", nil
-		}
-
-		// Race: SetTokenGenerator spawns goroutine while we close done channel
+		var wg sync.WaitGroup
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			client.SetTokenGenerator(generator)
 		}()
-
-		// Close done channel immediately - may race with goroutine startup
-		// (don't use Close() method since conn is nil)
-		close(client.done)
+		if err := client.Close(); err != nil {
+			t.Fatal(err)
+		}
+		wg.Wait()
 	}
-
-	// The race detector (-race flag) should catch the race condition if it exists.
-	// This test is about detecting the race, not about a specific assertion.
-	t.Log("Race condition test completed - run with -race flag to detect data races")
 }
 
 // =============================================================================
@@ -1203,7 +1128,6 @@ func TestSetTokenGeneratorCloseRace(t *testing.T) {
 // =============================================================================
 
 // TestOnAnswerCallbackLeak tests that callbacks are cleaned up on close.
-// EXPECTED TO FAIL: Callbacks registered via OnAnswer are never cleaned up if answer doesn't arrive.
 func TestOnAnswerCallbackLeak(t *testing.T) {
 	client := &SignalingClient{
 		done:     make(chan struct{}),
@@ -1231,53 +1155,13 @@ func TestOnAnswerCallbackLeak(t *testing.T) {
 	// This triggers the callback cleanup
 	_ = client.Close()
 
-	// After fix: Close should clear all pending callbacks
-	// Without fix: Callbacks remain in memory forever
+	// Close should clear all pending callbacks.
 	client.answerMu.Lock()
 	countAfter := len(client.onAnswer)
 	client.answerMu.Unlock()
 
-	// This assertion will FAIL without the fix (countAfter == 1000)
-	// After fix, countAfter should be 0
 	if countAfter != 0 {
 		t.Errorf("MEMORY LEAK: After Close(), expected 0 callbacks, got %d", countAfter)
-	}
-}
-
-// TestOnAnswerCallbackCancelMethod tests explicit callback cancellation.
-// This tests the CancelOnAnswer method that should be added.
-func TestOnAnswerCallbackCancelMethod(t *testing.T) {
-	client := &SignalingClient{
-		done:     make(chan struct{}),
-		onAnswer: make(map[string]answerCallback),
-	}
-
-	// Register a callback
-	sessionID := "test-session"
-	client.OnAnswer(sessionID, func(msg WsServerMessage) {})
-
-	// Verify it's registered
-	client.answerMu.Lock()
-	_, exists := client.onAnswer[sessionID]
-	client.answerMu.Unlock()
-
-	if !exists {
-		t.Error("Callback should be registered")
-	}
-
-	// After fix: CancelOnAnswer should remove the callback
-	// For now, manually delete to show what the fix should do
-	client.answerMu.Lock()
-	delete(client.onAnswer, sessionID)
-	client.answerMu.Unlock()
-
-	// Verify it's removed
-	client.answerMu.Lock()
-	_, existsAfter := client.onAnswer[sessionID]
-	client.answerMu.Unlock()
-
-	if existsAfter {
-		t.Error("Callback should be removed after cancel")
 	}
 }
 

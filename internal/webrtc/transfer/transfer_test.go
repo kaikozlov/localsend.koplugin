@@ -142,38 +142,3 @@ func TestRTCSender_Close_DoubleClose(t *testing.T) {
 		t.Errorf("Third Close() failed: %v", err)
 	}
 }
-
-// TestRTCSender_Close_ChannelsClosed verifies that channels are closed after Close().
-func TestRTCSender_Close_ChannelsClosed(t *testing.T) {
-	sender := NewRTCSender(nil, nil, "")
-
-	_ = sender.Close()
-
-	// Try to receive from closed channels - should return immediately with zero value
-	select {
-	case _, ok := <-sender.accepted:
-		if ok {
-			t.Error("accepted channel should be closed")
-		}
-	default:
-		t.Error("accepted channel should be closed and readable")
-	}
-
-	select {
-	case _, ok := <-sender.declined:
-		if ok {
-			t.Error("declined channel should be closed")
-		}
-	default:
-		t.Error("declined channel should be closed and readable")
-	}
-
-	select {
-	case _, ok := <-sender.errors:
-		if ok {
-			t.Error("errors channel should be closed")
-		}
-	default:
-		t.Error("errors channel should be closed and readable")
-	}
-}

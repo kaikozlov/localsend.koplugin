@@ -132,36 +132,6 @@ describe("Certificate Management", function()
     end)
 
     describe("restart", function()
-        it("stops server then starts when running", function()
-            local instance = helper.create_instance()
-
-            local stop_called = false
-            local start_called = false
-            local stop_called_first = false
-
-            instance.isRunning = function()
-                return true
-            end
-            instance.stopServer = function(self, options)
-                stop_called = true
-                if not start_called then
-                    stop_called_first = true
-                end
-                if options and options.callback then
-                    options.callback(true)
-                end
-            end
-            instance.start = function()
-                start_called = true
-            end
-
-            instance:restart()
-
-            assert.is_true(stop_called, "Should call stopServer")
-            assert.is_true(start_called, "Should call start")
-            assert.is_true(stop_called_first, "Should stop before starting")
-        end)
-
         it("only starts when not running", function()
             local instance = helper.create_instance()
 

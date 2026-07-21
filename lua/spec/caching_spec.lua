@@ -80,10 +80,8 @@ describe("LocalSend State Caching", function()
     end)
 
     describe("cache invalidation on state changes", function()
-        it("start() should update cache after successful startup", function()
+        it("start() should reconcile cache when server is already running", function()
             local instance = helper.create_instance()
-
-            -- Track _updateCache calls after instance creation
             local update_cache_calls = 0
             local original_updateCache = instance._updateCache
             instance._updateCache = function(self)
@@ -91,22 +89,13 @@ describe("LocalSend State Caching", function()
                 original_updateCache(self)
             end
 
-            -- Test the "server already running" path which is simpler to test
-            -- This path calls _updateCache when taking over polling
-            local isRunning_count = 0
             instance.isRunning = function()
-                isRunning_count = isRunning_count + 1
-                return true -- Server already running
+                return true
             end
-
-            -- Reset counter before test
-            update_cache_calls = 0
 
             instance:start()
 
-            -- When server is already running, start() should take over polling
-            -- but doesn't call _updateCache (only on fresh start)
-            -- Let's test the cache values are correct instead
+            assert.equal(1, update_cache_calls, "start should reconcile the cached state")
             assert.is_true(instance._cached_running, "Cache should reflect running state after start()")
         end)
 

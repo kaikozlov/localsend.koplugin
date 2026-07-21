@@ -1,13 +1,11 @@
 package send
 
 import (
-	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -1111,133 +1109,5 @@ func TestForwardSender_PreUploadRejectsOversizedResponse(t *testing.T) {
 	sender.SetRemotePort(port)
 	if err := sender.preUploadReq(); err == nil {
 		t.Fatal("oversized pre-upload response was accepted")
-	}
-}
-
-// =============================================================================
-// Certificate Logging Tests (ReverseSender)
-// These tests verify that the correct log message is shown when loading or
-// generating TLS certificates in rvsend.go.
-// =============================================================================
-
-// captureLogs temporarily redirects slog output to capture log messages
-func captureLogs(t *testing.T) (*bytes.Buffer, func()) {
-	t.Helper()
-	var buf bytes.Buffer
-	handler := slog.NewTextHandler(&buf, nil)
-	oldLogger := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	return &buf, func() {
-		slog.SetDefault(oldLogger)
-	}
-}
-
-// TestReverseSender_CertificateLoggingGenerating verifies "Generating" is logged when certs don't exist
-func TestReverseSender_CertificateLoggingGenerating(t *testing.T) {
-	// Create a temp directory for certs
-	tmpDir := t.TempDir()
-	certDir := filepath.Join(tmpDir, "certs")
-	if err := os.MkdirAll(certDir, 0700); err != nil {
-		t.Fatalf("failed to create cert dir: %v", err)
-	}
-
-	privKeyFile := filepath.Join(certDir, "server.key.pem")
-	certFile := filepath.Join(certDir, "server.crt")
-
-	// Capture logs
-	buf, restore := captureLogs(t)
-	defer restore()
-
-	// Simulate the logic from Init()
-	_, keyErr := os.Stat(privKeyFile)
-	_, certErr := os.Stat(certFile)
-	if keyErr == nil && certErr == nil {
-		slog.Info("Loading https certificate")
-	} else {
-		slog.Info("Generating https certificate")
-	}
-
-	logOutput := buf.String()
-	if !strings.Contains(logOutput, "Generating https certificate") {
-		t.Errorf("expected log to contain 'Generating https certificate', got: %s", logOutput)
-	}
-	if strings.Contains(logOutput, "Loading https certificate") {
-		t.Errorf("unexpected 'Loading https certificate' in log: %s", logOutput)
-	}
-}
-
-// TestReverseSender_CertificateLoggingLoading verifies "Loading" is logged when certs exist
-func TestReverseSender_CertificateLoggingLoading(t *testing.T) {
-	// Create a temp directory for certs
-	tmpDir := t.TempDir()
-	certDir := filepath.Join(tmpDir, "certs")
-	if err := os.MkdirAll(certDir, 0700); err != nil {
-		t.Fatalf("failed to create cert dir: %v", err)
-	}
-
-	privKeyFile := filepath.Join(certDir, "server.key.pem")
-	certFile := filepath.Join(certDir, "server.crt")
-
-	// Generate certs first
-	_, err := lsutils.GenAndSaveTLScert(privKeyFile, certFile)
-	if err != nil {
-		t.Fatalf("failed to generate certs: %v", err)
-	}
-
-	// Capture logs
-	buf, restore := captureLogs(t)
-	defer restore()
-
-	// Simulate the logic from Init()
-	_, keyErr := os.Stat(privKeyFile)
-	_, certErr := os.Stat(certFile)
-	if keyErr == nil && certErr == nil {
-		slog.Info("Loading https certificate")
-	} else {
-		slog.Info("Generating https certificate")
-	}
-
-	logOutput := buf.String()
-	if !strings.Contains(logOutput, "Loading https certificate") {
-		t.Errorf("expected log to contain 'Loading https certificate', got: %s", logOutput)
-	}
-	if strings.Contains(logOutput, "Generating https certificate") {
-		t.Errorf("unexpected 'Generating https certificate' in log: %s", logOutput)
-	}
-}
-
-// TestReverseSender_CertificateLoggingPartialMissing verifies "Generating" is logged when only one cert file exists
-func TestReverseSender_CertificateLoggingPartialMissing(t *testing.T) {
-	// Create a temp directory for certs
-	tmpDir := t.TempDir()
-	certDir := filepath.Join(tmpDir, "certs")
-	if err := os.MkdirAll(certDir, 0700); err != nil {
-		t.Fatalf("failed to create cert dir: %v", err)
-	}
-
-	privKeyFile := filepath.Join(certDir, "server.key.pem")
-	certFile := filepath.Join(certDir, "server.crt")
-
-	// Create only the private key, not the cert
-	if err := os.WriteFile(privKeyFile, []byte("dummy"), 0600); err != nil {
-		t.Fatalf("failed to create dummy key: %v", err)
-	}
-
-	// Capture logs
-	buf, restore := captureLogs(t)
-	defer restore()
-
-	// Simulate the logic from Init()
-	_, keyErr := os.Stat(privKeyFile)
-	_, certErr := os.Stat(certFile)
-	if keyErr == nil && certErr == nil {
-		slog.Info("Loading https certificate")
-	} else {
-		slog.Info("Generating https certificate")
-	}
-
-	logOutput := buf.String()
-	if !strings.Contains(logOutput, "Generating https certificate") {
-		t.Errorf("expected log to contain 'Generating https certificate' when cert is missing, got: %s", logOutput)
 	}
 }

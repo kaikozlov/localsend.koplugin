@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/localsend/constants"
-	"localsend-cli/internal/utils"
 )
 
 // makeHasherMap creates an empty hash map for testing
@@ -213,69 +213,6 @@ func TestGetSaveDir_PathTraversal(t *testing.T) {
 					"  Returned: %q\n"+
 					"  Base dir: %q",
 					tt.filename, result, tmpDir)
-			}
-		})
-	}
-}
-
-// TestCreateUniqueFile_PathTraversal_CallerMustSanitize documents that CreateUniqueFile
-// does NOT sanitize filenames - the caller (prepareFilesForReceive) is responsible.
-// This test ensures we understand this API contract.
-func TestCreateUniqueFile_PathTraversal_CallerMustSanitize(t *testing.T) {
-	tmpDir := t.TempDir()
-	saveDir := filepath.Join(tmpDir, "downloads")
-	if err := os.MkdirAll(saveDir, 0755); err != nil {
-		t.Fatalf("Failed to create save dir: %v", err)
-	}
-
-	// Create a sensitive file
-	sensitiveDir := filepath.Join(tmpDir, "sensitive")
-	if err := os.MkdirAll(sensitiveDir, 0755); err != nil {
-		t.Fatalf("Failed to create sensitive dir: %v", err)
-	}
-	sensitiveFile := filepath.Join(sensitiveDir, "secret.txt")
-	if err := os.WriteFile(sensitiveFile, []byte("ORIGINAL"), 0644); err != nil {
-		t.Fatalf("Failed to create sensitive file: %v", err)
-	}
-
-	traversalFilenames := []string{
-		"../sensitive/secret.txt",
-		"../../sensitive/secret.txt",
-		"foo/../../../sensitive/secret.txt",
-	}
-
-	for _, filename := range traversalFilenames {
-		t.Run(filename, func(t *testing.T) {
-			// NOTE: This test demonstrates the vulnerability in CreateUniqueFile
-			// which does NOT sanitize the filename.
-			// The caller (prepareFilesForReceive) should sanitize before calling.
-			file, path, err := utils.CreateUniqueFile(saveDir, filename)
-			if err != nil {
-				// Error is acceptable - means we couldn't create the file
-				t.Logf("CreateUniqueFile returned error (acceptable): %v", err)
-				return
-			}
-			defer func() {
-				_ = file.Close()
-				_ = os.Remove(path)
-			}()
-
-			// Check if the file was created outside saveDir
-			relPath, err := filepath.Rel(saveDir, path)
-			if err != nil {
-				t.Errorf("Failed to compute relative path: %v", err)
-				return
-			}
-
-			if strings.HasPrefix(relPath, "..") {
-				// This is expected behavior - CreateUniqueFile does NOT sanitize.
-				// The caller must sanitize. This test documents this API contract.
-				t.Logf("CreateUniqueFile allows path traversal (by design - caller must sanitize):\n"+
-					"  Filename: %q\n"+
-					"  Created at: %q\n"+
-					"  Save directory: %q\n"+
-					"  NOTE: prepareFilesForReceive sanitizes with filepath.Base() before calling",
-					filename, path, saveDir)
 			}
 		})
 	}
@@ -998,126 +935,58 @@ func TestRTCReceiver_MaxFilesPerSession_BoundaryValue(t *testing.T) {
 // PIN Verification Security Tests
 // =============================================================================
 
-// TestRTCReceiver_handlePin_CorrectPIN_ReturnsOK verifies that a correct PIN
-// returns status "OK" and transitions state to stateWaitFileList.
-func TestRTCReceiver_handlePin_CorrectPIN_ReturnsOK(t *testing.T) {
-	r := &RTCReceiver{
-		pin:         "123456",
-		pinAttempts: 0,
-		state:       stateWaitPin,
-		peer:        &PeerConnection{}, // Can't be nil, but we override SendJSON behavior
-		fileTokens:  make(map[string]string),
-		fileWriters: make(map[string]*os.File),
-		filePaths:   make(map[string]string),
-		fileHashers: makeHasherMap(),
-	}
+func newPINTestReceiver(t *testing.T) *RTCReceiver {
+	t.Helper()
+	r := NewRTCReceiver(nil, nil, "123456", t.TempDir())
+	r.state = stateWaitPin
+	r.peer = &PeerConnection{}
+	return r
+}
 
-	// Test the PIN verification logic directly
-	pinMsg := &RTCPinMessage{Pin: "123456"}
+func TestRTCReceiver_handlePin_CorrectPIN_AdvancesToFileList(t *testing.T) {
+	r := newPINTestReceiver(t)
 
-	// Simulate the PIN verification logic directly
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	// Use constant-time comparison (same as handlePin)
-	if pinMsg.Pin == r.pin {
-		r.state = stateWaitFileList
-	}
+	r.handlePin(&RTCPinMessage{Pin: "123456"}, "pin")
 
 	if r.state != stateWaitFileList {
-		t.Errorf("Expected state to be stateWaitFileList after correct PIN, got %d", r.state)
+		t.Fatalf("state = %d; want stateWaitFileList", r.state)
+	}
+	if r.pinAttempts != 0 {
+		t.Fatalf("pinAttempts = %d; want 0", r.pinAttempts)
 	}
 }
 
-// TestRTCReceiver_handlePin_IncorrectPIN_IncrementsAttempts verifies that
-// an incorrect PIN increments the attempt counter.
 func TestRTCReceiver_handlePin_IncorrectPIN_IncrementsAttempts(t *testing.T) {
-	r := &RTCReceiver{
-		pin:         "123456",
-		pinAttempts: 0,
-		state:       stateWaitPin,
-		fileTokens:  make(map[string]string),
-		fileWriters: make(map[string]*os.File),
-		filePaths:   make(map[string]string),
-		fileHashers: makeHasherMap(),
-	}
+	r := newPINTestReceiver(t)
 
-	// Simulate incorrect PIN attempts
-	incorrectPIN := "wrong1"
-	if incorrectPIN == r.pin {
-		t.Fatal("Test setup error: incorrect PIN matches correct PIN")
-	}
+	r.handlePin(&RTCPinMessage{Pin: "wrong"}, "pin")
 
-	r.pinAttempts++
 	if r.pinAttempts != 1 {
-		t.Errorf("Expected pinAttempts to be 1 after first incorrect PIN, got %d", r.pinAttempts)
+		t.Fatalf("pinAttempts = %d; want 1", r.pinAttempts)
 	}
-
-	// State should remain at stateWaitPin
 	if r.state != stateWaitPin {
-		t.Errorf("Expected state to remain stateWaitPin, got %d", r.state)
+		t.Fatalf("state = %d; want stateWaitPin", r.state)
 	}
 }
 
-// TestRTCReceiver_handlePin_RateLimiting_BlocksAfterThreeAttempts verifies
-// that after maxPINAttempts (3) incorrect attempts, further attempts are blocked.
-func TestRTCReceiver_handlePin_RateLimiting_BlocksAfterThreeAttempts(t *testing.T) {
-	r := &RTCReceiver{
-		pin:         "123456",
-		pinAttempts: 0,
-		state:       stateWaitPin,
-		fileTokens:  make(map[string]string),
-		fileWriters: make(map[string]*os.File),
-		filePaths:   make(map[string]string),
-		fileHashers: makeHasherMap(),
-	}
+func TestRTCReceiver_handlePin_MaxAttempts_BlocksPeerAndClosesConnection(t *testing.T) {
+	ClearBlockedPeers()
+	t.Cleanup(ClearBlockedPeers)
 
-	// Simulate maxPINAttempts incorrect attempts
-	for i := 0; i < maxPINAttempts; i++ {
-		r.pinAttempts++
+	r := newPINTestReceiver(t)
+	r.senderSignalingID = "blocked-test-peer"
+	for range maxPINAttempts {
+		r.handlePin(&RTCPinMessage{Pin: "wrong"}, "pin")
 	}
 
 	if r.pinAttempts != maxPINAttempts {
-		t.Errorf("Expected pinAttempts to be %d, got %d", maxPINAttempts, r.pinAttempts)
+		t.Fatalf("pinAttempts = %d; want %d", r.pinAttempts, maxPINAttempts)
 	}
-
-	// After max attempts, connection should be closed
-	shouldBlock := r.pinAttempts >= maxPINAttempts
-	if !shouldBlock {
-		t.Error("Expected blocking after max PIN attempts")
+	if !isPeerBlocked(r.senderSignalingID) {
+		t.Fatal("peer was not blocked after maximum PIN attempts")
 	}
-}
-
-// TestRTCReceiver_PINConstantTimeCompare verifies that PIN comparison uses
-// constant-time comparison to prevent timing attacks.
-func TestRTCReceiver_PINConstantTimeCompare(t *testing.T) {
-	// This test verifies the logic exists by checking the code handles
-	// PIN comparison through crypto/subtle.ConstantTimeCompare
-	// The actual timing attack resistance is architectural, but we can
-	// verify the comparison logic is correct.
-
-	correctPIN := "123456"
-	testCases := []struct {
-		name     string
-		inputPIN string
-		expected bool
-	}{
-		{"exact match", "123456", true},
-		{"wrong PIN", "654321", false},
-		{"prefix", "12345", false},
-		{"suffix", "234567", false},
-		{"empty", "", false},
-		{"partial match", "123000", false},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Using subtle.ConstantTimeCompare like the actual code
-			result := len(tc.inputPIN) == len(correctPIN) && tc.inputPIN == correctPIN
-			if result != tc.expected {
-				t.Errorf("PIN comparison for %q: got %v, want %v", tc.inputPIN, result, tc.expected)
-			}
-		})
+	if r.peer != nil {
+		t.Fatal("peer connection was not detached after maximum PIN attempts")
 	}
 }
 
@@ -1132,77 +1001,81 @@ func TestRTCReceiver_maxPINAttempts_IsThree(t *testing.T) {
 // Token Exchange Security Tests
 // =============================================================================
 
-// TestRTCReceiver_TokenResponse_PINRequired_WhenPINSet verifies that when
-// a PIN is configured, the token response has status "PIN_REQUIRED".
-func TestRTCReceiver_TokenResponse_PINRequired_WhenPINSet(t *testing.T) {
-	r := &RTCReceiver{
-		pin:   "123456", // PIN is set
-		state: stateWaitToken,
+func newTokenTestReceiver(t *testing.T, pin string) (*RTCReceiver, *crypto.SigningKey) {
+	t.Helper()
+	receiverKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// The expected status based on PIN configuration
-	expectedStatus := "PIN_REQUIRED"
-	var actualStatus string
-	if r.pin != "" {
-		actualStatus = "PIN_REQUIRED"
-	} else {
-		actualStatus = "OK"
+	senderKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
 	}
+	r := NewRTCReceiver(nil, receiverKey, pin, t.TempDir())
+	r.peer = &PeerConnection{}
+	r.state = stateWaitToken
+	r.finalNonce = []byte("receiver-token-test-nonce")
+	r.senderPublicKey = senderKey.ToVerifyingKey()
+	return r, senderKey
+}
 
-	if actualStatus != expectedStatus {
-		t.Errorf("Expected status %q when PIN is set, got %q", expectedStatus, actualStatus)
+func TestRTCReceiver_handleToken_TransitionsAccordingToPIN(t *testing.T) {
+	tests := []struct {
+		name      string
+		pin       string
+		wantState int
+	}{
+		{name: "PIN required", pin: "123456", wantState: stateWaitPin},
+		{name: "no PIN", wantState: stateWaitFileList},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, senderKey := newTokenTestReceiver(t, tt.pin)
+			token, err := senderKey.GenerateTokenWithNonce(r.finalNonce)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			r.handleToken(&RTCTokenRequest{Token: token}, "token_request")
+
+			if r.state != tt.wantState {
+				t.Fatalf("state = %d; want %d", r.state, tt.wantState)
+			}
+			if r.senderToken != token {
+				t.Fatal("handleToken did not retain the sender token")
+			}
+		})
 	}
 }
 
-// TestRTCReceiver_TokenResponse_OK_WhenNoPIN verifies that when no PIN
-// is configured, the token response has status "OK".
-func TestRTCReceiver_TokenResponse_OK_WhenNoPIN(t *testing.T) {
-	r := &RTCReceiver{
-		pin:   "", // No PIN
-		state: stateWaitToken,
+func TestRTCReceiver_handleToken_InvalidSignatureHonorsStrictMode(t *testing.T) {
+	tests := []struct {
+		name      string
+		strict    bool
+		wantState int
+	}{
+		{name: "strict rejects", strict: true, wantState: stateWaitToken},
+		{name: "lenient continues", strict: false, wantState: stateWaitFileList},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r, _ := newTokenTestReceiver(t, "")
+			untrustedKey, err := crypto.GenerateKeyPair()
+			if err != nil {
+				t.Fatal(err)
+			}
+			token, err := untrustedKey.GenerateTokenWithNonce(r.finalNonce)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r.strictVerification = tt.strict
 
-	expectedStatus := "OK"
-	var actualStatus string
-	if r.pin != "" {
-		actualStatus = "PIN_REQUIRED"
-	} else {
-		actualStatus = "OK"
-	}
+			r.handleToken(&RTCTokenRequest{Token: token}, "token_request")
 
-	if actualStatus != expectedStatus {
-		t.Errorf("Expected status %q when no PIN, got %q", expectedStatus, actualStatus)
-	}
-}
-
-// TestRTCReceiver_StrictVerification_RejectsInvalidSignature verifies that
-// in strict verification mode, invalid token signatures are rejected.
-func TestRTCReceiver_StrictVerification_RejectsInvalidSignature(t *testing.T) {
-	r := &RTCReceiver{
-		strictVerification: true,
-		state:              stateWaitToken,
-	}
-
-	// In strict mode with no sender public key, verification should be skipped
-	// But if we have a key and it fails, we should reject
-	if r.strictVerification {
-		// This verifies the flag is properly set
-		if !r.strictVerification {
-			t.Error("Expected strictVerification to be true")
-		}
-	}
-}
-
-// TestRTCReceiver_NonStrictMode_ContinuesDespiteInvalidSignature verifies that
-// in non-strict mode, invalid signatures log a warning but continue.
-func TestRTCReceiver_NonStrictMode_ContinuesDespiteInvalidSignature(t *testing.T) {
-	r := &RTCReceiver{
-		strictVerification: false,
-		state:              stateWaitToken,
-	}
-
-	if r.strictVerification {
-		t.Error("Expected strictVerification to be false")
+			if r.state != tt.wantState {
+				t.Fatalf("state = %d; want %d", r.state, tt.wantState)
+			}
+		})
 	}
 }
 
@@ -1210,92 +1083,61 @@ func TestRTCReceiver_NonStrictMode_ContinuesDespiteInvalidSignature(t *testing.T
 // Checksum Verification Tests
 // =============================================================================
 
-// TestRTCReceiver_ChecksumVerification_MatchingChecksum verifies that files
-// with matching checksums are accepted.
-func TestRTCReceiver_ChecksumVerification_MatchingChecksum(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create a test file
-	testContent := []byte("test file content for checksum verification")
-	testFile := filepath.Join(tmpDir, "checksum_test.txt")
-	if err := os.WriteFile(testFile, testContent, 0644); err != nil {
-		t.Fatalf("Failed to write test file: %v", err)
+func prepareChecksumTestFile(t *testing.T, checksum string, content []byte) (*RTCReceiver, string) {
+	t.Helper()
+	r := NewRTCReceiver(nil, nil, "", t.TempDir())
+	r.files = []RTCFileDto{{
+		ID:       "checksum-file",
+		FileName: "checksum.bin",
+		Size:     int64(len(content)),
+		SHA256:   checksum,
+	}}
+	tokens := r.prepareFilesForReceive([]string{"checksum-file"})
+	if !r.startReceivingFile(&RTCSendFileHeader{ID: "checksum-file", Token: tokens["checksum-file"]}) {
+		t.Fatal("startReceivingFile rejected prepared file")
 	}
+	path := r.filePaths["checksum-file"]
+	r.handleBinaryData(content)
+	return r, path
+}
 
-	// Calculate expected checksum
-	hasher := sha256.New()
-	hasher.Write(testContent)
-	expectedChecksum := hex.EncodeToString(hasher.Sum(nil))
+func TestRTCReceiver_finishCurrentFile_MatchingChecksumKeepsFile(t *testing.T) {
+	content := []byte("test file content for checksum verification")
+	sum := sha256.Sum256(content)
+	r, path := prepareChecksumTestFile(t, hex.EncodeToString(sum[:]), content)
+	callbackCalled := false
+	r.OnFileReceived(func(filename string, size int64, sender string) {
+		callbackCalled = true
+	})
 
-	// Verify checksum matches
-	actualHasher := sha256.New()
-	actualHasher.Write(testContent)
-	actualChecksum := hex.EncodeToString(actualHasher.Sum(nil))
+	r.finishCurrentFile()
 
-	if actualChecksum != expectedChecksum {
-		t.Errorf("Checksum mismatch: got %s, want %s", actualChecksum, expectedChecksum)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("matching file was not retained: %v", err)
+	}
+	if !callbackCalled {
+		t.Fatal("successful receive callback was not called")
 	}
 }
 
-// TestRTCReceiver_ChecksumVerification_MismatchDeletesFile verifies that files
-// with mismatched checksums are deleted.
-func TestRTCReceiver_ChecksumVerification_MismatchDeletesFile(t *testing.T) {
-	tmpDir := t.TempDir()
+func TestRTCReceiver_finishCurrentFile_MismatchedChecksumDeletesFile(t *testing.T) {
+	content := []byte("actual content")
+	r, path := prepareChecksumTestFile(t, strings.Repeat("0", sha256.Size*2), content)
 
-	// Create a test file
-	testFile := filepath.Join(tmpDir, "bad_checksum.txt")
-	if err := os.WriteFile(testFile, []byte("actual content"), 0644); err != nil {
-		t.Fatalf("Failed to write test file: %v", err)
-	}
+	r.finishCurrentFile()
 
-	// Calculate checksum of actual content
-	actualHasher := sha256.New()
-	actualHasher.Write([]byte("actual content"))
-	actualChecksum := hex.EncodeToString(actualHasher.Sum(nil))
-
-	// Expected checksum (different content)
-	expectedHasher := sha256.New()
-	expectedHasher.Write([]byte("different expected content"))
-	expectedChecksum := hex.EncodeToString(expectedHasher.Sum(nil))
-
-	// Verify checksums differ
-	if actualChecksum == expectedChecksum {
-		t.Fatal("Test setup error: checksums should not match")
-	}
-
-	// Simulate the deletion that would occur on checksum mismatch
-	if actualChecksum != expectedChecksum {
-		if err := os.Remove(testFile); err != nil {
-			t.Errorf("Failed to delete file with bad checksum: %v", err)
-		}
-	}
-
-	// Verify file was deleted
-	if _, err := os.Stat(testFile); !os.IsNotExist(err) {
-		t.Error("File should have been deleted after checksum mismatch")
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("mismatched file still exists; stat error = %v", err)
 	}
 }
 
-// TestRTCReceiver_ChecksumVerification_EmptyChecksum_Skips verifies that
-// files without a checksum in metadata skip verification.
-func TestRTCReceiver_ChecksumVerification_EmptyChecksum_Skips(t *testing.T) {
-	fileDto := RTCFileDto{
-		ID:       "test-id",
-		FileName: "test.txt",
-		Size:     100,
-		FileType: "text/plain",
-		SHA256:   "", // Empty checksum
-	}
+func TestRTCReceiver_finishCurrentFile_EmptyChecksumKeepsFile(t *testing.T) {
+	r, path := prepareChecksumTestFile(t, "", []byte("unchecked content"))
 
-	// Empty checksum should not trigger verification
-	if fileDto.SHA256 != "" {
-		t.Error("Expected empty checksum for skip test")
-	}
+	r.finishCurrentFile()
 
-	// No verification needed when checksum is empty
-	shouldVerify := fileDto.SHA256 != ""
-	if shouldVerify {
-		t.Error("Should not verify when checksum is empty")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("file without checksum was not retained: %v", err)
 	}
 }
 

@@ -1,8 +1,6 @@
 package recv
 
 import (
-	"bytes"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,8 +8,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	lsutils "localsend-cli/internal/localsend/utils"
 )
 
 // =============================================================================
@@ -20,8 +16,7 @@ import (
 // Run with -race flag to detect data races.
 // =============================================================================
 
-// TestSetPINRaceCondition tests concurrent PIN access.
-// EXPECTED TO FAIL with race detector: Race between SetPIN and reading expectedPin.
+// TestSetPINRaceCondition tests concurrent PIN access under the race detector.
 func TestSetPINRaceCondition(t *testing.T) {
 	fr := NewFileReceiver("test", "/tmp", false)
 
@@ -50,8 +45,7 @@ func TestSetPINRaceCondition(t *testing.T) {
 	t.Log("Race condition test completed - run with -race flag to detect data races")
 }
 
-// TestSetAllowedExtensionsRaceCondition tests concurrent extension list access.
-// EXPECTED TO FAIL with race detector: Race between SetAllowedExtensions and reading.
+// TestSetAllowedExtensionsRaceCondition tests concurrent extension list access under the race detector.
 func TestSetAllowedExtensionsRaceCondition(t *testing.T) {
 	fr := NewFileReceiver("test", "/tmp", false)
 
@@ -80,8 +74,7 @@ func TestSetAllowedExtensionsRaceCondition(t *testing.T) {
 	t.Log("Race condition test completed - run with -race flag to detect data races")
 }
 
-// TestSetTransferLogRaceCondition tests concurrent transfer log access.
-// EXPECTED TO FAIL with race detector: Race between SetTransferLog and LogTransfer.
+// TestSetTransferLogRaceCondition tests concurrent transfer log access under the race detector.
 func TestSetTransferLogRaceCondition(t *testing.T) {
 	fr := NewFileReceiver("test", "/tmp", false)
 
@@ -110,8 +103,7 @@ func TestSetTransferLogRaceCondition(t *testing.T) {
 	t.Log("Race condition test completed - run with -race flag to detect data races")
 }
 
-// TestSetExtensionRouterRaceCondition tests concurrent router access.
-// EXPECTED TO FAIL with race detector: Race between SetExtensionRouter and GetSaveDir.
+// TestSetExtensionRouterRaceCondition tests concurrent router access under the race detector.
 func TestSetExtensionRouterRaceCondition(t *testing.T) {
 	fr := NewFileReceiver("test", "/tmp", false)
 	router := NewExtensionRouter("/default")
@@ -141,8 +133,7 @@ func TestSetExtensionRouterRaceCondition(t *testing.T) {
 	t.Log("Race condition test completed - run with -race flag to detect data races")
 }
 
-// TestSetListenAddrRaceCondition tests concurrent listen address access.
-// EXPECTED TO FAIL with race detector: Race between SetListenAddr and ListenAddr.
+// TestSetListenAddrRaceCondition tests concurrent listen address access under the race detector.
 func TestSetListenAddrRaceCondition(t *testing.T) {
 	fr := NewFileReceiver("test", "/tmp", false)
 
@@ -219,134 +210,6 @@ func TestConcurrentConfigurationChanges(t *testing.T) {
 
 	wg.Wait()
 	t.Log("Concurrent configuration test completed - run with -race flag to detect data races")
-}
-
-// =============================================================================
-// Certificate Logging Tests
-// These tests verify that the correct log message is shown when loading or
-// generating TLS certificates.
-// =============================================================================
-
-// captureLogs temporarily redirects slog output to capture log messages
-func captureLogs(t *testing.T) (*bytes.Buffer, func()) {
-	t.Helper()
-	var buf bytes.Buffer
-	handler := slog.NewTextHandler(&buf, nil)
-	oldLogger := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	return &buf, func() {
-		slog.SetDefault(oldLogger)
-	}
-}
-
-// TestCertificateLoggingGenerating verifies that "Generating" is logged when certs don't exist
-func TestCertificateLoggingGenerating(t *testing.T) {
-	// Create a temp directory for certs
-	tmpDir := t.TempDir()
-	certDir := filepath.Join(tmpDir, "certs")
-	if err := os.MkdirAll(certDir, 0700); err != nil {
-		t.Fatalf("failed to create cert dir: %v", err)
-	}
-
-	privKeyFile := filepath.Join(certDir, "server.key.pem")
-	certFile := filepath.Join(certDir, "server.crt")
-
-	// Capture logs
-	buf, restore := captureLogs(t)
-	defer restore()
-
-	// Simulate the logic from Init()
-	_, keyErr := os.Stat(privKeyFile)
-	_, certErr := os.Stat(certFile)
-	if keyErr == nil && certErr == nil {
-		slog.Info("Loading https certificate")
-	} else {
-		slog.Info("Generating https certificate")
-	}
-
-	logOutput := buf.String()
-	if !strings.Contains(logOutput, "Generating https certificate") {
-		t.Errorf("expected log to contain 'Generating https certificate', got: %s", logOutput)
-	}
-	if strings.Contains(logOutput, "Loading https certificate") {
-		t.Errorf("unexpected 'Loading https certificate' in log: %s", logOutput)
-	}
-}
-
-// TestCertificateLoggingLoading verifies that "Loading" is logged when certs exist
-func TestCertificateLoggingLoading(t *testing.T) {
-	// Create a temp directory for certs
-	tmpDir := t.TempDir()
-	certDir := filepath.Join(tmpDir, "certs")
-	if err := os.MkdirAll(certDir, 0700); err != nil {
-		t.Fatalf("failed to create cert dir: %v", err)
-	}
-
-	privKeyFile := filepath.Join(certDir, "server.key.pem")
-	certFile := filepath.Join(certDir, "server.crt")
-
-	// Generate certs first
-	_, err := lsutils.GenAndSaveTLScert(privKeyFile, certFile)
-	if err != nil {
-		t.Fatalf("failed to generate certs: %v", err)
-	}
-
-	// Capture logs
-	buf, restore := captureLogs(t)
-	defer restore()
-
-	// Simulate the logic from Init()
-	_, keyErr := os.Stat(privKeyFile)
-	_, certErr := os.Stat(certFile)
-	if keyErr == nil && certErr == nil {
-		slog.Info("Loading https certificate")
-	} else {
-		slog.Info("Generating https certificate")
-	}
-
-	logOutput := buf.String()
-	if !strings.Contains(logOutput, "Loading https certificate") {
-		t.Errorf("expected log to contain 'Loading https certificate', got: %s", logOutput)
-	}
-	if strings.Contains(logOutput, "Generating https certificate") {
-		t.Errorf("unexpected 'Generating https certificate' in log: %s", logOutput)
-	}
-}
-
-// TestCertificateLoggingPartialMissing verifies that "Generating" is logged when only one cert file exists
-func TestCertificateLoggingPartialMissing(t *testing.T) {
-	// Create a temp directory for certs
-	tmpDir := t.TempDir()
-	certDir := filepath.Join(tmpDir, "certs")
-	if err := os.MkdirAll(certDir, 0700); err != nil {
-		t.Fatalf("failed to create cert dir: %v", err)
-	}
-
-	privKeyFile := filepath.Join(certDir, "server.key.pem")
-	certFile := filepath.Join(certDir, "server.crt")
-
-	// Create only the cert file, not the private key
-	if err := os.WriteFile(certFile, []byte("dummy"), 0644); err != nil {
-		t.Fatalf("failed to create dummy cert: %v", err)
-	}
-
-	// Capture logs
-	buf, restore := captureLogs(t)
-	defer restore()
-
-	// Simulate the logic from Init()
-	_, keyErr := os.Stat(privKeyFile)
-	_, certErr := os.Stat(certFile)
-	if keyErr == nil && certErr == nil {
-		slog.Info("Loading https certificate")
-	} else {
-		slog.Info("Generating https certificate")
-	}
-
-	logOutput := buf.String()
-	if !strings.Contains(logOutput, "Generating https certificate") {
-		t.Errorf("expected log to contain 'Generating https certificate' when key is missing, got: %s", logOutput)
-	}
 }
 
 // =============================================================================

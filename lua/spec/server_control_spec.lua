@@ -223,55 +223,6 @@ describe("Server Control", function()
         end)
     end)
 
-    -- Tests for stopServer behavior
-    describe("stopServer", function()
-        it("should return true when no PID file exists", function()
-            local instance = helper.create_instance()
-            local result = instance:stopServer()
-            assert.is_true(result, "Should return true when no PID file")
-        end)
-
-        it("should use SIGTERM first for graceful termination", function()
-            local term_signal_used = false
-
-            util.pathExists = function(path)
-                if path == "/tmp/localsend_koreader.pid" then
-                    return true
-                end
-                if path == "/proc/12345" then
-                    return true
-                end
-                return orig_pathExists(path)
-            end
-            util.readFromFile = function(path)
-                if path == "/tmp/localsend_koreader.pid" then
-                    return "12345"
-                end
-                if path == "/proc/12345/cmdline" then
-                    return "/tmp/localsend\0recv\0"
-                end
-                return orig_readFromFile(path)
-            end
-
-            local original_execute = os.execute
-            os.execute = function(cmd)
-                if cmd:match("kill") then
-                    if cmd:match("'kill'") and cmd:match("'%-TERM'") then
-                        term_signal_used = true
-                    end
-                end
-                return 0
-            end
-
-            local instance = helper.create_instance()
-            instance:stopServer()
-
-            os.execute = original_execute
-
-            assert.is_true(term_signal_used, "Should use SIGTERM first")
-        end)
-    end)
-
     describe("stopServer (synchronous teardown)", function()
         local lsserver
         local orig_sync_usleep

@@ -207,17 +207,6 @@ func TestNewWebServer(t *testing.T) {
 	})
 }
 
-// TestListenWithTLS tests TLS listener selection
-func TestListenWithTLS(t *testing.T) {
-	// Note: We can't easily test actual listening without port conflicts
-	// This is a smoke test to verify the function exists
-	t.Run("function exists", func(t *testing.T) {
-		// ListenWithTLS is defined in utils.go and takes (*fiber.App, string, tls.Certificate, bool)
-		// Just verify it's exported and callable (actual test would require a free port)
-		_ = ListenWithTLS
-	})
-}
-
 // TestGetCertDir tests the certificate directory location
 // Verifies that certificates are stored next to the binary, not in /tmp
 func TestGetCertDir(t *testing.T) {

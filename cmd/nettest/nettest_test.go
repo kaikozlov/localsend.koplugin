@@ -70,41 +70,8 @@ func TestRun_LoopbackSucceedsInContainer(t *testing.T) {
 	}
 }
 
-// Registers arriving from loopback come from this host (e.g. another local
-// process), not from a LAN peer, and must not inflate the peer count.
-func TestRun_DoesNotCountLoopbackRegisters(t *testing.T) {
-	resCh := make(chan Result, 1)
-	go func() { resCh <- Run(2 * time.Second) }()
-
-	// Poll until the register listener is up, then register from 127.0.0.1.
-	body := []byte(`{"alias":"peer","version":"2.1","fingerprint":"TESTPEER-FP",` +
-		`"port":53317,"protocol":"http","announce":false}`)
-	url := fmt.Sprintf("http://127.0.0.1:%d/api/localsend/v2/register", constants.DefaultPort)
-	posted := false
-	for i := 0; i < 20 && !posted; i++ {
-		resp, err := http.Post(url, "application/json", bytes.NewReader(body))
-		if err == nil {
-			_ = resp.Body.Close()
-			posted = true
-		} else {
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
-	res := <-resCh
-	if res.BindError != "" {
-		t.Skipf("multicast unavailable in this environment: %s", res.BindError)
-	}
-	if !posted {
-		t.Fatal("could not reach nettest's register listener on the discovery port")
-	}
-	if res.RegisterPeers != 0 {
-		t.Errorf("RegisterPeers = %d, want 0 (loopback registers are not LAN peers)", res.RegisterPeers)
-	}
-}
-
-// The register listener itself must parse register POSTs and reject anything
-// else; peer filtering is tested separately via shouldCountPeer.
+// The register listener must parse register POSTs, reject anything else, and
+// expose the source address used by Run's peer filter.
 func TestRegisterListener_AcceptsOnlyRegisterPosts(t *testing.T) {
 	devInfo := models.NewDeviceInfo("nettest-test", "SELF-FP")
 	type seen struct{ fingerprint, alias, remoteIP string }
@@ -166,6 +133,9 @@ func TestRegisterListener_AcceptsOnlyRegisterPosts(t *testing.T) {
 	}
 	if got[0].remoteIP != "127.0.0.1" {
 		t.Errorf("recorded remoteIP = %q, want %q", got[0].remoteIP, "127.0.0.1")
+	}
+	if shouldCountPeer(got[0].fingerprint, got[0].remoteIP, "SELF-FP", map[string]bool{}) {
+		t.Error("loopback register should not count as a LAN peer")
 	}
 }
 

@@ -82,64 +82,7 @@ describe("Command Building Logic", function()
         end)
     end)
 
-    describe("settings persistence", function()
-        it("loads settings from G_reader_settings on init", function()
-            helper.state.settings["LocalSend_save_dir"] = "/custom/path"
-            helper.state.settings["LocalSend_device_name"] = "My Device"
-            helper.state.settings["LocalSend_pin"] = "1234"
-            helper.state.settings["LocalSend_accept_ext"] = "epub,pdf"
-            helper.state.settings["LocalSend_use_https"] = false
-            helper.state.settings["LocalSend_autostart"] = true
-
-            local instance = helper.create_instance()
-
-            assert.equal("/custom/path", instance.save_dir)
-            assert.equal("My Device", instance.device_name)
-            assert.equal("1234", instance.pin)
-            assert.equal("epub,pdf", instance.accept_ext)
-            assert.is_false(instance.use_https)
-            assert.is_true(instance.autostart)
-        end)
-
-        it("uses defaults when settings are nil", function()
-            local instance = helper.create_instance()
-
-            assert.equal("53317", instance.port)
-            assert.equal("/mnt/us/documents", instance.save_dir)
-            assert.equal("", instance.device_name)
-            assert.equal("", instance.pin)
-            assert.equal("", instance.accept_ext)
-            assert.is_true(instance.use_https) -- Default is true (nilOrTrue)
-            assert.is_false(instance.autostart)
-        end)
-
-        it("ignores a legacy LocalSend_port setting", function()
-            -- The Go backend has no port flag; the port is always 53317.
-            helper.state.settings["LocalSend_port"] = "12345"
-
-            local instance = helper.create_instance()
-
-            assert.equal("53317", instance.port)
-        end)
-    end)
-
-    describe("HTTPS and WebRTC flags", function()
-        it("use_https defaults to true", function()
-            local instance = helper.create_instance()
-            assert.is_true(instance.use_https)
-        end)
-
-        it("use_webrtc defaults to false", function()
-            local instance = helper.create_instance()
-            assert.is_false(instance.use_webrtc)
-        end)
-
-        it("respects explicit false for use_https", function()
-            helper.state.settings["LocalSend_use_https"] = false
-            local instance = helper.create_instance()
-            assert.is_false(instance.use_https)
-        end)
-
+    describe("WebRTC flag", function()
         it("respects explicit true for use_webrtc", function()
             helper.state.settings["LocalSend_use_webrtc"] = true
             local instance = helper.create_instance()

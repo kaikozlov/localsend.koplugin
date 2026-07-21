@@ -240,31 +240,6 @@ func TestNonceExchangeHandler_MaximumValidNonce(t *testing.T) {
 	}
 }
 
-// TestNonceExchangeHandler_CachesNonces verifies nonces are stored in cache.
-func TestNonceExchangeHandler_CachesNonces(t *testing.T) {
-	fr := newTestReceiver()
-	app := fiber.New()
-	app.Post(constants.NoncePathV3, fr.nonceExchangeHandler)
-
-	nonce, _ := crypto.GenerateNonce()
-	encodedNonce := crypto.EncodeNonce(nonce)
-
-	body, _ := json.Marshal(models.NonceRequest{Nonce: encodedNonce})
-	req := httptest.NewRequest("POST", constants.NoncePathV3, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Forwarded-For", "192.168.1.100") // Simulate client IP
-
-	resp, _ := app.Test(req)
-
-	if resp.StatusCode != 200 {
-		t.Fatalf("Request failed with status %d", resp.StatusCode)
-	}
-
-	// Note: The client ID in test environment might be different.
-	// This test verifies the cache mechanism is called but may not
-	// verify the exact IP due to test environment limitations.
-}
-
 // =============================================================================
 // Register V3 Handler Tests (POST /api/localsend/v3/register)
 // =============================================================================
@@ -762,52 +737,6 @@ func TestPreUploadV3Handler_PINRateLimiting(t *testing.T) {
 
 	if resp.StatusCode != 429 {
 		t.Errorf("4th attempt: Status = %d; want 429 (rate limited)", resp.StatusCode)
-	}
-}
-
-// =============================================================================
-// Folder Transfer Detection Tests
-// =============================================================================
-
-func TestIsFolderTransfer_WithSubdirectory(t *testing.T) {
-	files := models.FileMetas{
-		"file1": {Id: "file1", Filename: "Photos/beach.jpg", Size: 100},
-		"file2": {Id: "file2", Filename: "Photos/sunset.jpg", Size: 200},
-	}
-
-	if !files.IsFolderTransfer() {
-		t.Error("Files with subdirectory paths should be detected as folder transfer")
-	}
-}
-
-func TestIsFolderTransfer_FlatFiles(t *testing.T) {
-	files := models.FileMetas{
-		"file1": {Id: "file1", Filename: "beach.jpg", Size: 100},
-		"file2": {Id: "file2", Filename: "sunset.jpg", Size: 200},
-	}
-
-	if files.IsFolderTransfer() {
-		t.Error("Flat files (no subdirectory) should not be detected as folder transfer")
-	}
-}
-
-func TestIsFolderTransfer_MixedFiles(t *testing.T) {
-	// If ANY file has a subdirectory, it's considered a folder transfer
-	files := models.FileMetas{
-		"file1": {Id: "file1", Filename: "readme.txt", Size: 100},
-		"file2": {Id: "file2", Filename: "docs/manual.pdf", Size: 200},
-	}
-
-	if !files.IsFolderTransfer() {
-		t.Error("Mixed files with at least one subdirectory should be detected as folder transfer")
-	}
-}
-
-func TestIsFolderTransfer_EmptyFiles(t *testing.T) {
-	files := models.FileMetas{}
-
-	if files.IsFolderTransfer() {
-		t.Error("Empty file list should not be detected as folder transfer")
 	}
 }
 

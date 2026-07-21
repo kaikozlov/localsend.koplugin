@@ -343,22 +343,20 @@ describe("Process Management", function()
             local instance = helper.create_instance()
             instance.closeFirewall = function() end
 
-            local stop_called = false
-            local start_called = false
+            local calls = {}
             local original_stopServer = instance.stopServer
             instance.stopServer = function(self, options)
-                stop_called = true
+                table.insert(calls, "stop")
                 return original_stopServer(self, options)
             end
             instance.start = function()
-                start_called = true
+                table.insert(calls, "start")
             end
 
             instance:restart()
             flushScheduledTasks()
 
-            assert.is_true(stop_called, "stopServer should be called")
-            assert.is_true(start_called, "start should be called")
+            assert.same({ "stop", "start" }, calls, "restart should stop before starting")
         end)
 
         it("starts server even if not currently running", function()

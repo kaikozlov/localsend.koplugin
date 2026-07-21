@@ -569,31 +569,6 @@ func TestRTCErrorResponseSerialization(t *testing.T) {
 	}
 }
 
-// =============================================================================
-// Context Propagation Tests
-// =============================================================================
-
-// TestListenForOffersWithContextExists verifies the context-aware offer listener exists.
-// Full integration testing would require a mock signaling client.
-func TestListenForOffersWithContextExists(t *testing.T) {
-	// This test verifies that the ListenForOffersWithContext method exists
-	// and has the correct signature. A full test would require mocking.
-
-	// Create a minimal receiver to verify the method exists
-	// Note: We can't fully test without a real signaling client, but we can
-	// verify the method signature is correct
-
-	t.Run("method_exists_on_RTCReceiver", func(t *testing.T) {
-		// Verify the method exists with correct signature
-		// This is a compile-time check essentially
-		var receiver *RTCReceiver
-		_ = receiver // prevent "declared but not used"
-
-		// If the type has the method, this compiles successfully
-		// The actual method: func (r *RTCReceiver) ListenForOffersWithContext(ctx context.Context, onOffer func(offer signaling.WsServerMessage))
-	})
-}
-
 // TestRTCErrorResponseUsage verifies the error response type.
 func TestRTCErrorResponseUsage(t *testing.T) {
 	// Verify RTCErrorResponse can be created and serialized

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -139,9 +140,9 @@ func TestGenFileMeta_SetsCorrectMIMEType(t *testing.T) {
 				t.Fatalf("GenFileMeta failed: %v", err)
 			}
 
-			// MIME type detection may include charset, so check prefix
-			if meta.FileMIME == "" {
-				t.Error("FileMIME should not be empty")
+			// MIME type detection may include parameters such as a charset.
+			if !strings.HasPrefix(meta.FileMIME, tc.expectedMIME) {
+				t.Errorf("FileMIME = %q; want prefix %q", meta.FileMIME, tc.expectedMIME)
 			}
 		})
 	}

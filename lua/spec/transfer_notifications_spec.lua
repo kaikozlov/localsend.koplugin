@@ -174,7 +174,9 @@ describe("checkForNewTransfers", function()
             helper.reset_state()
             instance:_checkForNewTransfers()
             assert.equal(1, #helper.state.notifications_shown)
-            assert.truthy(helper.state.notifications_shown[1].text:match("received"))
+            local notification = helper.state.notifications_shown[1]
+            assert.equal("Notification", helper.widget_class(notification))
+            assert.truthy(notification.text:match("received"))
         end)
 
         it("should set appropriate timeout for toast notifications", function()

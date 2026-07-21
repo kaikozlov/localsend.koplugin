@@ -139,39 +139,6 @@ func TestDecodeURLSafeNonce(t *testing.T) {
 // Nonce Combination Tests (Protocol Section 4.2)
 // =============================================================================
 
-// TestNonceCombinationOrder verifies the correct nonce combination order.
-// Per protocol spec: combined_nonce = sender_nonce || receiver_nonce
-// This is CRITICAL for interoperability - wrong order = token verification fails.
-func TestNonceCombinationOrder(t *testing.T) {
-	// Generate realistic nonces
-	senderNonce, err := GenerateNonce()
-	if err != nil {
-		t.Fatalf("Failed to generate sender nonce: %v", err)
-	}
-	receiverNonce, err := GenerateNonce()
-	if err != nil {
-		t.Fatalf("Failed to generate receiver nonce: %v", err)
-	}
-
-	// Sender calculates combined nonce: their nonce first (they are sender)
-	senderCombined := append(senderNonce, receiverNonce...)
-
-	// Receiver calculates combined nonce: sender's nonce first (remote is sender)
-	// From receiver's perspective: remoteNonce (sender) || localNonce (receiver)
-	receiverCombined := append(senderNonce, receiverNonce...)
-
-	// Both MUST produce identical combined nonce
-	if !bytes.Equal(senderCombined, receiverCombined) {
-		t.Fatal("Sender and receiver calculated different combined nonces")
-	}
-
-	// Combined nonce length should be 2x individual nonce size
-	expectedLen := len(senderNonce) + len(receiverNonce)
-	if len(senderCombined) != expectedLen {
-		t.Errorf("Combined nonce length = %d; want %d", len(senderCombined), expectedLen)
-	}
-}
-
 // TestNonceCombinationWithDifferentSizes tests nonce combination with edge case sizes.
 func TestNonceCombinationWithDifferentSizes(t *testing.T) {
 	tests := []struct {
