@@ -72,7 +72,7 @@ jobs:
 
       - name: Install just for fallback build
         if: steps.tested.outputs.found != 'true'
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@v4
         with:
           just-version: 1.57.0
 
