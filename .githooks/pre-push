@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+#
+# Definitive local verification before commits leave the machine.
+#
+
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+echo "[pre-push] Running full verification..."
+just verify
+echo "[pre-push] Verification passed."

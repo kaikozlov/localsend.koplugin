@@ -13,7 +13,7 @@
 #   spec_dir := "spec"                      # nested Lua: "lua/spec"
 #   lua_paths := "."                        # stylua/luacheck paths under /opt/plugin
 #   has_go := "0"                           # "1" for Go+Lua plugins
-#   go_integration_packages := ""           # e.g. "./internal/foo/..." or ""
+#   go_integration_packages := ""           # go test package/selection args, or ""
 #   exclude_tags := "e2e"
 #   import "./just/shared.just"
 #
@@ -78,14 +78,18 @@ _default:
 
 # Pull the koplugin-dev image and install git hooks
 [group('setup')]
-setup: install-hooks
+setup: install-hooks pull-image
+
+# Pull the pinned development image without changing local Git configuration.
+[group('setup')]
+pull-image:
     docker pull {{ _image }}
 
-# Configure Git to use the checked-in hooks
+# Configure Git to use all checked-in hooks.
 [group('setup')]
 install-hooks:
     git config core.hooksPath .githooks
-    chmod +x .githooks/pre-commit
+    find .githooks -maxdepth 1 -type f -exec chmod +x {} +
     @echo "Installed git hooks from .githooks/"
 
 # Build a local koplugin-dev image (optional; GHCR is the default)
@@ -310,7 +314,7 @@ fmt-check:
         fi
     '
 
-# Format, lint, and test in one container (used by pre-commit)
+# Format, lint, and test in one container (modifies source files)
 [group('lint')]
 check:
     #!/usr/bin/env bash

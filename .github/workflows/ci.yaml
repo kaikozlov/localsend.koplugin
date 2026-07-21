@@ -6,44 +6,62 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     name: Docker Test and Build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Install just
+        uses: extractions/setup-just@v3
+        with:
+          just-version: 1.57.0
+
+      - name: Pull development image
+        run: just pull-image
+
+      - name: Verify
+        run: just verify
+
+      - name: Check whether packages can change
+        id: package
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.local/bin"
-          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
-            | bash -s -- --to "$HOME/.local/bin"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/just" --version
+          required=true
+          if [[ "$EVENT_NAME" == pull_request ]] && \
+             git diff --quiet "$BASE_SHA" "$HEAD_SHA" -- \
+               '*.go' go.mod go.sum lua tools templates justfile just LICENSE .github/workflows; then
+            required=false
+            echo "No product or packaging inputs changed; skipping package build"
+          fi
+          echo "required=${required}" >> "$GITHUB_OUTPUT"
 
-      - name: Install translation tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gettext
+      - name: Build and audit release packages
+        if: steps.package.outputs.required == 'true'
+        run: just package
 
-      - name: Set up development image
-        run: just setup
-
-      - name: Check formatting
-        run: just fmt-check
-
-      - name: Run linters
-        run: just lint
-
-      - name: Validate translations
-        run: just i18n-check
-
-      - name: Run tests
-        run: just test
-
-      - name: Build release artifacts
-        run: just release
-
-      - name: Audit legacy ARM compatibility
-        run: just test-armcompat
+      - name: Preserve tested release packages
+        if: github.event_name == 'push'
+        uses: actions/upload-artifact@v7
+        with:
+          name: koplugin-packages
+          path: build/*.zip
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0

@@ -5,10 +5,11 @@
 #
 # Quick start:
 #   just setup     # install git hooks and pull the image (one-time)
+#   just verify    # read-only formatting, lint, i18n, and all tests
 #   just test      # run all tests (quiet; V=1 for verbose)
 #   just lint      # lint everything
 #   just shell     # drop into the container
-#   just release   # cross-compile ARM + package release zips in Docker
+#   just package   # build release zips and audit legacy ARM compatibility
 #
 # When shared recipes change upstream:
 #   just sync-shared   # refresh just/shared.just (then commit)
@@ -22,10 +23,24 @@ plugin_path := "/opt/plugin/lua"
 spec_dir := "lua/spec"
 lua_paths := "lua"
 has_go := "1"
-go_integration_packages := "./internal/localsend/..."
+# Build-tagged tests follow these prefixes so the second Go pass runs only the
+# integration/stability suite instead of repeating every ordinary package test.
+go_integration_packages := "./internal/... -run ^\\(TestIntegration_\\|TestStability_\\)"
 exclude_tags := "e2e"
 
 import "./just/shared.just"
+
+# =============================================================================
+# Canonical verification
+# =============================================================================
+
+# Read-only static checks suitable for pre-commit.
+[group('lint')]
+verify-static: fmt-check lint i18n-check
+
+# Definitive local/CI verification, including race and tagged integration tests.
+[group('test')]
+verify: verify-static test
 
 # =============================================================================
 # Setup (plugin-local)
@@ -58,13 +73,19 @@ sync-shared:
 # =============================================================================
 
 # Run after changing user-facing strings wrapped in _() / deps._() / N_() /
-# deps.N_(). Requires xgettext (gettext-tools) on the host. Commit the result;
+# deps.N_(). Uses gettext from the pinned development image. Commit the result;
 # its standard POT header intentionally matches KOReader's workflow.
 # Regenerate the translation template (lua/locale/localsend.pot).
 [group('build')]
 pot:
+    {{ _run }} just --justfile /opt/plugin/justfile _pot
+
+[private]
+_pot:
     #!/usr/bin/env bash
     set -euo pipefail
+    source_owner="$(stat -c '%u:%g' .)"
+    trap 'chown -R "$source_owner" lua/locale' EXIT
     version="$(grep -oP 'version = "\K[^"]+' lua/_meta.lua)"
     mkdir -p lua/locale
     xgettext --language=Lua --from-code=UTF-8 \
@@ -75,10 +96,13 @@ pot:
       -o lua/locale/localsend.pot lua/*.lua
     echo "Wrote lua/locale/localsend.pot"
 
-# Matches KOReader translation CI; requires host gettext-tools (`just pot` does too).
-# Validate every shipped translation catalogue with GNU msgfmt.
+# Validate every shipped translation catalogue with GNU msgfmt from the pinned image.
 [group('lint')]
 i18n-check:
+    {{ _run }} just --justfile /opt/plugin/justfile _i18n-check
+
+[private]
+_i18n-check:
     #!/usr/bin/env bash
     set -euo pipefail
     shopt -s nullglob
@@ -97,6 +121,10 @@ i18n-check:
 [group('test')]
 test-armcompat:
     {{ _run }} env GOFLAGS=-buildvcs=false bash /opt/plugin/tools/armcompat/audit.sh
+
+# Build the exact release packages and audit both legacy 32-bit ARM binaries.
+[group('build')]
+package: release test-armcompat
 
 # Cross-compiles three ARM targets (arm-legacy/armv7/arm64) with buildArchTag
 # injected via ldflags, then packages each binary with the Lua source into a

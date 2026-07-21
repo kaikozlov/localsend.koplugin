@@ -28,6 +28,8 @@ machine-specific toolchains hide bugs.
 
 ```bash
 just setup              # One-time: install hooks + pull koplugin-dev image
+just verify             # Definitive read-only fmt + lint + i18n + test pass (pre-push/CI)
+just verify-static      # Read-only fmt + lint + i18n pass (pre-commit)
 just test               # All Lua + Go tests (quiet; failures + summaries)
 V=1 just test           # Same, with full busted/go -v output
 just test-filter "pattern"  # Focused Lua run in Docker
@@ -37,7 +39,8 @@ just test-go-integration # Go integration tests in Docker
 just test-armcompat     # QEMU/seccomp audit of packaged legacy ARM binary
 just lint               # luacheck + golangci-lint in Docker
 just fmt                # stylua + go fmt in Docker
-just check              # fmt + lint + test in one container (pre-commit)
+just check              # Mutating fmt + lint + test pass in one container
+just package            # Build release zips + run the QEMU ARM audit
 just shell              # Interactive container shell
 just                    # List all recipes
 ```

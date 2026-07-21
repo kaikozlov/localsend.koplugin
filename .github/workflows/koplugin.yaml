@@ -2,52 +2,122 @@ name: Build KOReader Plugin
 
 on:
   release:
-    types:
-      - created
+    types: [created]
   workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
-    name: Build KOReader Plugin
+    name: Publish KOReader Plugin
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-
-      - name: Install just
+      - name: Find tested packages for this commit
+        id: tested
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/.local/bin"
-          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
-            | bash -s -- --to "$HOME/.local/bin"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          run_id="$({
+            gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yaml/runs" \
+              -f head_sha="$GITHUB_SHA" \
+              -f event=push \
+              -f status=success \
+              -f per_page=100 \
+              --jq '[.workflow_runs[] | select(.head_sha == env.GITHUB_SHA and .conclusion == "success")] | sort_by(.created_at) | last | .id // empty'
+          })"
 
-      - name: Install translation tools
+          found=false
+          if [[ -n "$run_id" ]]; then
+            artifact_id="$({
+              gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" \
+                --jq '[.artifacts[] | select(.name == "koplugin-packages" and .expired == false)] | first | .id // empty'
+            })"
+            if [[ -n "$artifact_id" ]]; then
+              found=true
+              echo "Using packages from successful CI run ${run_id}"
+              echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+          echo "found=${found}" >> "$GITHUB_OUTPUT"
+          if [[ "$found" != true ]]; then
+            echo "No unexpired tested artifact found; running the full fallback build"
+          fi
+
+      - name: Download tested packages
+        if: steps.tested.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gettext
+          mkdir -p build
+          gh run download "${{ steps.tested.outputs.run_id }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name koplugin-packages \
+            --dir build
 
-      - name: Validate translations
-        run: just i18n-check
+      - name: Check out fallback source
+        if: steps.tested.outputs.found != 'true'
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
-      - name: Set up development image
-        run: just setup
+      - name: Install just for fallback build
+        if: steps.tested.outputs.found != 'true'
+        uses: extractions/setup-just@v3
+        with:
+          just-version: 1.57.0
 
-      - name: Build release artifacts
-        run: just release
+      - name: Pull development image for fallback build
+        if: steps.tested.outputs.found != 'true'
+        run: just pull-image
 
-      - name: Audit legacy ARM compatibility
-        run: just test-armcompat
+      - name: Verify, build, and audit fallback packages
+        if: steps.tested.outputs.found != 'true'
+        run: |
+          just verify
+          just package
 
-      - name: Upload artifacts
+      - name: Validate package set
+        run: |
+          set -euo pipefail
+          expected=(
+            localsend-koplugin-arm-legacy.zip
+            localsend-koplugin-armv7.zip
+            localsend-koplugin-arm64.zip
+          )
+          mapfile -t actual < <(find build -maxdepth 1 -type f -name '*.zip' -printf '%f\n' | sort)
+          if [[ "${#actual[@]}" -ne "${#expected[@]}" ]]; then
+            printf 'Expected %s packages, found %s: %s\n' \
+              "${#expected[@]}" "${#actual[@]}" "${actual[*]:-none}" >&2
+            exit 1
+          fi
+          for archive in "${expected[@]}"; do
+            test -f "build/${archive}"
+            unzip -tq "build/${archive}"
+          done
+
+      - name: Upload packages from manual runs
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v7
         with:
           name: koplugin-packages
           path: build/*.zip
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
 
-      - name: Upload to Release
+      - name: Upload packages to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v3
         with:
           files: build/*.zip
+          fail_on_unmatched_files: true

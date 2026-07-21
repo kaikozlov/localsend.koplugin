@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #
-# Pre-commit hook for localsend.koplugin
-# Formats, lints, and tests in a single koplugin-dev container
+# Fast, read-only checks for the commit loop. Full tests run before push and in CI.
 #
 
 set -euo pipefail
@@ -9,20 +8,6 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-# Remember staged paths so we can re-stage after auto-format without
-# accidentally adding unrelated untracked files.
-staged_files="$(git diff --cached --name-only --diff-filter=ACM || true)"
-
-echo "[pre-commit] Running just check (fmt + lint + test)..."
-just check
-
-# Re-stage previously staged files that still exist (picks up formatter edits).
-if [ -n "$staged_files" ]; then
-    while IFS= read -r file; do
-        if [ -n "$file" ] && [ -f "$file" ]; then
-            git add -- "$file"
-        fi
-    done <<<"$staged_files"
-fi
-
-echo "[pre-commit] Checks passed."
+echo "[pre-commit] Running read-only formatting, lint, and i18n checks..."
+just verify-static
+echo "[pre-commit] Static checks passed."
