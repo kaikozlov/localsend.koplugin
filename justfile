@@ -14,7 +14,7 @@
 #   just sync-shared   # refresh just/shared.just (then commit)
 
 plugin_name := "localsend"
-koplugin_dev_version := "v2026.03_6"
+koplugin_dev_version := "v2026.03_7"
 # Git ref used by `just sync-shared` (recipe source). Independent of the image pin.
 koplugin_dev_ref := env("KOPLUGIN_DEV_REF", "main")
 # Go CLI owns the repo root; the installable .koplugin lives under lua/.

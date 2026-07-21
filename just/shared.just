@@ -8,7 +8,7 @@
 # Plugins vendor this file (e.g. vendor/shared.just) and import it:
 #
 #   plugin_name := "myplugin"
-#   koplugin_dev_version := "v2026.03_6"
+#   koplugin_dev_version := "v2026.03_7"
 #   plugin_path := "/opt/plugin"            # nested Lua: "/opt/plugin/lua"
 #   spec_dir := "spec"                      # nested Lua: "lua/spec"
 #   lua_paths := "."                        # stylua/luacheck paths under /opt/plugin
