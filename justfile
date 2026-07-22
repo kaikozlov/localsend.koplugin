@@ -119,7 +119,8 @@ _pot:
 
 # Validate syntax and compare each catalogue with a temporary deterministic
 # msgmerge result. This checks msgid coverage, obsolete entries, ordering, and
-# source references without enforcing translation completeness.
+# source references without enforcing translation completeness. Ignore volatile
+# gettext date headers so a version-only POT regeneration remains reproducible.
 # Check every .po is synchronized with lua/locale/localsend.pot.
 [group('lint')]
 i18n-check:
@@ -142,6 +143,10 @@ _i18n-check:
     trap 'rm -rf "$tmp"' EXIT
     failed=0
 
+    strip_volatile() {
+        grep -v -E '^"(POT-Creation-Date|PO-Revision-Date):' "$1"
+    }
+
     for catalogue in "${catalogues[@]}"; do
         echo "Checking $catalogue"
         msgfmt -o /dev/null "$catalogue"
@@ -149,7 +154,7 @@ _i18n-check:
         merged="$tmp/$(basename "$catalogue")"
         msgmerge --quiet -o "$merged" "$catalogue" "$template"
         if ! diff -u --label "$catalogue" --label "$catalogue (merged with localsend.pot)" \
-                "$catalogue" "$merged"; then
+                <(strip_volatile "$catalogue") <(strip_volatile "$merged"); then
             failed=1
         fi
     done
