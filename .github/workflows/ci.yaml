@@ -32,9 +32,6 @@ jobs:
       - name: Pull development image
         run: just pull-image
 
-      - name: Verify
-        run: just verify
-
       - name: Check whether packages can change
         id: package
         env:
@@ -52,9 +49,15 @@ jobs:
           fi
           echo "required=${required}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and audit release packages
-        if: steps.package.outputs.required == 'true'
-        run: just package
+      - name: Verify and optionally build release packages
+        env:
+          PACKAGE_REQUIRED: ${{ steps.package.outputs.required }}
+        run: |
+          if [[ "$PACKAGE_REQUIRED" == true ]]; then
+            just
+          else
+            just verify
+          fi
 
       - name: Preserve tested release packages
         if: github.event_name == 'push'

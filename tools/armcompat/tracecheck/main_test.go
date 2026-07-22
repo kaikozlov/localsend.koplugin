@@ -50,3 +50,25 @@ func TestCheckTrace_RejectsEpollPwait(t *testing.T) {
 		t.Fatalf("checkTrace() error = %v, want epoll_pwait rejection", err)
 	}
 }
+
+func TestCheckTraceWithOptions_AllowsMissingDup2FallbackOnlyWhenExplicitlySkipped(t *testing.T) {
+	trace := strings.Replace(
+		completeTrace,
+		"102 dup3(14,0,0) = -1 errno=38 (Function not implemented)\n102 dup2(14,0) = 0\n",
+		"102 dup3(14,0,0) = 0\n",
+		1,
+	)
+
+	if err := checkTraceWithOptions([]byte(trace), checkOptions{skipDup2Fallback: true}); err != nil {
+		t.Fatalf("checkTraceWithOptions() rejected explicit dup2 skip: %v", err)
+	}
+}
+
+func TestCheckTraceWithOptions_Dup2SkipStillRequiresEveryOtherFallback(t *testing.T) {
+	trace := strings.Replace(completeTrace, "101 pipe(123) = 0\n", "", 1)
+
+	err := checkTraceWithOptions([]byte(trace), checkOptions{skipDup2Fallback: true})
+	if err == nil || !strings.Contains(err.Error(), "pipe") {
+		t.Fatalf("checkTraceWithOptions() error = %v, want missing pipe fallback", err)
+	}
+}

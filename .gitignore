@@ -34,6 +34,9 @@ dist
 localsend-armhf
 .lua_env/
 
+# Compiled gettext catalogs are never shipped; runtime reads .po directly.
+*.mo
+
 # i18n test fixtures: the localsend_i18n spec writes these throwaway fake-language
 # catalogues beside the loader at setup and removes them at teardown. Listed here
 # so a crashed test run can never leave them in the working tree.

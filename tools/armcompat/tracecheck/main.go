@@ -26,7 +26,15 @@ func syscallCall(name string) string {
 	return name + "("
 }
 
+type checkOptions struct {
+	skipDup2Fallback bool
+}
+
 func checkTrace(trace []byte) error {
+	return checkTraceWithOptions(trace, checkOptions{})
+}
+
+func checkTraceWithOptions(trace []byte, options checkOptions) error {
 	contents := string(trace)
 	if strings.Contains(contents, syscallCall("epoll_pwait")) {
 		return errors.New("guest trace still calls epoll_pwait")
@@ -40,6 +48,9 @@ func checkTrace(trace []byte) error {
 		modernAt := strings.Index(contents, modernCall)
 		if modernAt < 0 {
 			return fmt.Errorf("guest trace did not call modern %s probe", pair.modern)
+		}
+		if options.skipDup2Fallback && pair.legacy == "dup2" {
+			continue
 		}
 		if !strings.Contains(contents[modernAt+len(modernCall):], syscallCall(pair.legacy)) {
 			return fmt.Errorf("guest trace did not call legacy %s fallback after %s", pair.legacy, pair.modern)
@@ -58,16 +69,23 @@ func checkTrace(trace []byte) error {
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: tracecheck TRACE")
+	args := os.Args[1:]
+	options := checkOptions{}
+	if len(args) == 2 && args[0] == "--skip-dup2-fallback" {
+		options.skipDup2Fallback = true
+		args = args[1:]
+	}
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: tracecheck [--skip-dup2-fallback] TRACE")
 		os.Exit(2)
 	}
-	trace, err := os.ReadFile(os.Args[1])
+
+	trace, err := os.ReadFile(args[0])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "tracecheck:", err)
 		os.Exit(1)
 	}
-	if err := checkTrace(trace); err != nil {
+	if err := checkTraceWithOptions(trace, options); err != nil {
 		fmt.Fprintln(os.Stderr, "tracecheck:", err)
 		os.Exit(1)
 	}

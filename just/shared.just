@@ -22,7 +22,8 @@
 #
 # Image: GHCR by default. Override with IMAGE_NAME=... for a local build.
 # Verbosity: quiet by default; V=1 for full busted/go output.
-# Aggregates (fmt/lint/test/check/fmt-check) use one docker run each.
+# Each top-level recipe uses one docker run. Aggregate recipes may re-enter this
+# justfile inside that container; the marker below prevents nested Docker runs.
 
 set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
@@ -45,14 +46,23 @@ _mount := "-v " + justfile_directory() + ":/opt/plugin -e PLUGIN_NAME=" + plugin
 [private]
 _go_cache := if has_go == "1" { "-v " + plugin_name + "-go-mod:/root/go/pkg/mod -v " + plugin_name + "-go-build:/root/.cache/go-build" } else { "" }
 
+# Aggregate host recipes launch one container, set this marker, and re-enter
+# the plugin justfile. Inside that process the runners become empty prefixes,
+# so the ordinary dependency graph executes in the existing container.
 [private]
-_run := "docker run --rm " + _sdl_env + " " + _mount + " " + _go_cache + " " + _image
+_in_container := env("KOPLUGIN_DEV_IN_CONTAINER", "0")
 
 [private]
-_run_network := "docker run --rm --network=host " + _sdl_env + " " + _mount + " " + _go_cache + " " + _image
+_reenter := "env KOPLUGIN_DEV_IN_CONTAINER=1 just --working-directory /opt/lib/koreader --justfile /opt/plugin/justfile"
 
 [private]
-_run_it := "docker run --rm -it " + _sdl_env + " " + _mount + " " + _go_cache + " " + _image
+_run := if _in_container == "1" { "" } else { "docker run --rm " + _sdl_env + " " + _mount + " " + _go_cache + " " + _image }
+
+[private]
+_run_network := if _in_container == "1" { "" } else { "docker run --rm --network=host " + _sdl_env + " " + _mount + " " + _go_cache + " " + _image }
+
+[private]
+_run_it := if _in_container == "1" { "" } else { "docker run --rm -it " + _sdl_env + " " + _mount + " " + _go_cache + " " + _image }
 
 [private]
 _busted_opts := if _v == "1" { "--verbose" } else { "" }

@@ -7,20 +7,25 @@
 //
 // Filter policy (host syscall numbers):
 //   accept4        ENOSYS when flags != 0
-//   epoll_create1  ENOSYS
+//   epoll_create1  ENOSYS when flags != 0
 //   eventfd2       ENOSYS when flags != 0
 //   pipe2          ENOSYS when flags != 0
-//   dup3           ENOSYS
+//   dup3           ENOSYS when the host has a distinct legacy dup2 syscall
 //   recvmmsg       ENOSYS
 //   sendmmsg       ENOSYS
 //   getrandom      ENOSYS
 //   prlimit64      ENOSYS
 //
 // The flags==0 exceptions are required by QEMU's host mappings. QEMU maps
-// guest legacy accept, eventfd, and pipe onto host accept4, eventfd2, and
-// pipe2 respectively, with flags 0. Modern guest calls use nonzero CLOEXEC
-// and NONBLOCK flags, so the filter can reject them without breaking the
-// legacy fallback.
+// guest legacy accept, epoll_create, eventfd, and pipe onto host accept4,
+// epoll_create1, eventfd2, and pipe2 respectively, with flags 0. Modern guest
+// calls use nonzero CLOEXEC and NONBLOCK flags, so the filter can reject them
+// without breaking the legacy fallback.
+//
+// AArch64 hosts have no dup2 syscall: QEMU maps both guest dup3(..., 0) and
+// guest dup2(...) onto the identical host dup3(..., 0) call, so seccomp cannot
+// distinguish the modern probe from its fallback. Hosts with a distinct dup2
+// syscall (including x86_64 CI) retain strict dup3 fault injection.
 //
 // epoll_pwait is intentionally NOT filtered here. QEMU user mode implements
 // guest epoll_wait by calling host epoll_pwait, so blocking the host syscall
@@ -56,9 +61,13 @@ int main(int argc, char **argv) {
 		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | ENOSYS),
 		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
 
-		/* epoll_create1: the legacy epoll_create host call is distinct. */
-		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_epoll_create1, 0, 1),
+		/* epoll_create1: permit QEMU's flags==0 mapping for guest epoll_create. */
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_epoll_create1, 0, 4),
+		BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+			 offsetof(struct seccomp_data, args[0])),
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, 0, 1, 0),
 		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | ENOSYS),
+		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
 
 		/* eventfd2: permit QEMU's flags==0 mapping for guest eventfd. */
 		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_eventfd2, 0, 4),
@@ -76,9 +85,11 @@ int main(int argc, char **argv) {
 		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | ENOSYS),
 		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
 
-		/* dup3 is distinct from the legacy dup2 host call. */
+#ifdef __NR_dup2
+		/* dup3 is distinguishable from guest dup2 on this host. */
 		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_dup3, 0, 1),
 		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | ENOSYS),
+#endif
 
 		/* Unconditional Kindle-shaped gaps that QEMU forwards 1:1. */
 		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_recvmmsg, 0, 1),

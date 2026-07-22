@@ -58,6 +58,17 @@ go build -buildvcs=false -o "$trace_checker" ./tools/armcompat/tracecheck
 cc -O2 -Wall -Wextra -o "$fault_launcher" \
     tools/armcompat/testdata/kindle_enosys.c
 
+trace_checker_args=()
+case "$(uname -m)" in
+    aarch64|arm64)
+        # This host has no distinct dup2 syscall. QEMU maps both guest dup3
+        # with flags 0 and guest dup2 onto host dup3 with flags 0, so seccomp
+        # cannot reject the modern probe without also breaking its fallback.
+        # x86_64 CI keeps the strict dup3 -> dup2 fallback assertion.
+        trace_checker_args+=(--skip-dup2-fallback)
+        ;;
+esac
+
 audit_archive() {
     local release_archive="$1"
     local arch="$2"
@@ -147,7 +158,7 @@ audit_archive() {
     # threads can split an ENOSYS result away from its syscall line. Validate
     # each modern-probe/legacy-fallback pair in stream order instead of
     # assuming that an individual trace line is atomic.
-    if ! trace_error="$("$trace_checker" "$trace" 2>&1)"; then
+    if ! trace_error="$("$trace_checker" "${trace_checker_args[@]}" "$trace" 2>&1)"; then
         echo "armcompat audit ($arch): ${trace_error#tracecheck: }" >&2
         exit 1
     fi

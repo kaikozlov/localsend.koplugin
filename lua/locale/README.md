@@ -14,8 +14,8 @@ contributed as `.po` files through pull requests.
 
 | File | Purpose |
 | ---- | ------- |
-| `localsend.pot` | Translation template, regenerated from source (`just pot`). Do not edit by hand. |
-| `<lang>.po` | One catalogue per language (e.g. `pt_PT.po`). Edit these. |
+| `localsend.pot` | Translation template, regenerated from source by `just pot`. Do not edit by hand. |
+| `<lang>.po` | One catalogue per language (e.g. `pt_PT.po`). Translate its `msgstr` values; `just pot` maintains its entries, ordering, and source references. |
 
 The plugin reads plain-text `.po` catalogues directly at runtime, so no compiled
 `.mo` is shipped.
@@ -45,17 +45,35 @@ No code changes required.
 
 ## Updating strings
 
-After adding or changing user-facing strings wrapped in `_()` / `deps._()` /
-`N_()` / `deps.N_()`, regenerate the template and merge it into existing
-translations:
+After adding, changing, or removing user-facing strings wrapped in `_()` /
+`deps._()` / `N_()` / `deps.N_()`, run:
 
 ```sh
 just pot
-msgmerge --update --backup=none lua/locale/<lang>.po lua/locale/localsend.pot
 just i18n-check
 ```
 
+`just pot` performs the complete update: it regenerates `localsend.pot` from
+`lua/*.lua`, then runs `msgmerge --update` for every `lua/locale/*.po`
+catalogue. New entries are added with empty `msgstr` values, removed entries
+are dropped, and ordering plus source references follow the template. Existing
+translations and translator metadata are preserved.
+
+The read-only checks run automatically in the pre-commit hook and CI via
+`just verify-static`:
+
+- `pot-check` regenerates the template in a temporary directory and fails if
+  the committed `localsend.pot` differs from the source strings.
+- `i18n-check` validates every `.po`, merges it against the template in a
+  temporary directory, and fails on any difference—including missing or
+  obsolete entries, ordering, and source references.
+
+These checks enforce synchronization, not translation completeness. A newly
+added entry may have an empty `msgstr` and fall back to English until translated.
+When either check reports drift, `just pot` is the single command that fixes it.
+
 ## Requirements
 
-The commands above require GNU gettext-tools (`xgettext`, `msginit`,
-`msgmerge`, and `msgfmt`).
+The `just` recipes run GNU gettext tools (`xgettext`, `msginit`, `msgmerge`, and
+`msgfmt`) inside the pinned development image; no host gettext installation is
+required.

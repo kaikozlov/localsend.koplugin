@@ -9,7 +9,7 @@ msgstr ""
 "Project-Id-Version: localsend v1.4.3\n"
 "Report-Msgid-Bugs-To: https://github.com/kaikozlov/localsend.koplugin/"
 "issues\n"
-"POT-Creation-Date: 2026-07-20 13:21-0500\n"
+"POT-Creation-Date: 2026-07-22 15:12+0000\n"
 "PO-Revision-Date: 2026-07-21 07:21+0100\n"
 "Last-Translator: CookieCaptainD\n"
 "Language-Team: Portuguese (Portugal)\n"
@@ -19,6 +19,14 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "X-Generator: Poedit 3.9\n"
+
+#: lua/_meta.lua:4 lua/main.lua:1299
+msgid "LocalSend"
+msgstr "LocalSend"
+
+#: lua/_meta.lua:5 lua/main.lua:1218
+msgid "Send and receive files using LocalSend protocol."
+msgstr "Envie e receba ficheiros através do protocolo LocalSend."
 
 #: lua/localsend_diagnostics.lua:582 lua/localsend_diagnostics.lua:586
 msgid "LAN connected"
@@ -1180,10 +1188,6 @@ msgstr ""
 "Página do projeto:\n"
 "%1"
 
-#: lua/main.lua:1218 lua/_meta.lua:5
-msgid "Send and receive files using LocalSend protocol."
-msgstr "Envie e receba ficheiros através do protocolo LocalSend."
-
 #: lua/main.lua:1220
 msgid ""
 "LocalSend for KOReader\n"
@@ -1243,10 +1247,6 @@ msgstr "LocalSend (em execução)"
 #: lua/main.lua:1297
 msgid "LocalSend (update available)"
 msgstr "LocalSend (atualização disponível)"
-
-#: lua/main.lua:1299 lua/_meta.lua:4
-msgid "LocalSend"
-msgstr "LocalSend"
 
 #: lua/main.lua:1322
 msgid "⚠ Previous update failed - Reinstall required"
