@@ -8,6 +8,21 @@ dev_image="${KOPLUGIN_DEV_IMAGE:-ghcr.io/kaikozlov/koplugin-dev:v2026.03_7}"
 temporary_checkout=""
 binary_volume=""
 
+cache_source() {
+    local override="$1"
+    local fallback="$2"
+    if [[ -z "$override" ]]; then
+        printf '%s\n' "$fallback"
+        return
+    fi
+    mkdir -p "$override"
+    (cd "$override" && pwd)
+}
+
+cargo_registry_source="$(cache_source "${OFFICIAL_INTEROP_CARGO_REGISTRY_DIR:-}" localsend-official-cargo-registry)"
+cargo_git_source="$(cache_source "${OFFICIAL_INTEROP_CARGO_GIT_DIR:-}" localsend-official-cargo-git)"
+cargo_target_source="$(cache_source "${OFFICIAL_INTEROP_CARGO_TARGET_DIR:-}" localsend-official-cargo-target)"
+
 cleanup() {
     if [[ -n "$binary_volume" ]]; then
         docker volume rm -f "$binary_volume" >/dev/null 2>&1 || true
@@ -61,9 +76,9 @@ docker run --rm \
     -v "$root:/opt/plugin:ro" \
     -v "$official_dir/packages/core:/opt/official-core:ro" \
     -v "$binary_volume:/opt/interop:ro" \
-    -v localsend-official-cargo-registry:/usr/local/cargo/registry \
-    -v localsend-official-cargo-git:/usr/local/cargo/git \
-    -v localsend-official-cargo-target:/opt/cargo-target \
+    -v "$cargo_registry_source:/usr/local/cargo/registry" \
+    -v "$cargo_git_source:/usr/local/cargo/git" \
+    -v "$cargo_target_source:/opt/cargo-target" \
     -w /opt/plugin/interop/official \
     "$rust_image" \
     sh -c '

@@ -37,3 +37,8 @@ currently has no equivalent black-box V3/WebRTC interoperability suite.
 
 `Cargo.toml` points to `/opt/official-core`; that path is supplied by the Docker
 runner. The Rust harness is not intended to run directly on the host.
+
+The runner uses named Docker volumes for Cargo caches during local development.
+CI supplies `OFFICIAL_INTEROP_CARGO_REGISTRY_DIR`,
+`OFFICIAL_INTEROP_CARGO_GIT_DIR`, and `OFFICIAL_INTEROP_CARGO_TARGET_DIR` so
+`actions/cache` can preserve those directories across ephemeral runners.

@@ -83,5 +83,20 @@ jobs:
         with:
           just-version: 1.57.0
 
+      - name: Restore official-core Rust build cache
+        uses: actions/cache@v6
+        with:
+          path: |
+            ${{ runner.temp }}/localsend-official-cache/cargo-registry
+            ${{ runner.temp }}/localsend-official-cache/cargo-git
+            ${{ runner.temp }}/localsend-official-cache/cargo-target
+          key: official-interop-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('interop/official/Cargo.lock', 'interop/official/Cargo.toml', 'tools/officialinterop/run.sh') }}
+          restore-keys: |
+            official-interop-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Cross-test with the official Rust core
+        env:
+          OFFICIAL_INTEROP_CARGO_REGISTRY_DIR: ${{ runner.temp }}/localsend-official-cache/cargo-registry
+          OFFICIAL_INTEROP_CARGO_GIT_DIR: ${{ runner.temp }}/localsend-official-cache/cargo-git
+          OFFICIAL_INTEROP_CARGO_TARGET_DIR: ${{ runner.temp }}/localsend-official-cache/cargo-target
         run: just test-official
