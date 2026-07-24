@@ -290,6 +290,11 @@ func (fr *FileReceiver) validatePIN(c fiber.Ctx) int {
 		return 429 // Too Many Requests
 	}
 
+	// A missing PIN is an authentication challenge, not a failed guess.
+	if !c.Request().URI().QueryArgs().Has("pin") {
+		return 401
+	}
+
 	pin := c.Query("pin")
 	// Use constant-time comparison to prevent timing attacks
 	if subtle.ConstantTimeCompare([]byte(pin), []byte(expectedPin)) != 1 {

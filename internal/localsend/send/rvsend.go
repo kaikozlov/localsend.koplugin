@@ -198,6 +198,10 @@ func (rs *ReverseSender) validatePIN(c fiber.Ctx) int {
 	if rs.pinRateLimiter.IsBlocked(clientIP) {
 		return fiber.StatusTooManyRequests
 	}
+	// A missing PIN is an authentication challenge, not a failed guess.
+	if !c.Request().URI().QueryArgs().Has("pin") {
+		return fiber.StatusUnauthorized
+	}
 	if subtle.ConstantTimeCompare([]byte(c.Query("pin")), []byte(rs.pin)) != 1 {
 		rs.pinRateLimiter.RecordAttempt(clientIP)
 		return fiber.StatusUnauthorized

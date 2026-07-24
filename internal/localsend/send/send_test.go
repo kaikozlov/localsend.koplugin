@@ -646,6 +646,30 @@ func TestReverseSender_PredownloadHandler(t *testing.T) {
 		}
 	})
 
+	t.Run("does not count missing PIN as a failed attempt", func(t *testing.T) {
+		sender := NewReverseSender()
+		target := &models.DeviceInfo{Alias: "TestDevice", IP: "127.0.0.1"}
+		_ = sender.Init(target, false)
+		sender.SetPIN("1234")
+
+		app := fiber.New()
+		app.Post(constants.PreDownloadPath, sender.predownloadHandler)
+
+		for attempt := 0; attempt < constants.MaxPINAttempts; attempt++ {
+			req := httptest.NewRequest("POST", constants.PreDownloadPath, nil)
+			resp, _ := app.Test(req)
+			if resp.StatusCode != fiber.StatusUnauthorized {
+				t.Fatalf("missing-PIN attempt %d status = %d; want %d", attempt+1, resp.StatusCode, fiber.StatusUnauthorized)
+			}
+		}
+
+		req := httptest.NewRequest("POST", constants.PreDownloadPath+"?pin=1234", nil)
+		resp, _ := app.Test(req)
+		if resp.StatusCode != fiber.StatusOK {
+			t.Fatalf("correct PIN after missing-PIN challenges status = %d; want %d", resp.StatusCode, fiber.StatusOK)
+		}
+	})
+
 	t.Run("validates session ID if provided", func(t *testing.T) {
 		sender := NewReverseSender()
 		target := &models.DeviceInfo{Alias: "TestDevice", IP: "127.0.0.1"}

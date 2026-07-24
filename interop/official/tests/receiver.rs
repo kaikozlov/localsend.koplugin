@@ -324,3 +324,40 @@ async fn go_receiver_blocks_after_three_incorrect_pins() {
 
     process.stop().await;
 }
+
+#[tokio::test]
+async fn go_receiver_does_not_count_missing_pin_as_failed_attempt() {
+    let receive_dir = tempfile::tempdir().unwrap();
+    let process = start_receiver(receive_dir.path(), Some("123456")).await;
+    let client = official_client();
+    let file = file_dto("pin-file", "pin.bin", 5);
+
+    for _ in 0..3 {
+        assert_status(
+            client
+                .prepare_upload(
+                    ProtocolType::Http,
+                    HOST,
+                    PORT,
+                    None,
+                    prepare_upload_request(std::slice::from_ref(&file)),
+                    None,
+                )
+                .await,
+            401,
+        );
+    }
+    client
+        .prepare_upload(
+            ProtocolType::Http,
+            HOST,
+            PORT,
+            None,
+            prepare_upload_request(&[file]),
+            Some("123456"),
+        )
+        .await
+        .unwrap();
+
+    process.stop().await;
+}

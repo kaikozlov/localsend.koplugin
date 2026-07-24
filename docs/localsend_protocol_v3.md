@@ -353,7 +353,7 @@ The v3 HTTP API is limited to **discovery and session setup**. File transfer ove
 The v3 Rust client library includes `prepare_upload`, `upload`, and `cancel` methods targeting `/api/localsend/v3/*` paths, but **no server implementation routes these endpoints** — neither the Rust HTTP server nor the Flutter app's HTTP server. In practice, v3 file transfers use WebRTC data channels (§8), and LAN-only transfers fall back to v2 HTTP.
 
 > [!NOTE]
-> The v2 HTTP endpoints (`/api/localsend/v2/prepare-upload`, `/api/localsend/v2/upload`, `/api/localsend/v2/cancel`) remain the only HTTP-based file transfer mechanism. See the [v2.1 protocol spec](https://github.com/localsend/protocol) for details.
+> HTTP file transfer remains on v2 endpoints. This includes both the upload API (`/prepare-upload`, `/upload`, `/cancel`) and the reverse-transfer Download API (`/info`, `/prepare-download`, `/download`). See the [v2.1 protocol spec](https://github.com/localsend/protocol) for details.
 
 ### 6.1 Nonce Exchange
 
@@ -1027,6 +1027,8 @@ def build_url(protocol, host, port, path):
 #   -> "https://[::1]:53317/api/localsend/v3/register"
 ```
 
+Servers that advertise or accept IPv6 addresses must listen on IPv6 as well as IPv4 (using a dual-stack listener where supported, or separate listeners). Binding only to `0.0.0.0` is IPv4-only and will fail when a hostname such as `localhost` resolves to `::1`.
+
 ### 10.2 Nonce Cache
 
 Implementations should use an LRU cache for nonce management:
@@ -1135,6 +1137,17 @@ For JavaScript/TypeScript implementations, set the binary type explicitly:
 const dataChannel = peerConnection.createDataChannel("data");
 dataChannel.binaryType = "arraybuffer";  // Required for proper binary handling
 ```
+
+### 10.9 v2 Download API Session Semantics
+
+These routes remain under `/api/localsend/v2/*`; they are documented here because v3-capable implementations still use the v2 HTTP Download API for reverse LAN transfers.
+
+- `GET /info` advertises an active Download API with `"download": true`.
+- `POST /prepare-download` exchanges a valid PIN for an opaque `sessionId`. A valid accepted session may refresh the file list by resending `sessionId` without the PIN.
+- The official Rust server associates accepted sessions with the requesting source IP. A session presented by another client must be rejected, and a new session for the same client replaces its previous session.
+- `GET /download` uses `sessionId` and `fileId`; the PIN is not resent for each file. Invalid sessions and unknown file IDs return HTTP `403`.
+- A missing PIN returns HTTP `401` but is not counted as a failed guess. An incorrect PIN is counted per source IP; after three failed guesses, subsequent attempts return HTTP `429` while blocked.
+- Browser download links should remain relative to the address used to authenticate. Generating absolute links for every server interface can change the browser's source IP and invalidate an IP-bound session.
 
 ---
 
@@ -1572,6 +1585,7 @@ This document refers to the protocol as "v3" because:
 
 | Date | Changes |
 |------|---------|
+| 2026-07-24 | **§6, §10.1, §10.9**: Documented the v2 reverse-transfer Download API, dual-stack listener requirements, client-bound session refresh, PIN throttling, exact authorization errors, and relative browser links. |
 | 2026-05-06 | **§2, §6**: Corrected major inaccuracy — v3 HTTP endpoints for file transfer (`/prepare-upload`, `/upload`, `/cancel`) do not exist on any server. LAN transfers use v2 HTTP exclusively. v3 adds only `/nonce` and `/register` for WebRTC session setup. |
 | 2026-05-06 | **§4.6**: Clarified RSA-PSS is verification-only; token generation is Ed25519-only. |
 | 2026-05-06 | **§8.3**: Expanded PIN handling flow to show the retry loop with `PIN_REQUIRED`/`TOO_MANY_ATTEMPTS` responses and final `OK`. |

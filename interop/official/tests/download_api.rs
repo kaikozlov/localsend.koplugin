@@ -132,6 +132,29 @@ async fn go_reverse_sender_blocks_after_three_incorrect_pins() {
 }
 
 #[tokio::test]
+async fn go_reverse_sender_does_not_count_missing_pin_as_failed_attempt() {
+    let directory = tempfile::tempdir().unwrap();
+    let (source, _) = create_source_file(&directory).await;
+    let process = start_reverse_sender(&source, Some("123456")).await;
+    let client = official_client();
+
+    for _ in 0..3 {
+        assert_status(
+            client
+                .prepare_download(ProtocolType::Http, HOST, PORT, None, None)
+                .await,
+            401,
+        );
+    }
+    client
+        .prepare_download(ProtocolType::Http, HOST, PORT, None, Some("123456"))
+        .await
+        .unwrap();
+
+    process.stop().await;
+}
+
+#[tokio::test]
 async fn official_client_downloads_with_pin_authenticated_session() {
     let directory = tempfile::tempdir().unwrap();
     let (source, expected) = create_source_file(&directory).await;

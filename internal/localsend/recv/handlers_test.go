@@ -679,6 +679,32 @@ func TestPreUploadHandler_PINRateLimiting_CorrectPINBlockedAfterLockout(t *testi
 	}
 }
 
+func TestPreUploadHandler_PINRateLimiting_MissingPINDoesNotConsumeAttempts(t *testing.T) {
+	fr := newTestReceiver()
+	fr.SetPIN("123456")
+	fr.saveToDir = t.TempDir()
+
+	app := fiber.New()
+	app.Post(constants.PreuploadPath, fr.preUploadHandler)
+
+	body := []byte(`{"info":{"alias":"Sender"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100}}}`)
+	for attempt := 0; attempt < 3; attempt++ {
+		req := httptest.NewRequest("POST", constants.PreuploadPath, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, _ := app.Test(req)
+		if resp.StatusCode != fiber.StatusUnauthorized {
+			t.Fatalf("missing-PIN attempt %d status = %d; want %d", attempt+1, resp.StatusCode, fiber.StatusUnauthorized)
+		}
+	}
+
+	req := httptest.NewRequest("POST", constants.PreuploadPath+"?pin=123456", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, _ := app.Test(req)
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("correct PIN after missing-PIN challenges status = %d; want %d", resp.StatusCode, fiber.StatusOK)
+	}
+}
+
 func TestPreUploadHandler_PINRateLimiting_ClearsOnSuccess(t *testing.T) {
 	fr := newTestReceiver()
 	fr.SetPIN("123456")
