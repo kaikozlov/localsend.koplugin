@@ -474,6 +474,9 @@ func TestReverseSender_Init(t *testing.T) {
 		sender.tokens["old"] = "oldtoken"
 		sender.sessions["old-session"] = "192.0.2.1"
 		sender.sessionByIP["192.0.2.1"] = "old-session"
+		for range constants.MaxPINAttempts {
+			sender.pinRateLimiter.RecordAttempt("192.0.2.1")
+		}
 
 		target := &models.DeviceInfo{
 			Alias: "TestDevice",
@@ -493,6 +496,9 @@ func TestReverseSender_Init(t *testing.T) {
 		}
 		if len(sender.sessions) != 0 || len(sender.sessionByIP) != 0 {
 			t.Error("sessions should be empty until a client is authorized")
+		}
+		if sender.pinRateLimiter.IsBlocked("192.0.2.1") || sender.pinRateLimiter.Count() != 0 {
+			t.Error("PIN rate-limit state should be reset")
 		}
 		if !sender.local.Download {
 			t.Error("Download flag should be true")

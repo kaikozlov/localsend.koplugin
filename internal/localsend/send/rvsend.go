@@ -58,6 +58,7 @@ func NewReverseSender() *ReverseSender {
 func (rs *ReverseSender) Init(target *models.DeviceInfo, https bool) error {
 	rs.local = target
 	rs.https = https
+	rs.pinRateLimiter = utils.NewRateLimiter(constants.MaxPINAttempts, constants.PINBlockDuration)
 	rs.sessionMu.Lock()
 	rs.sessions = make(map[string]string)
 	rs.sessionByIP = make(map[string]string)
