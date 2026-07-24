@@ -34,6 +34,19 @@ GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 go build -ldflags="-s -w" -o localse
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o localsend
 ```
 
+## Testing official LocalSend interoperability
+
+The Dockerized interoperability suite runs this Go executable against
+LocalSend's official Rust V2 client and server implementations:
+
+```bash
+just test-official
+```
+
+It covers both transfer directions and the Download API, including PIN and
+error behavior. See [`interop/official/README.md`](../interop/official/README.md)
+for the pinned upstream revision, focused commands, and coverage boundary.
+
 ## Version
 
 ```bash

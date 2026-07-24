@@ -1,0 +1,11 @@
+[package]
+name = "localsend-official-interop"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+localsend = { path = "/opt/official-core", features = ["http"] }
+tempfile = "3.24.0"
+tokio = { version = "1.49.0", features = ["full"] }
+tokio-util = { version = "0.7.18", features = ["rt"] }

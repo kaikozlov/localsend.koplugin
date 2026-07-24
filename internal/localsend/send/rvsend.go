@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"sync"
+	"time"
 
 	"localsend-cli/internal/localsend/constants"
 	lsutils "localsend-cli/internal/localsend/utils"
@@ -32,6 +34,11 @@ type ReverseSender struct {
 	downloads []DownloadEntry
 	https     bool
 	cert      tls.Certificate
+	// PIN rate limiting uses the same policy as the ordinary receiver.
+	pinRateLimiter *utils.RateLimiter
+	sessionMu      sync.Mutex
+	sessions       map[string]string
+	sessionByIP    map[string]string
 }
 
 func NewReverseSender() *ReverseSender {
@@ -40,15 +47,21 @@ func NewReverseSender() *ReverseSender {
 			tokens: make(map[string]string),
 			files:  make(map[string]models.FileMeta),
 		},
-		webServer: lsutils.NewWebServer(true),
-		downloads: make([]DownloadEntry, 0),
+		webServer:      lsutils.NewWebServer(true),
+		downloads:      make([]DownloadEntry, 0),
+		pinRateLimiter: utils.NewRateLimiter(constants.MaxPINAttempts, constants.PINBlockDuration),
+		sessions:       make(map[string]string),
+		sessionByIP:    make(map[string]string),
 	}
 }
 
 func (rs *ReverseSender) Init(target *models.DeviceInfo, https bool) error {
 	rs.local = target
-	rs.session = uuid.NewString()
 	rs.https = https
+	rs.sessionMu.Lock()
+	rs.sessions = make(map[string]string)
+	rs.sessionByIP = make(map[string]string)
+	rs.sessionMu.Unlock()
 
 	// The reverse sender IS the download API, so set Download to true
 	rs.local.Download = true
@@ -82,23 +95,21 @@ func (rs *ReverseSender) Init(target *models.DeviceInfo, https bool) error {
 }
 
 func (rs *ReverseSender) predownloadHandler(c fiber.Ctx) error {
-	// Check PIN if set (constant-time comparison to prevent timing attacks)
-	if rs.pin != "" {
-		pin := c.Query("pin")
-		if subtle.ConstantTimeCompare([]byte(pin), []byte(rs.pin)) != 1 {
-			return c.SendStatus(401)
-		}
+	clientIP := c.IP()
+	if sessionID := c.Query("sessionId"); sessionID != "" && rs.validSession(sessionID, clientIP) {
+		return c.JSON(&models.PreDownloadResp{
+			SessionId: sessionID,
+			Files:     rs.files,
+			Info:      rs.local,
+		})
 	}
 
-	// Support session refresh - if sessionId provided, validate it matches
-	// Use constant-time comparison to prevent timing attacks on session IDs
-	sessionId := c.Query("sessionId")
-	if sessionId != "" && subtle.ConstantTimeCompare([]byte(sessionId), []byte(rs.session)) != 1 {
-		return c.SendStatus(403)
+	if status := rs.validatePIN(c); status != 0 {
+		return c.SendStatus(status)
 	}
 
 	var resp models.PreDownloadResp
-	resp.SessionId = rs.session
+	resp.SessionId = rs.createSession(clientIP)
 	resp.Files = rs.files
 	resp.Info = rs.local
 
@@ -106,9 +117,6 @@ func (rs *ReverseSender) predownloadHandler(c fiber.Ctx) error {
 }
 
 func (rs *ReverseSender) downloadHandler(c fiber.Ctx) error {
-	if rs.pin != "" && subtle.ConstantTimeCompare([]byte(c.Query("pin")), []byte(rs.pin)) != 1 {
-		return c.SendStatus(fiber.StatusUnauthorized)
-	}
 	sessionId := c.Query("sessionId")
 	fileId := c.Query("fileId")
 
@@ -116,14 +124,13 @@ func (rs *ReverseSender) downloadHandler(c fiber.Ctx) error {
 		return c.SendStatus(400)
 	}
 
-	// Use constant-time comparison to prevent timing attacks on session IDs
-	if subtle.ConstantTimeCompare([]byte(sessionId), []byte(rs.session)) != 1 {
+	if !rs.validSession(sessionId, c.IP()) {
 		return c.SendStatus(403)
 	}
 
 	fileMeta, exist := rs.files[fileId]
 	if !exist {
-		return c.SendStatus(404)
+		return c.SendStatus(403)
 	}
 
 	// Set Content-Disposition header BEFORE sending file
@@ -144,26 +151,85 @@ func (rs *ReverseSender) downloadHandler(c fiber.Ctx) error {
 }
 
 func (rs *ReverseSender) downloadListHandler(c fiber.Ctx) error {
-	pin := c.Query("pin")
-	if rs.pin != "" && subtle.ConstantTimeCompare([]byte(pin), []byte(rs.pin)) != 1 {
-		return c.SendStatus(fiber.StatusUnauthorized)
+	if status := rs.validatePIN(c); status != 0 {
+		return c.SendStatus(status)
 	}
-	downloads := rs.downloads
-	if pin != "" {
-		downloads = make([]DownloadEntry, len(rs.downloads))
-		for i, entry := range rs.downloads {
-			entry.Url += "&pin=" + url.QueryEscape(pin)
-			downloads[i] = entry
-		}
+	sessionID := rs.createSession(c.IP())
+	downloads := make([]DownloadEntry, len(rs.downloads))
+	for i, entry := range rs.downloads {
+		entry.Url += "&sessionId=" + url.QueryEscape(sessionID)
+		downloads[i] = entry
 	}
 	return c.Render(templates.DownloadListTemp, fiber.Map{"Files": downloads})
+}
+
+func (rs *ReverseSender) infoHandler(c fiber.Ctx) error {
+	return c.JSON(rs.local)
+}
+
+func (rs *ReverseSender) createSession(clientIP string) string {
+	rs.sessionMu.Lock()
+	defer rs.sessionMu.Unlock()
+
+	if oldSessionID := rs.sessionByIP[clientIP]; oldSessionID != "" {
+		delete(rs.sessions, oldSessionID)
+	}
+	sessionID := uuid.NewString()
+	rs.sessions[sessionID] = clientIP
+	rs.sessionByIP[clientIP] = sessionID
+	return sessionID
+}
+
+func (rs *ReverseSender) validSession(sessionID, clientIP string) bool {
+	rs.sessionMu.Lock()
+	defer rs.sessionMu.Unlock()
+	return rs.sessions[sessionID] == clientIP
+}
+
+// validatePIN returns 0 on success, 401 for an incorrect PIN, or 429 while the
+// caller is blocked. A successful prepare-download exchanges the PIN for a
+// session bound to the caller's IP address.
+func (rs *ReverseSender) validatePIN(c fiber.Ctx) int {
+	if rs.pin == "" {
+		return 0
+	}
+
+	clientIP := c.IP()
+	if rs.pinRateLimiter.IsBlocked(clientIP) {
+		return fiber.StatusTooManyRequests
+	}
+	if subtle.ConstantTimeCompare([]byte(c.Query("pin")), []byte(rs.pin)) != 1 {
+		rs.pinRateLimiter.RecordAttempt(clientIP)
+		return fiber.StatusUnauthorized
+	}
+
+	rs.pinRateLimiter.Clear(clientIP)
+	return 0
+}
+
+func (rs *ReverseSender) pinCleanupTask(stop <-chan struct{}) {
+	ticker := time.NewTicker(constants.PINCleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			rs.pinRateLimiter.CleanupExpired()
+		}
+	}
 }
 
 func (rs *ReverseSender) Start() error {
 	server := rs.webServer
 	server.Post(constants.PreDownloadPath, rs.predownloadHandler)
 	server.Get(constants.DownloadPath, rs.downloadHandler)
+	server.Get(constants.InfoPath, rs.infoHandler)
+	server.Get(constants.InfoPathV1, rs.infoHandler)
 	server.Get("/", rs.downloadListHandler)
+	stopPINCleanup := make(chan struct{})
+	go rs.pinCleanupTask(stopPINCleanup)
+	defer close(stopPINCleanup)
 
 	ip, err := utils.GetMyIPv4Addr()
 	if err != nil {
@@ -174,18 +240,18 @@ func (rs *ReverseSender) Start() error {
 
 	slog.Info("Start reverse sending server", "https", rs.https)
 
-	// build downloads list
+	// Keep file links relative so the browser downloads through the same server
+	// address it used to authenticate. Crossing to another local interface can
+	// change the client's source IP and invalidate the IP-bound session.
+	for fileId, fileMeta := range rs.files {
+		rs.downloads = append(rs.downloads, DownloadEntry{
+			Filename: fileMeta.Filename,
+			Url:      fmt.Sprintf("%s?fileId=%s", constants.DownloadPath, url.QueryEscape(fileId)),
+		})
+	}
+
 	for idx := range ip {
 		host := net.JoinHostPort(ip[idx].String(), constants.DefaultPortStr)
-
-		for fileId, fileMeta := range rs.files {
-			rs.downloads = append(rs.downloads, DownloadEntry{
-				Filename: fileMeta.Filename,
-				Url: fmt.Sprintf("%s://%s%s?sessionId=%s&fileId=%s",
-					scheme, host, constants.DownloadPath, rs.session, fileId),
-			})
-		}
-
 		_, _ = fmt.Fprintf(os.Stdout, "Visit %s://%s to download files\n", scheme, host)
 	}
 

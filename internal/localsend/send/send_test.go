@@ -460,6 +460,9 @@ func TestNewReverseSender(t *testing.T) {
 	if sender.downloads == nil {
 		t.Error("downloads should be initialized")
 	}
+	if sender.sessions == nil || sender.sessionByIP == nil {
+		t.Error("download sessions should be initialized")
+	}
 }
 
 func TestReverseSender_Init(t *testing.T) {
@@ -469,6 +472,8 @@ func TestReverseSender_Init(t *testing.T) {
 		// Add old state to verify reset
 		sender.files["old"] = models.FileMeta{Id: "old"}
 		sender.tokens["old"] = "oldtoken"
+		sender.sessions["old-session"] = "192.0.2.1"
+		sender.sessionByIP["192.0.2.1"] = "old-session"
 
 		target := &models.DeviceInfo{
 			Alias: "TestDevice",
@@ -486,8 +491,8 @@ func TestReverseSender_Init(t *testing.T) {
 		if sender.https != false {
 			t.Error("https should be false")
 		}
-		if sender.session == "" {
-			t.Error("session should be generated")
+		if len(sender.sessions) != 0 || len(sender.sessionByIP) != 0 {
+			t.Error("sessions should be empty until a client is authorized")
 		}
 		if !sender.local.Download {
 			t.Error("Download flag should be true")
@@ -526,6 +531,31 @@ func TestReverseSender_Init(t *testing.T) {
 // ReverseSender Handler Tests
 // =============================================================================
 
+const fiberTestClientIP = "0.0.0.0"
+
+func prepareReverseSession(t *testing.T, app *fiber.App, pin string) string {
+	t.Helper()
+	target := constants.PreDownloadPath
+	if pin != "" {
+		target += "?pin=" + pin
+	}
+	resp, err := app.Test(httptest.NewRequest(http.MethodPost, target, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("prepare-download status = %d; want 200", resp.StatusCode)
+	}
+	var result models.PreDownloadResp
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result.SessionId == "" {
+		t.Fatal("prepare-download returned an empty sessionId")
+	}
+	return result.SessionId
+}
+
 func TestReverseSender_PredownloadHandler(t *testing.T) {
 	t.Run("returns files and session", func(t *testing.T) {
 		sender := NewReverseSender()
@@ -560,8 +590,8 @@ func TestReverseSender_PredownloadHandler(t *testing.T) {
 			t.Fatalf("failed to parse response: %v", err)
 		}
 
-		if predownloadResp.SessionId != sender.session {
-			t.Errorf("expected sessionId '%s', got '%s'", sender.session, predownloadResp.SessionId)
+		if !sender.validSession(predownloadResp.SessionId, fiberTestClientIP) {
+			t.Errorf("sessionId %q was not bound to the requesting client", predownloadResp.SessionId)
 		}
 		if len(predownloadResp.Files) != 1 {
 			t.Errorf("expected 1 file, got %d", len(predownloadResp.Files))
@@ -592,23 +622,49 @@ func TestReverseSender_PredownloadHandler(t *testing.T) {
 		}
 	})
 
+	t.Run("blocks after three incorrect PINs", func(t *testing.T) {
+		sender := NewReverseSender()
+		target := &models.DeviceInfo{Alias: "TestDevice", IP: "127.0.0.1"}
+		_ = sender.Init(target, false)
+		sender.SetPIN("1234")
+
+		app := fiber.New()
+		app.Post(constants.PreDownloadPath, sender.predownloadHandler)
+
+		for attempt := 0; attempt < constants.MaxPINAttempts; attempt++ {
+			req := httptest.NewRequest("POST", constants.PreDownloadPath+"?pin=wrong", nil)
+			resp, _ := app.Test(req)
+			if resp.StatusCode != fiber.StatusUnauthorized {
+				t.Fatalf("attempt %d status = %d; want %d", attempt+1, resp.StatusCode, fiber.StatusUnauthorized)
+			}
+		}
+
+		req := httptest.NewRequest("POST", constants.PreDownloadPath+"?pin=1234", nil)
+		resp, _ := app.Test(req)
+		if resp.StatusCode != fiber.StatusTooManyRequests {
+			t.Fatalf("status after three incorrect PINs = %d; want %d", resp.StatusCode, fiber.StatusTooManyRequests)
+		}
+	})
+
 	t.Run("validates session ID if provided", func(t *testing.T) {
 		sender := NewReverseSender()
 		target := &models.DeviceInfo{Alias: "TestDevice", IP: "127.0.0.1"}
 		_ = sender.Init(target, false)
+		sender.SetPIN("1234")
 
 		app := fiber.New()
 		app.Post("/api/localsend/v2/prepare-download", sender.predownloadHandler)
+		sessionID := prepareReverseSession(t, app, "1234")
 
-		// Wrong session ID
+		// An unknown session does not bypass PIN authentication.
 		req := httptest.NewRequest("POST", "/api/localsend/v2/prepare-download?sessionId=wrong-session", nil)
 		resp, _ := app.Test(req)
-		if resp.StatusCode != 403 {
-			t.Errorf("expected status 403 for wrong session, got %d", resp.StatusCode)
+		if resp.StatusCode != 401 {
+			t.Errorf("expected status 401 for wrong session without PIN, got %d", resp.StatusCode)
 		}
 
-		// Correct session ID
-		req = httptest.NewRequest("POST", "/api/localsend/v2/prepare-download?sessionId="+sender.session, nil)
+		// An accepted session can refresh the file list without resending the PIN.
+		req = httptest.NewRequest("POST", "/api/localsend/v2/prepare-download?sessionId="+sessionID, nil)
 		resp, _ = app.Test(req)
 		if resp.StatusCode != 200 {
 			t.Errorf("expected status 200 for correct session, got %d", resp.StatusCode)
@@ -964,9 +1020,11 @@ func TestReverseSender_DownloadHandler(t *testing.T) {
 
 		app := fiber.New()
 		app.Get("/api/localsend/v2/download", sender.downloadHandler)
+		clientIP := fiberTestClientIP
+		sessionID := sender.createSession(clientIP)
 
 		req := httptest.NewRequest("GET",
-			"/api/localsend/v2/download?sessionId="+sender.session+"&fileId=file1", nil)
+			"/api/localsend/v2/download?sessionId="+sessionID+"&fileId=file1", nil)
 		resp, err := app.Test(req)
 		if err != nil {
 			t.Fatalf("request failed: %v", err)
@@ -995,6 +1053,7 @@ func TestReverseSender_DownloadHandler(t *testing.T) {
 
 		app := fiber.New()
 		app.Get("/api/localsend/v2/download", sender.downloadHandler)
+		sessionID := sender.createSession(fiberTestClientIP)
 
 		// Missing both
 		req := httptest.NewRequest("GET", "/api/localsend/v2/download", nil)
@@ -1004,7 +1063,7 @@ func TestReverseSender_DownloadHandler(t *testing.T) {
 		}
 
 		// Missing fileId
-		req = httptest.NewRequest("GET", "/api/localsend/v2/download?sessionId="+sender.session, nil)
+		req = httptest.NewRequest("GET", "/api/localsend/v2/download?sessionId="+sessionID, nil)
 		resp, _ = app.Test(req)
 		if resp.StatusCode != 400 {
 			t.Errorf("expected status 400 for missing fileId, got %d", resp.StatusCode)
@@ -1027,24 +1086,25 @@ func TestReverseSender_DownloadHandler(t *testing.T) {
 		}
 	})
 
-	t.Run("returns 404 for unknown file", func(t *testing.T) {
+	t.Run("returns 403 for unknown file", func(t *testing.T) {
 		sender := NewReverseSender()
 		target := &models.DeviceInfo{Alias: "TestDevice", IP: "127.0.0.1"}
 		_ = sender.Init(target, false)
 
 		app := fiber.New()
 		app.Get("/api/localsend/v2/download", sender.downloadHandler)
+		sessionID := sender.createSession(fiberTestClientIP)
 
 		req := httptest.NewRequest("GET",
-			"/api/localsend/v2/download?sessionId="+sender.session+"&fileId=nonexistent", nil)
+			"/api/localsend/v2/download?sessionId="+sessionID+"&fileId=nonexistent", nil)
 		resp, _ := app.Test(req)
-		if resp.StatusCode != 404 {
-			t.Errorf("expected status 404 for unknown file, got %d", resp.StatusCode)
+		if resp.StatusCode != 403 {
+			t.Errorf("expected status 403 for unknown file, got %d", resp.StatusCode)
 		}
 	})
 }
 
-func TestReverseSender_DownloadHandlerRequiresConfiguredPIN(t *testing.T) {
+func TestReverseSender_DownloadHandlerUsesSessionFromSameClient(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "secret.txt")
 	if err := os.WriteFile(path, []byte("secret"), 0600); err != nil {
 		t.Fatal(err)
@@ -1057,30 +1117,52 @@ func TestReverseSender_DownloadHandlerRequiresConfiguredPIN(t *testing.T) {
 	sender.files["f"] = models.FileMeta{Id: "f", Filename: "secret.txt", FullPath: path, Size: 6}
 	app := fiber.New()
 	app.Get(constants.DownloadPath, sender.downloadHandler)
+	clientIP := fiberTestClientIP
+	sessionID := sender.createSession(clientIP)
 
-	req := httptest.NewRequest("GET", fmt.Sprintf("%s?sessionId=%s&fileId=f", constants.DownloadPath, sender.session), nil)
+	req := httptest.NewRequest("GET", fmt.Sprintf("%s?sessionId=%s&fileId=f", constants.DownloadPath, sessionID), nil)
 	resp, err := app.Test(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != fiber.StatusUnauthorized {
-		t.Fatalf("status without PIN = %d; want 401", resp.StatusCode)
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("status with authenticated session = %d; want 200", resp.StatusCode)
 	}
+}
 
-	req = httptest.NewRequest("GET", fmt.Sprintf("%s?sessionId=%s&fileId=f&pin=1234", constants.DownloadPath, sender.session), nil)
-	resp, err = app.Test(req)
-	if err != nil {
+func TestReverseSender_DownloadSessionIsBoundToClientIP(t *testing.T) {
+	sender := NewReverseSender()
+	if err := sender.Init(&models.DeviceInfo{Alias: "Test", IP: "127.0.0.1"}, false); err != nil {
 		t.Fatal(err)
 	}
-	if resp.StatusCode != fiber.StatusOK {
-		t.Fatalf("status with PIN = %d; want 200", resp.StatusCode)
+	sessionID := sender.createSession("192.0.2.1")
+	if sender.validSession(sessionID, "192.0.2.2") {
+		t.Fatal("session was accepted for a different client IP")
+	}
+}
+
+func TestReverseSender_CreateSessionInvalidatesPreviousSessionForClient(t *testing.T) {
+	sender := NewReverseSender()
+	clientIP := "192.0.2.1"
+	oldSessionID := sender.createSession(clientIP)
+	newSessionID := sender.createSession(clientIP)
+
+	if sender.validSession(oldSessionID, clientIP) {
+		t.Fatal("previous session remained valid after replacement")
+	}
+	if !sender.validSession(newSessionID, clientIP) {
+		t.Fatal("replacement session was not valid")
 	}
 }
 
 func TestReverseSender_DownloadListRequiresConfiguredPIN(t *testing.T) {
 	sender := NewReverseSender()
+	if err := sender.Init(&models.DeviceInfo{Alias: "Test", IP: "127.0.0.1"}, false); err != nil {
+		t.Fatal(err)
+	}
 	sender.SetPIN("1234")
-	app := fiber.New()
+	sender.downloads = []DownloadEntry{{Filename: "secret.txt", Url: constants.DownloadPath + "?fileId=f"}}
+	app := sender.webServer
 	app.Get("/", sender.downloadListHandler)
 
 	resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
@@ -1089,6 +1171,27 @@ func TestReverseSender_DownloadListRequiresConfiguredPIN(t *testing.T) {
 	}
 	if resp.StatusCode != fiber.StatusUnauthorized {
 		t.Fatalf("status = %d; want %d", resp.StatusCode, fiber.StatusUnauthorized)
+	}
+
+	resp, err = app.Test(httptest.NewRequest(http.MethodGet, "/?pin=1234", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("authenticated status = %d; want %d", resp.StatusCode, fiber.StatusOK)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "sessionId=") {
+		t.Fatal("download page did not include an authenticated session")
+	}
+	if strings.Contains(string(body), "pin=1234") {
+		t.Fatal("download page leaked the PIN into file URLs")
+	}
+	if strings.Contains(string(body), "://") {
+		t.Fatal("download page used an absolute file URL instead of the authenticated request host")
 	}
 }
 

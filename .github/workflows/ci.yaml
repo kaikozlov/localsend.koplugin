@@ -68,3 +68,20 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 0
+
+  official-interop:
+    name: Official LocalSend Interoperability
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+        with:
+          just-version: 1.57.0
+
+      - name: Cross-test with the official Rust core
+        run: just test-official

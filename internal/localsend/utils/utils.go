@@ -230,7 +230,10 @@ func NewWebServer(withTemplateEngine ...bool) *fiber.App {
 
 // ListenWithTLS starts the Fiber server with optional TLS support.
 func ListenWithTLS(server *fiber.App, addr string, cert tls.Certificate, useHTTPS bool) error {
-	config := fiber.ListenConfig{DisableStartupMessage: true}
+	config := fiber.ListenConfig{
+		DisableStartupMessage: true,
+		ListenerNetwork:       "tcp",
+	}
 	if useHTTPS {
 		config.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 	}

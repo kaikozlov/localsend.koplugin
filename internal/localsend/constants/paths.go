@@ -7,8 +7,8 @@ const (
 	DefaultPort = 53317
 	// DefaultPortStr is the string representation of DefaultPort.
 	DefaultPortStr = "53317"
-	// DefaultListenAddr is the default address to listen on.
-	DefaultListenAddr = "0.0.0.0:53317"
+	// DefaultListenAddr listens on both IPv4 and IPv6 where the platform supports it.
+	DefaultListenAddr = ":53317"
 )
 
 const (

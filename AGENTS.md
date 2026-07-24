@@ -36,6 +36,7 @@ just test-filter "pattern"  # Focused Lua run in Docker
 just test-go            # Go tests in Docker
 just test-go-race       # Go tests with race detector in Docker
 just test-go-integration # Go integration tests in Docker
+just test-official      # Cross-test Go with pinned official LocalSend Rust core
 just test-armcompat     # QEMU/seccomp audit of packaged legacy ARM binary
 just lint               # luacheck + golangci-lint in Docker
 just fmt                # stylua + go fmt in Docker
@@ -47,6 +48,10 @@ just                    # List all recipes
 
 Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.03_7` — contains real KOReader Linux runtime and QEMU user-mode tooling.
 Bump `koplugin_dev_version` in `justfile` when the image updates.
+
+`just test-official` additionally uses `rust:1.97.0-bookworm` and sparse-fetches
+the pinned `OFFICIAL_LOCALSEND_REF` into a temporary checkout; see
+`interop/official/README.md`.
 
 Shared recipes are vendored at `just/shared.just` (from koplugin-dev). Refresh with
 `just sync-shared` when upstream recipes change, then commit the file.

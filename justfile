@@ -56,6 +56,14 @@ verify:
 [private]
 _verify: _verify_static test
 
+# Uses REFERENCE/OFFICIAL_LOCALSEND/localsend when available; otherwise the
+# runner sparse-fetches the pinned upstream commit.
+# Cross-test the Go executable with LocalSend's official Rust V2 client/server.
+[group('test')]
+test-official *args='':
+    KOPLUGIN_DEV_IMAGE="{{ _image }}" \
+    tools/officialinterop/run.sh {{ args }}
+
 # =============================================================================
 # Setup (plugin-local)
 # =============================================================================
