@@ -368,6 +368,42 @@ M.state.settings = setmetatable({}, {
 })
 
 -- =============================================================================
+-- Headless UI singleton
+-- =============================================================================
+-- KOReader >= 2026.05 (PR #15323, "Folder shortcuts: standard folders") made
+-- FileChooser:refreshPath() / genItemTable() dereference self.ui.folder_shortcuts,
+-- and PathChooser:init() resolves self.ui from readerui.instance or
+-- filemanager.instance. On-device one of those singletons always exists; in
+-- headless create_instance() tests neither does, so PathChooser:new() crashed
+-- during init (filechooser.lua:336: attempt to index field 'ui'). Provide a
+-- faithful stand-in carrying a REAL FileManagerShortcuts — exactly what a real
+-- FileManager registers as its "folder_shortcuts" module — so the real
+-- refreshPath/genItemTable code paths run instead of being short-circuited.
+-- Tagged so cleanup only ever clears our own stand-in, never a real FileManager
+-- singleton (e.g. one created by load_via_filemanager).
+local HEADLESS_FM_TAG = "_localsend_headless_filemanager"
+
+local function install_headless_filemanager_instance()
+    local FileManager = require("apps/filemanager/filemanager")
+    if FileManager.instance ~= nil then
+        return FileManager.instance -- a real singleton already exists; leave it
+    end
+    local FileManagerShortcuts = require("apps/filemanager/filemanagershortcuts")
+    FileManager.instance = {
+        [HEADLESS_FM_TAG] = true,
+        folder_shortcuts = FileManagerShortcuts:new({}),
+    }
+    return FileManager.instance
+end
+
+local function clear_headless_filemanager_instance()
+    local ok, FileManager = pcall(require, "apps/filemanager/filemanager")
+    if ok and FileManager.instance and FileManager.instance[HEADLESS_FM_TAG] then
+        FileManager.instance = nil
+    end
+end
+
+-- =============================================================================
 -- Instance creation
 -- =============================================================================
 --- Create a real plugin instance against live KOReader modules.
@@ -376,6 +412,7 @@ M.state.settings = setmetatable({}, {
 -- own the resets; create_instance just instantiates the currently-loaded module.
 function M.create_instance()
     M.prepare_plugin()
+    install_headless_filemanager_instance()
     local LocalSend = require("main")
     return LocalSend:new({
         ui = { menu = { registerToMainMenu = function() end } },
@@ -394,6 +431,9 @@ function M.load_via_filemanager()
     local DataStorage = require("datastorage")
     local FileManager = require("apps/filemanager/filemanager")
     local PluginLoader = require("pluginloader")
+    -- Drop any headless stand-in so FileManager:new() doesn't log an
+    -- "instance mismatch" against it (FileManager.instance must be nil here).
+    clear_headless_filemanager_instance()
     local fm = FileManager:new({ dimen = Screen:getSize(), root_path = DataStorage:getDataDir() })
     UIManager:show(fm)
     fastforward_ui_events()
@@ -413,6 +453,7 @@ end
 -- =============================================================================
 function M.setup_complete(opts)
     opts = opts or {}
+    clear_headless_filemanager_instance()
     M.prepare_plugin()
     M.reset_state()
     M.reset_settings()
@@ -432,9 +473,14 @@ function M.setup_complete(opts)
         end
     end
     M.install_dump_on_failure()
+    -- Default headless environment: a real device always has a FileManager or
+    -- ReaderUI singleton, so PathChooser can resolve self.ui. Specs that build a
+    -- real FileManager via load_via_filemanager() clear this first.
+    install_headless_filemanager_instance()
 end
 
 function M.before_each()
+    clear_headless_filemanager_instance()
     M.reset_state()
     M.reset_settings()
     -- reset_localsend_state() omitted for the same reason as setup_complete:
