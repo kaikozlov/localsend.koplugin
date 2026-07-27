@@ -46,7 +46,7 @@ just shell              # Interactive container shell
 just                    # List all recipes
 ```
 
-Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.03_7` — contains real KOReader Linux runtime and QEMU user-mode tooling.
+Image: `ghcr.io/kaikozlov/koplugin-dev:v2026.07_1` — contains real KOReader Linux runtime and QEMU user-mode tooling.
 Bump `koplugin_dev_version` in `justfile` when the image updates.
 
 `just test-official` additionally uses `rust:1.97.0-bookworm` and sparse-fetches
