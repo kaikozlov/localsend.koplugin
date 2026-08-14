@@ -4,7 +4,8 @@ use common::{
     assert_status, file_dto, official_client, prepare_upload_request, sender_info, start_receiver,
     upload_bytes, HOST, PORT,
 };
-use localsend::http::dto::ProtocolType;
+use localsend::model::discovery::ProtocolType;
+use tokio_util::sync::CancellationToken;
 
 // Ported from LocalSend packages/core/tests/v2_server.rs at OFFICIAL_LOCALSEND_REF.
 #[tokio::test]
@@ -18,11 +19,11 @@ async fn official_client_registers_and_reads_go_receiver_info() {
         .await
         .unwrap();
     assert_eq!(registered.body.alias, "OfficialInteropReceiver");
-    assert_eq!(registered.body.version, "2.1");
+    assert_eq!(registered.body.version, "2.2");
 
     let info = client.info(ProtocolType::Http, HOST, PORT).await.unwrap();
     assert_eq!(info.alias, "OfficialInteropReceiver");
-    assert_eq!(info.version, "2.1");
+    assert_eq!(info.version, "2.2");
     assert!(!info.download);
 
     process.stop().await;
@@ -63,6 +64,7 @@ async fn official_client_uploads_files_to_go_receiver() {
             None,
             prepare_upload_request(&files),
             None,
+            CancellationToken::new(),
         )
         .await
         .unwrap()
@@ -131,6 +133,7 @@ async fn official_client_recovers_after_invalid_upload_token() {
             None,
             prepare_upload_request(&[file]),
             None,
+            CancellationToken::new(),
         )
         .await
         .unwrap()
@@ -181,6 +184,7 @@ async fn official_client_cancels_go_receiver_session() {
             None,
             prepare_upload_request(std::slice::from_ref(&file)),
             None,
+            CancellationToken::new(),
         )
         .await
         .unwrap()
@@ -195,6 +199,7 @@ async fn official_client_cancels_go_receiver_session() {
                 None,
                 prepare_upload_request(std::slice::from_ref(&file)),
                 None,
+                CancellationToken::new(),
             )
             .await,
         409,
@@ -211,6 +216,7 @@ async fn official_client_cancels_go_receiver_session() {
             None,
             prepare_upload_request(&[file]),
             None,
+            CancellationToken::new(),
         )
         .await
         .unwrap()
@@ -261,6 +267,7 @@ async fn official_client_authenticates_to_go_receiver_with_pin() {
                 None,
                 prepare_upload_request(std::slice::from_ref(&file)),
                 Some("000000"),
+                CancellationToken::new(),
             )
             .await,
         401,
@@ -273,6 +280,7 @@ async fn official_client_authenticates_to_go_receiver_with_pin() {
             None,
             prepare_upload_request(&[file]),
             Some("123456"),
+            CancellationToken::new(),
         )
         .await
         .unwrap()
@@ -303,6 +311,7 @@ async fn go_receiver_blocks_after_three_incorrect_pins() {
                     None,
                     prepare_upload_request(std::slice::from_ref(&file)),
                     Some("000000"),
+                    CancellationToken::new(),
                 )
                 .await,
             401,
@@ -317,6 +326,7 @@ async fn go_receiver_blocks_after_three_incorrect_pins() {
                 None,
                 prepare_upload_request(&[file]),
                 Some("123456"),
+                CancellationToken::new(),
             )
             .await,
         429,
@@ -342,6 +352,7 @@ async fn go_receiver_does_not_count_missing_pin_as_failed_attempt() {
                     None,
                     prepare_upload_request(std::slice::from_ref(&file)),
                     None,
+                    CancellationToken::new(),
                 )
                 .await,
             401,
@@ -355,6 +366,7 @@ async fn go_receiver_does_not_count_missing_pin_as_failed_attempt() {
             None,
             prepare_upload_request(&[file]),
             Some("123456"),
+            CancellationToken::new(),
         )
         .await
         .unwrap();

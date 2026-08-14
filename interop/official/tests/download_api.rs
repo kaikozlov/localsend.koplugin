@@ -1,7 +1,7 @@
 mod common;
 
 use common::{assert_status, official_client, start_reverse_sender, HOST, PORT};
-use localsend::http::dto::ProtocolType;
+use localsend::model::discovery::ProtocolType;
 
 async fn create_source_file(directory: &tempfile::TempDir) -> (std::path::PathBuf, Vec<u8>) {
     let path = directory.path().join("official-source.bin");

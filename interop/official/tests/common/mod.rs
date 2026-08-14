@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 
 use localsend::http::client::{ClientError, LsHttpClientV2};
-use localsend::http::dto::ProtocolType;
-use localsend::http::dto_v2::{PrepareUploadRequestDtoV2, ProtocolTypeV2, RegisterDtoV2};
+use localsend::http::dto_v2::{PrepareUploadRequestDtoV2, RegisterDtoV2};
+use localsend::model::discovery::ProtocolType;
 use localsend::model::transfer::FileDto;
 use std::process::Stdio;
 use std::time::Duration;
@@ -105,7 +105,7 @@ pub fn sender_info() -> RegisterDtoV2 {
         device_type: None,
         fingerprint: "official-test-fingerprint".to_string(),
         port: PORT,
-        protocol: ProtocolTypeV2::Http,
+        protocol: ProtocolType::Http,
         download: false,
     }
 }

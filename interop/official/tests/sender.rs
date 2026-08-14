@@ -90,6 +90,7 @@ async fn go_sender_uploads_file_to_official_rust_server() {
         None,
         Some(ServerConfigV2 {
             pin: None,
+            verify_checksums: true,
             event_tx,
         }),
         None,
