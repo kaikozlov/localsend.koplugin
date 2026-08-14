@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
@@ -1497,5 +1498,168 @@ func TestRecvSession_AcceptFile_AllowsExactlyMaxFiles(t *testing.T) {
 func TestRecvSession_MaxFilesPerSession_Constant(t *testing.T) {
 	if constants.MaxFilesPerSession != 10000 {
 		t.Errorf("constants.MaxFilesPerSession should be 10000, got %d", constants.MaxFilesPerSession)
+	}
+}
+
+// TestStatus_ErrChecksum_MapsTo422 verifies the checksum-mismatch error maps
+// to HTTP 422, the status the official client treats as "retry the upload":
+// any other status surfaces as a transfer failure instead.
+func TestStatus_ErrChecksum_MapsTo422(t *testing.T) {
+	if got := constants.Status(constants.ErrChecksum); got != 422 {
+		t.Fatalf("Status(ErrChecksum) = %d; want 422", got)
+	}
+	if got := constants.ParseError(422); got != constants.ErrChecksum {
+		t.Fatalf("ParseError(422) = %v; want ErrChecksum", got)
+	}
+}
+
+// TestSaveFile_ChecksumMismatchRemovesPartialFileForRetry verifies the
+// retry-after-422 contract: the partial file is removed, so the sender's
+// retry lands on the same original filename instead of a "name (1)" duplicate
+// (official receiver behavior: retry reuses the same path).
+func TestSaveFile_ChecksumMismatchRemovesPartialFileForRetry(t *testing.T) {
+	dir := t.TempDir()
+
+	sess, _ := NewRecvSession("test-session", "192.168.1.1")
+	content := []byte("corrupted bytes")
+
+	fileMeta := models.FileMeta{
+		Id:       "file1",
+		Filename: "doc.pdf",
+		Size:     int64(len(content)),
+		Checksum: "0000000000000000000000000000000000000000000000000000000000000000",
+	}
+	_ = sess.AcceptFile("file1", fileMeta)
+	sess.Start()
+	tokens := sess.FileTokens()
+
+	if _, err := sess.SaveFile(dir, "file1", tokens["file1"], "192.168.1.1", bytes.NewReader(content)); err == nil {
+		t.Fatal("SaveFile unexpectedly succeeded with mismatched checksum")
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read save dir: %v", err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("partial files remain after checksum mismatch: %v; want none (retry must reuse the same path)", names)
+	}
+
+	// The retried upload with the correct content must land on the original name.
+	sess2, _ := NewRecvSession("retry-session", "192.168.1.1")
+	h := sha256.Sum256(content)
+	_ = sess2.AcceptFile("file1", models.FileMeta{
+		Id:       "file1",
+		Filename: "doc.pdf",
+		Size:     int64(len(content)),
+		Checksum: hex.EncodeToString(h[:]),
+	})
+	sess2.Start()
+	tokens2 := sess2.FileTokens()
+
+	savedName, err := sess2.SaveFile(dir, "file1", tokens2["file1"], "192.168.1.1", bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("retry SaveFile failed: %v", err)
+	}
+	if savedName != "doc.pdf" {
+		t.Fatalf("retry saved as %q; want original name %q", savedName, "doc.pdf")
+	}
+}
+
+// TestSaveFile_AcceptsUppercaseChecksum verifies the checksum comparison is
+// ASCII-case-insensitive, matching the official receiver (senders may announce
+// uppercase hex).
+func TestSaveFile_AcceptsUppercaseChecksum(t *testing.T) {
+	dir := t.TempDir()
+
+	sess, _ := NewRecvSession("test-session", "192.168.1.1")
+	content := []byte("case insensitive")
+
+	h := sha256.Sum256(content)
+
+	fileMeta := models.FileMeta{
+		Id:       "file1",
+		Filename: "test.txt",
+		Size:     int64(len(content)),
+		Checksum: strings.ToUpper(hex.EncodeToString(h[:])),
+	}
+	_ = sess.AcceptFile("file1", fileMeta)
+	sess.Start()
+	tokens := sess.FileTokens()
+
+	if _, err := sess.SaveFile(dir, "file1", tokens["file1"], "192.168.1.1", bytes.NewReader(content)); err != nil {
+		t.Fatalf("SaveFile rejected uppercase checksum: %v", err)
+	}
+}
+
+// TestSaveFile_AppliesMetadataTimestamps verifies the sender-declared
+// modified/accessed timestamps from FileDto.metadata are applied to the saved
+// file (official 1.18 receiver behavior).
+func TestSaveFile_AppliesMetadataTimestamps(t *testing.T) {
+	dir := t.TempDir()
+
+	sess, _ := NewRecvSession("test-session", "192.168.1.1")
+	content := []byte("timestamped")
+
+	modified := time.Date(2020, 5, 17, 12, 34, 56, 0, time.UTC)
+	accessed := time.Date(2020, 5, 18, 1, 2, 3, 0, time.UTC)
+
+	fileMeta := models.FileMeta{
+		Id:       "file1",
+		Filename: "test.txt",
+		Size:     int64(len(content)),
+		Metadata: &models.FileMetadata{
+			Modified: modified.Format(time.RFC3339),
+			Accessed: accessed.Format(time.RFC3339),
+		},
+	}
+	_ = sess.AcceptFile("file1", fileMeta)
+	sess.Start()
+	tokens := sess.FileTokens()
+
+	if _, err := sess.SaveFile(dir, "file1", tokens["file1"], "192.168.1.1", bytes.NewReader(content)); err != nil {
+		t.Fatalf("SaveFile failed: %v", err)
+	}
+
+	fi, err := os.Stat(filepath.Join(dir, "test.txt"))
+	if err != nil {
+		t.Fatalf("stat saved file: %v", err)
+	}
+	// Chtimes truncates to the filesystem's timestamp granularity; compare at second precision.
+	if fi.ModTime().Unix() != modified.Unix() {
+		t.Errorf("modtime = %v; want %v", fi.ModTime(), modified)
+	}
+}
+
+// TestSaveFile_MalformedTimestampsAreIgnored verifies malformed metadata
+// timestamps never fail the transfer.
+func TestSaveFile_MalformedTimestampsAreIgnored(t *testing.T) {
+	dir := t.TempDir()
+
+	sess, _ := NewRecvSession("test-session", "192.168.1.1")
+	content := []byte("still saves")
+
+	fileMeta := models.FileMeta{
+		Id:       "file1",
+		Filename: "test.txt",
+		Size:     int64(len(content)),
+		Metadata: &models.FileMetadata{
+			Modified: "not-a-timestamp",
+			Accessed: "",
+		},
+	}
+	_ = sess.AcceptFile("file1", fileMeta)
+	sess.Start()
+	tokens := sess.FileTokens()
+
+	if _, err := sess.SaveFile(dir, "file1", tokens["file1"], "192.168.1.1", bytes.NewReader(content)); err != nil {
+		t.Fatalf("SaveFile failed on malformed timestamps: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "test.txt")); err != nil {
+		t.Fatalf("saved file missing: %v", err)
 	}
 }

@@ -154,6 +154,46 @@ func (sess *RecvSession) applyFolderRemap(sanitizedPath string) string {
 	return sess.folderRemapper.Apply(sanitizedPath)
 }
 
+// applyFileTimes applies the sender-declared modification and access
+// timestamps from FileMeta metadata to the saved file. Malformed timestamps
+// and unsupported filesystems are skipped with a debug log; the completed
+// transfer must never fail because of them.
+func (sess *RecvSession) applyFileTimes(meta *models.FileMetadata, path string) {
+	if meta == nil {
+		return
+	}
+
+	var modTime, accessTime time.Time
+	if meta.Modified != "" {
+		if t, err := time.Parse(time.RFC3339, meta.Modified); err == nil {
+			modTime = t
+		} else {
+			slog.Debug("Ignoring malformed modified timestamp", "session", sess.id, "value", meta.Modified)
+		}
+	}
+	if meta.Accessed != "" {
+		if t, err := time.Parse(time.RFC3339, meta.Accessed); err == nil {
+			accessTime = t
+		} else {
+			slog.Debug("Ignoring malformed accessed timestamp", "session", sess.id, "value", meta.Accessed)
+		}
+	}
+
+	if modTime.IsZero() && accessTime.IsZero() {
+		return
+	}
+	if accessTime.IsZero() {
+		accessTime = modTime
+	}
+	if modTime.IsZero() {
+		modTime = accessTime
+	}
+
+	if err := os.Chtimes(path, accessTime, modTime); err != nil {
+		slog.Debug("Could not set file timestamps", "path", path, "error", err)
+	}
+}
+
 func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string, clientIP string, fileData io.Reader) (string, error) {
 	if sess.id == "" || fileId == "" || token == "" {
 		return "", lserrors.ErrInvalidBody
@@ -269,7 +309,9 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 	if expectedMeta.Checksum != "" {
 		checksum := hex.EncodeToString(hasher.Sum(nil))
 
-		if checksum != expectedMeta.Checksum {
+		// Case-insensitive: the sender may announce uppercase or lowercase hex
+		// (the official implementation compares ASCII-case-insensitively).
+		if !strings.EqualFold(checksum, expectedMeta.Checksum) {
 			slog.Error("Receive checksum mismatch",
 				"file", expectedMeta.Filename,
 				"expectedBytes", expectedSize,
@@ -281,6 +323,12 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 			return "", lserrors.ErrChecksum
 		}
 	}
+
+	// Apply the sender-declared file timestamps (protocol v2 FileDto.metadata),
+	// matching the official receiver. Best-effort: filesystems the e-reader
+	// mounts (vfat, fuse) may not support utime, which must not fail an
+	// otherwise completed transfer.
+	sess.applyFileTimes(expectedMeta.Metadata, saveAs)
 
 	// All validations passed - mark as success to prevent cleanup
 	success = true

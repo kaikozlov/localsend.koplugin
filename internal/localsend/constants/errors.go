@@ -38,6 +38,8 @@ func ParseError(status int) error {
 		return ErrBlockedByOthers
 	case 429:
 		return ErrTooManyReq
+	case 422:
+		return ErrChecksum
 	default:
 		return ErrUnknown
 	}
@@ -61,6 +63,8 @@ func Status(err error) int {
 		return 409
 	case ErrTooManyReq:
 		return 429
+	case ErrChecksum:
+		return 422
 	default:
 		return 500
 	}

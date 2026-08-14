@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 
@@ -575,6 +576,59 @@ func TestUploadHandler_KnownFileId(t *testing.T) {
 	// Note: May fail with token validation if protocol has changed, but should NOT be 400
 	if resp.StatusCode == 400 {
 		t.Errorf("Status = 400; known fileId should not return 400")
+	}
+}
+
+// TestUploadHandler_ChecksumMismatchReturns422 verifies the full handler path:
+// an upload whose bytes do not match the announced sha256 is rejected with
+// HTTP 422 — the status the official sender treats as "retry this file" —
+// and the partial file is removed so the retry reuses the same path.
+func TestUploadHandler_ChecksumMismatchReturns422(t *testing.T) {
+	fr := newTestReceiver()
+	fr.saveToDir = t.TempDir()
+
+	content := []byte("these bytes will be corrupted in transit")
+	testFiles := models.FileMetas{
+		"file1": {
+			Id:       "file1",
+			Filename: "report.pdf",
+			Size:     int64(len(content)),
+			Checksum: "0000000000000000000000000000000000000000000000000000000000000000",
+		},
+	}
+	sessionId, err := fr.sessman.NewSession(testFiles, "0.0.0.0")
+	if err != nil {
+		t.Fatalf("Failed to create session: %v", err)
+	}
+	session, err := fr.sessman.GetSession(sessionId)
+	if err != nil {
+		t.Fatalf("Failed to get session: %v", err)
+	}
+	tokens := session.FileTokens()
+
+	app := fiber.New()
+	app.Post(constants.UploadPath, fr.uploadHandler)
+
+	req := httptest.NewRequest("POST", constants.UploadPath+
+		"?sessionId="+sessionId+
+		"&fileId=file1"+
+		"&token="+tokens["file1"], bytes.NewReader(content))
+	req.Header.Set("Content-Type", "application/octet-stream")
+
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test failed: %v", err)
+	}
+	if resp.StatusCode != 422 {
+		t.Errorf("Status = %d; want 422 for checksum mismatch", resp.StatusCode)
+	}
+
+	entries, err := os.ReadDir(fr.saveToDir)
+	if err != nil {
+		t.Fatalf("read save dir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("partial file remains after 422: %d entries; want 0", len(entries))
 	}
 }
 
