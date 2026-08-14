@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -47,6 +49,27 @@ var multicastDiscoveryAddr = &net.UDPAddr{
 var discoveryResponseHTTPClient = &fasthttp.Client{
 	// #nosec G402 -- LocalSend authenticates self-signed certificates by fingerprint.
 	TLSConfig: &tls.Config{InsecureSkipVerify: true},
+}
+
+// verifyAnnouncedFingerprint returns a tls.Config VerifyPeerCertificate hook
+// that pins the HTTPS peer to the certificate fingerprint announced in its
+// multicast message (protocol spec Section 2), mirroring the official client:
+// nothing is sent to a peer that does not hold the matching certificate.
+func verifyAnnouncedFingerprint(expected string) func([][]byte, [][]*x509.Certificate) error {
+	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return errors.New("localsend: peer presented no certificate")
+		}
+		cert, err := x509.ParseCertificate(rawCerts[0])
+		if err != nil {
+			return fmt.Errorf("localsend: parse peer certificate: %w", err)
+		}
+		actual := utils.SHA256ofCert(cert)
+		if !strings.EqualFold(actual, expected) {
+			return fmt.Errorf("localsend: certificate fingerprint mismatch: announced %s, peer holds %s", expected, actual)
+		}
+		return nil
+	}
 }
 
 // discoveryEntry wraps an Announcement with last-seen timestamp for TTL cleanup.
@@ -425,7 +448,21 @@ func (mcs *Discoverer) sendHTTPResponse(ip string, anno models.Announcement) {
 	resp := fasthttp.AcquireResponse()
 	resp.SkipBody = true
 	defer fasthttp.ReleaseResponse(resp)
-	if err := discoveryResponseHTTPClient.DoTimeout(req, resp, 2*time.Second); err != nil {
+
+	client := discoveryResponseHTTPClient
+	if scheme == "https" && anno.Fingerprint != "" {
+		// Pin the announced fingerprint during the handshake so nothing is
+		// sent to a peer that does not hold the matching certificate.
+		// Each announcement gets its own client: the pin is peer-specific.
+		client = &fasthttp.Client{
+			// #nosec G402 -- fingerprint pinning below replaces CA verification.
+			TLSConfig: &tls.Config{
+				InsecureSkipVerify:    true,
+				VerifyPeerCertificate: verifyAnnouncedFingerprint(anno.Fingerprint),
+			},
+		}
+	}
+	if err := client.DoTimeout(req, resp, 2*time.Second); err != nil {
 		slog.Debug("Failed to send HTTP register response", "remote", remoteAddr, "error", err)
 		return
 	}
@@ -609,6 +646,10 @@ enqueue:
 // self-signed certificates. The protocol handles trust via fingerprint
 // verification instead of CA-based PKI. See protocol spec Section 2.
 // This is intentional and matches the official LocalSend implementation.
+//
+// Redirects are never followed: a peer answering a scan with a 3xx must not be
+// able to bounce the register POST to an arbitrary destination. This matches
+// the official client hardening in LocalSend 1.18.2.
 var httpClientForScan = &http.Client{
 	Timeout: 500 * time.Millisecond,
 	Transport: &http.Transport{
@@ -616,6 +657,9 @@ var httpClientForScan = &http.Client{
 		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
 		MaxIdleConnsPerHost: 0, // Don't keep connections open
 		DisableKeepAlives:   true,
+	},
+	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
 	},
 }
 

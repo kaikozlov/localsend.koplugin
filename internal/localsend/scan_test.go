@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"localsend-cli/internal/models"
+	"localsend-cli/internal/utils"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -641,5 +644,107 @@ func TestDiscoverer_PutDiscovered_BoundsRetainedDevices(t *testing.T) {
 	}
 	if got := len(d.discovered); got > 512 {
 		t.Fatalf("retained %d discovered devices; want at most 512", got)
+	}
+}
+
+// TestScanHTTPClient_DoesNotFollowRedirects verifies the shared scan client
+// refuses to follow a 3xx from a scanned peer (official LocalSend 1.18.2
+// hardening): the register POST must land on the scanned target only, and the
+// redirect answer itself is returned to the caller, which rejects the device.
+func TestScanHTTPClient_DoesNotFollowRedirects(t *testing.T) {
+	var urls []string
+	client := *httpClientForScan
+	client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		urls = append(urls, req.URL.String())
+		return &http.Response{
+			StatusCode: http.StatusFound,
+			Header:     http.Header{"Location": []string{"http://198.51.100.7/attacker"}},
+			Body:       io.NopCloser(strings.NewReader("")),
+		}, nil
+	})
+
+	resp, err := client.Post("http://192.0.2.9:53317/api/localsend/v2/register", "application/json", strings.NewReader("{}"))
+	if err != nil {
+		t.Fatalf("client.Do() error: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if got := len(urls); got != 1 {
+		t.Fatalf("client issued %d requests (%v); want exactly 1 — redirect must not be followed", got, urls)
+	}
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d; want 302 returned to caller", resp.StatusCode)
+	}
+}
+
+// TestSendHTTPResponse_PinsAnnouncedFingerprint verifies that answering an
+// HTTPS multicast announcement with /register is refused during the TLS
+// handshake when the peer's certificate does not match the fingerprint it
+// announced — nothing must be sent to an impersonating peer.
+func TestSendHTTPResponse_PinsAnnouncedFingerprint(t *testing.T) {
+	var requests atomic.Int32
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+	}))
+	defer target.Close()
+
+	host := strings.TrimPrefix(target.URL, "https://")
+	ip, portStr, err := net.SplitHostPort(host)
+	if err != nil {
+		t.Fatalf("split test server address: %v", err)
+	}
+	port, _ := strconv.Atoi(portStr)
+
+	d := &Discoverer{
+		selfAnno:   &models.Announcement{DeviceInfo: models.DeviceInfo{Alias: "self"}},
+		mu:         &sync.RWMutex{},
+		discovered: make(map[string]discoveryEntry),
+	}
+
+	// Announce a fingerprint the server's certificate does not hold.
+	d.sendHTTPResponse(ip, models.Announcement{
+		DeviceInfo: models.DeviceInfo{Fingerprint: "DEADBEEF"},
+		Protocol:   "https",
+		Port:       port,
+	})
+
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("impersonating server received %d register requests; want 0 (handshake must fail)", got)
+	}
+}
+
+// TestSendHTTPResponse_AcceptsMatchingFingerprint is the positive control:
+// with the server's real fingerprint announced, the register POST completes.
+func TestSendHTTPResponse_AcceptsMatchingFingerprint(t *testing.T) {
+	var requests atomic.Int32
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+	}))
+	defer target.Close()
+
+	host := strings.TrimPrefix(target.URL, "https://")
+	ip, portStr, err := net.SplitHostPort(host)
+	if err != nil {
+		t.Fatalf("split test server address: %v", err)
+	}
+	port, _ := strconv.Atoi(portStr)
+
+	cert := target.Certificate()
+	realFingerprint := utils.SHA256ofCert(cert)
+
+	d := &Discoverer{
+		selfAnno:   &models.Announcement{DeviceInfo: models.DeviceInfo{Alias: "self"}},
+		mu:         &sync.RWMutex{},
+		discovered: make(map[string]discoveryEntry),
+	}
+
+	d.sendHTTPResponse(ip, models.Announcement{
+		DeviceInfo: models.DeviceInfo{Fingerprint: realFingerprint},
+		Protocol:   "https",
+		Port:       port,
+	})
+
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("server received %d register requests; want 1 (handshake must succeed)", got)
 	}
 }
