@@ -274,8 +274,8 @@ func TestNewDeviceInfo_SetsDefaults(t *testing.T) {
 	if info.Fingerprint != "abc123" {
 		t.Errorf("Fingerprint = %q; want 'abc123'", info.Fingerprint)
 	}
-	if info.Version != "2.1" {
-		t.Errorf("Version = %q; want '2.1'", info.Version)
+	if info.Version != "2.2" {
+		t.Errorf("Version = %q; want '2.2'", info.Version)
 	}
 	if info.DeviceModel != "LocalSend-CLI" {
 		t.Errorf("DeviceModel = %q; want 'LocalSend-CLI'", info.DeviceModel)
