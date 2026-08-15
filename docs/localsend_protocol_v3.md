@@ -1,1163 +1,756 @@
-# LocalSend Protocol v3 (Unofficial)
+# LocalSend protocol state: shipping v2.2 and experimental v3/WebRTC
 
-Based on the official implementations:
-- **Rust Core**: [localsend/localsend/packages/core](https://github.com/localsend/localsend/tree/main/packages/core) (primary reference)
-- **Web Client**: [localsend/localsend/packages/web](https://github.com/localsend/localsend/tree/main/packages/web) (TypeScript/Nuxt)
+This is an **unofficial, source-pinned interoperability note**. It is not a
+claim that LocalSend currently ships a complete protocol v3.
+
+The name “v3” refers to two different unfinished artifacts: Rust code containing
+`/api/localsend/v3/*` and WebRTC scaffolding, and the official protocol
+repository's v3 Mermaid draft. They do not describe one complete, enabled
+protocol.
+
+## Table of contents
+
+- [1. Authority and status map](#1-authority-and-status-map)
+- [2. Version strings are context-dependent](#2-version-strings-are-context-dependent)
+- [3. Shipping LocalSend 1.18.x behavior: protocol v2.2](#3-shipping-localsend-118x-behavior-protocol-v22)
+  - [3.1 Discovery, addresses, and DTO casing](#31-discovery-addresses-and-dto-casing)
+  - [3.2 HTTPS identity and certificate verification](#32-https-identity-and-certificate-verification)
+  - [3.3 Upload API and v2.2 checksum behavior](#33-upload-api-and-v22-checksum-behavior)
+  - [3.4 Download API session behavior](#34-download-api-session-behavior)
+- [4. Shared cryptographic primitives](#4-shared-cryptographic-primitives)
+  - [4.1 Base64, nonces, and tokens](#41-base64-nonces-and-tokens)
+  - [4.2 Conditional WebRTC token verification](#42-conditional-webrtc-token-verification)
+  - [4.3 Generated certificates](#43-generated-certificates)
+- [5. Dormant Rust HTTP-v3 scaffolding at af3aad33](#5-dormant-rust-http-v3-scaffolding-at-af3aad33)
+  - [5.1 Actually routed endpoints](#51-actually-routed-endpoints)
+  - [5.2 Register DTO differences from v2](#52-register-dto-differences-from-v2)
+  - [5.3 HTTP nonce exchange is not the WebRTC nonce exchange](#53-http-nonce-exchange-is-not-the-webrtc-nonce-exchange)
+  - [5.4 Dormant client-only transfer methods](#54-dormant-client-only-transfer-methods)
+  - [5.5 Implemented HTTP-v3 errors](#55-implemented-http-v3-errors)
+- [6. Dormant Rust signaling and WebRTC wire behavior](#6-dormant-rust-signaling-and-webrtc-wire-behavior)
+  - [6.1 Signaling service and peer visibility](#61-signaling-service-and-peer-visibility)
+  - [6.2 Signaling URL, identity, and messages](#62-signaling-url-identity-and-messages)
+  - [6.3 STUN and ICE behavior](#63-stun-and-ice-behavior)
+  - [6.4 Data channel configuration and framing](#64-data-channel-configuration-and-framing)
+  - [6.5 Handshake and file-list exchange](#65-handshake-and-file-list-exchange)
+  - [6.6 Actual file boundaries and acknowledgements](#66-actual-file-boundaries-and-acknowledgements)
+  - [6.7 Pairing is incomplete](#67-pairing-is-incomplete)
+  - [6.8 Buffer sizes and back-pressure](#68-buffer-sizes-and-back-pressure)
+- [7. Official v3 Mermaid draft at bf371ab](#7-official-v3-mermaid-draft-at-bf371ab)
+  - [7.1 HTTP draft versus implementation](#71-http-draft-versus-implementation)
+  - [7.2 WebRTC draft versus implementation](#72-webrtc-draft-versus-implementation)
+- [8. Separately pinned historical web implementation](#8-separately-pinned-historical-web-implementation)
+- [9. Interoperability guidance](#9-interoperability-guidance)
+- [Appendix A. Wire examples](#appendix-a-wire-examples)
+- [Appendix B. Provenance and source map](#appendix-b-provenance-and-source-map)
+- [Revision history](#revision-history)
+
+---
+
+## 1. Authority and status map
+
+| Layer | Pin | What it establishes | Status |
+|---|---|---|---|
+| Official LocalSend implementation | [`af3aad33c965defc39ecff8d9a4396a851ce3cc1`](https://github.com/localsend/localsend/tree/af3aad33c965defc39ecff8d9a4396a851ce3cc1) | Shipping app version constant, enabled routes, Rust DTOs, signaling server, and dormant WebRTC code | **Protocol 2.2 ships; WebRTC is disabled** |
+| Official protocol repository | [`62bd3406ec80d62f2ed46269cdc06c4dcc391083`](https://github.com/localsend/protocol/tree/62bd3406ec80d62f2ed46269cdc06c4dcc391083) | Normative prose for protocol v2.2 | **Current stable protocol text** |
+| Official v3 Mermaid addition | [`bf371abbc24e90fefa42f43e1fd02f007f11611e`](https://github.com/localsend/protocol/commit/bf371abbc24e90fefa42f43e1fd02f007f11611e) | Design diagrams using version `3.0` | **Draft; conflicts with implementation** |
+| Separate LocalSend web repository | [`ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8`](https://github.com/localsend/web/tree/ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8) | A historical Nuxt/TypeScript WebRTC implementation | **Historical only; not part of `af3aad33`** |
+
+At the official implementation pin, the Flutter app declares:
+
+```dart
+const webRTCEnabled = false;
+```
+
+Initialization is guarded by that value. The shipping app therefore uses
+protocol v2.2 over HTTP(S), with multicast/HTTP discovery. The Rust core and the
+signaling server contain experimental v3/WebRTC building blocks, but they are
+not an enabled, complete official-app transfer path.
+
+The `af3aad33` monorepo contains the Flutter app, Rust core, Rust signaling
+server, CLI, and static browser upload/download assets. It does **not** contain a
+current `packages/web` Nuxt WebRTC client. Claims about the separate web
+repository are isolated in [§8](#8-separately-pinned-historical-web-implementation)
+and pinned independently.
+
+---
+
+## 2. Version strings are context-dependent
+
+There is no single implemented “v3 version string.”
+
+| Context | Value | Meaning |
+|---|---|---|
+| Shipping app and Rust v2 constant at `af3aad33` | `2.2` | Implemented LocalSend protocol version |
+| Disabled app signaling path | `2.2` | It passes the same shipping `protocolVersion` into signaling identity |
+| Rust signaling unit-test fixtures | `2.3` | Test data; the DTO accepts any string |
+| Historical web repository at `ea5d55d` | `2.3` | That separate implementation's constant |
+| Official v3 HTTP Mermaid draft at `bf371ab` | `3.0` | Draft diagram examples |
+
+The signaling and v3 HTTP DTO fields are plain strings and do not enforce a
+literal version. Do not infer that `2.3` is the shipping protocol, and do not
+rewrite `3.0` from the official draft as if it described the pinned Rust code.
+The Rust source calls this field the **Client Protocol Version**, not a generic
+capability label.
+
+---
+
+## 3. Shipping LocalSend 1.18.x behavior: protocol v2.2
+
+The official v2.2 prose remains the interoperability baseline. This section
+retains the v2.2 details most relevant to implementations that also experiment
+with the dormant v3 code.
+
+### 3.1 Discovery, addresses, and DTO casing
+
+Default v2.2 values:
+
+| Transport | Address | Port |
+|---|---|---:|
+| IPv4 multicast UDP | `224.0.0.167` | 53317 |
+| HTTP or HTTPS TCP | device address | 53317 |
+
+The pinned Rust implementation also has a LocalSend IPv6 multicast extension:
+`ff12::fd3a:e420` on port 53317. It creates sockets per eligible interface and
+preserves an IPv6 source scope ID. This is implementation behavior beyond the
+v2.2 prose's IPv4 default.
+
+A link-local peer such as `fe80::1%3` is unusable if its interface scope is
+lost. The Rust HTTP client maps scoped IPv6 addresses to an internal synthetic
+hostname and resolves them back to the scoped socket address. Ordinary unscoped
+IPv6 URL literals use brackets, for example
+`https://[2001:db8::1]:53317/api/localsend/v2/register`.
+
+V2 multicast and HTTP DTOs use:
+
+- `fingerprint`, not `token`;
+- `download`, not `hasWebInterface`;
+- lowercase `deviceType` (`mobile`, `desktop`, `web`, `headless`, `server`);
+- lowercase `protocol` (`http`, `https`).
+
+The v2.2 multicast message continues to use `fingerprint`. The v3 HTTP and
+signaling DTOs' use of `token` does not replace the shipping multicast field.
+
+### 3.2 HTTPS identity and certificate verification
+
+For v2.2 HTTPS, the fingerprint is the SHA-256 digest of the complete
+certificate DER, encoded as uppercase hexadecimal. HTTP mode instead uses a
+random identity string.
 
 > [!NOTE]
-> This specification extends [Protocol v2.1](https://github.com/localsend/protocol) with WebRTC support and HTTP v3 endpoints. The v2.1 protocol remains valid for legacy/LAN-only communication.
+> Mutual certificate behavior in this subsection is **shipping behavior from
+> the pinned Rust implementation**, beyond the official v2.2 README's terse
+> HTTPS description. It is not attributed to the protocol prose.
 
-> [!IMPORTANT]
-> **Version Naming**: While HTTP endpoints use `/api/localsend/v3/*`, the `version` field in client info messages is `"2.3"`. This document refers to the protocol as "v3" for clarity regarding the endpoint version.
+The pinned Rust non-web HTTPS server requires the client to present a
+certificate. When browser-facing web service modes are enabled, presentation is
+optional because browsers do not have the LocalSend client certificate, but any
+certificate that is presented is still verified as a time-valid, properly
+self-signed certificate. For v2 Register over TLS, the server also accepts the
+claimed `fingerprint` as device identity only when it matches the verified
+client certificate's DER fingerprint.
+
+Rust HTTP clients present their own certificate and private key as their
+LocalSend identity. They also verify the peer certificate during the TLS
+handshake:
+
+- for a known peer, require the expected certificate fingerprint, so request
+  metadata or file bytes are not sent to a mismatching peer;
+- for discovery, where no expected fingerprint is available yet, accept any
+  certificate that passes the self-signature and time-validity checks, then
+  obtain the peer identity from the response/certificate;
+- hostnames are not the identity mechanism because peer certificates have no
+  matching SAN.
+
+Certificate verification is therefore a **known-peer versus unknown-peer**
+distinction, not a v2-versus-v3 distinction.
+
+### 3.3 Upload API and v2.2 checksum behavior
+
+Shipping LAN upload uses only these v2 routes:
+
+```text
+POST /api/localsend/v2/prepare-upload[?pin=123456]
+POST /api/localsend/v2/upload?sessionId=...&fileId=...&token=...
+POST /api/localsend/v2/cancel?sessionId=...
+```
+
+`/prepare-upload` sends metadata and returns a session ID plus one file token
+per accepted file. `204` means no file transfer is needed; preparation errors
+include `400`, `401`, `403`, `409`, `429`, and `500` as specified by v2.2.
+
+Protocol v2.2 adds checksum-mismatch behavior to `/upload`:
+
+- a file metadata object may include a lowercase hexadecimal `sha256` digest;
+- if supplied, the receiver verifies the completed upload;
+- mismatch returns HTTP `422`;
+- the sender may retry the same file using the existing session and file token;
+- retry count is implementation policy, not part of the wire protocol.
+
+The `/upload` error set is distinct from `/prepare-upload`: `400` for missing
+parameters, `403` for invalid token or source IP, `409` for a conflicting
+session, `422` for SHA-256 mismatch, and `500` for an internal receiver error.
+
+File metadata may also carry optional RFC 3339 `metadata.modified` and
+`metadata.accessed` timestamps. Implementations should retain available
+sub-second precision.
+
+### 3.4 Download API session behavior
+
+Reverse transfer remains under v2:
+
+```text
+GET  /api/localsend/v2/info
+POST /api/localsend/v2/prepare-download[?pin=...][&sessionId=...]
+GET  /api/localsend/v2/download?sessionId=...&fileId=...
+```
+
+At the pinned Rust implementation:
+
+- `GET /info` advertises `download: true` when the Download API is active;
+- `POST /prepare-download` exchanges a valid PIN for a session ID and file list;
+- an accepted client may refresh with its existing `sessionId` without resending
+  the PIN;
+- the accepted session is bound to the request's source IP, and a new session
+  for that client replaces its previous session;
+- the current session ID happens to be the client's `PeerIp` string, but clients
+  should treat it as opaque;
+- `GET /download` uses the session and file IDs; invalid sessions and unknown
+  file IDs return `403`;
+- a missing PIN returns `401` without counting as a failed guess;
+- incorrect PINs are counted per source IP, and the third failed guess blocks
+  subsequent attempts with `429`.
+
+Browser links should remain relative to the address used for authentication.
+Changing to another interface address can change the browser's apparent source
+IP and invalidate the IP-bound session.
 
 ---
 
-## Table of Contents
+## 4. Shared cryptographic primitives
 
-- [1. Overview](#1-overview)
-- [2. Changes from v2.1](#2-changes-from-v21)
-- [3. Infrastructure](#3-infrastructure)
-  - [3.1 Default Ports and Addresses](#31-default-ports-and-addresses)
-  - [3.2 Public Signaling Server](#32-public-signaling-server)
-  - [3.3 STUN Servers](#33-stun-servers)
-- [4. Cryptographic Primitives](#4-cryptographic-primitives)
-  - [4.1 Base64 Encoding](#41-base64-encoding)
-  - [4.2 Nonce Generation](#42-nonce-generation)
-  - [4.3 Token Format](#43-token-format)
-  - [4.4 Token Generation](#44-token-generation)
-  - [4.5 Token Verification](#45-token-verification)
-  - [4.6 Supported Signature Algorithms](#46-supported-signature-algorithms)
-- [5. TLS Certificates](#5-tls-certificates)
-  - [5.1 Certificate Structure](#51-certificate-structure)
-  - [5.2 Certificate Verification](#52-certificate-verification)
-- [6. HTTP API v3](#6-http-api-v3)
-  - [6.1 Nonce Exchange](#61-nonce-exchange)
-  - [6.2 Register](#62-register)
-  - [6.3 Prepare Upload, Upload, Cancel](#63-prepare-upload-upload-cancel-v3--client-only-not-routed-by-any-server)
-  - [6.4 Error Handling](#64-error-handling)
-- [7. WebRTC Signaling Protocol](#7-webrtc-signaling-protocol)
-  - [7.1 Connection](#71-connection)
-  - [7.2 Server Messages](#72-server-messages)
-  - [7.3 Client Messages](#73-client-messages)
-  - [7.4 SDP Encoding](#74-sdp-encoding)
-- [8. WebRTC Data Channel Protocol](#8-webrtc-data-channel-protocol)
-  - [8.1 Data Channel Configuration](#81-data-channel-configuration)
-  - [8.2 Message Framing](#82-message-framing)
-  - [8.3 Complete Flow Diagram](#83-complete-flow-diagram)
-  - [8.4 Sending Flow](#84-sending-flow)
-  - [8.5 Receiving Flow](#85-receiving-flow)
-  - [8.6 Message Types](#86-message-types)
-- [9. Enums](#9-enums)
-- [10. Implementation Notes](#10-implementation-notes)
-- [Appendix C: Implementation Differences (Rust vs Web)](#appendix-c-implementation-differences-rust-vs-web)
+### 4.1 Base64, nonces, and tokens
+
+Rust uses URL-safe base64 without padding.
+
+Generated nonces are 32 cryptographically random bytes. Validation accepts
+lengths from 16 through 128 bytes inclusive.
+
+The Rust token format is:
+
+```text
+HASH_METHOD.HASH.SALT.SIGN_METHOD.SIGNATURE
+```
+
+For generated tokens:
+
+```text
+HASH_METHOD = sha256
+HASH         = base64url_no_pad(SHA256(SPKI_DER || salt))
+SIGN_METHOD  = ed25519
+SIGNATURE    = base64url_no_pad(Ed25519_sign(HASH))
+```
+
+The public key input is SubjectPublicKeyInfo DER, not raw Ed25519 key bytes.
+Rust generates only Ed25519 token-signing keys. Verification can parse both
+`ed25519` and legacy `rsa-pss` public keys.
+
+Two salt uses exist in the dormant code:
+
+- **timestamp token:** eight-byte little-endian Unix seconds, rejected when more
+  than one hour old; the FRB signaling identity path generates this token;
+- **WebRTC nonce token:** the in-band combined nonce described in §6.5.
+
+The generic v3 HTTP Register DTO also has a field named `token`, but the pinned
+server handler does not verify it. Timestamp tokens therefore must not be
+presented as implemented HTTP Register authentication.
+
+### 4.2 Conditional WebRTC token verification
+
+The Rust core implements full nonce-token verification, including token shape,
+hash/signature identifiers, exact salt equality, recomputed
+`SHA256(SPKI_DER || nonce)`, and signature verification.
+
+It invokes that verification during the initial WebRTC token exchange **only if
+the caller supplied `expecting_public_key`**. With `None`, the peer's token is
+received but not authenticated at that stage. The pinned Flutter receive path
+calls `acceptOffer` without an expected public key.
+
+The sender's dormant Pair branch can later parse the public key supplied in a
+`PAIR` response and verify the already received token against it. That does not
+make the ordinary non-paired handshake unconditionally authenticated.
+
+### 4.3 Generated certificates
+
+The pinned Rust certificate generator creates:
+
+| Property | Value |
+|---|---|
+| Key | RSA-2048 |
+| Subject | `CN=LocalSend User` |
+| SAN | none |
+| Signature | self-signed RSA/SHA-256 |
+| Practical validity | rcgen default, 1975 through 4096 |
+| Fingerprint | SHA-256 of certificate DER, uppercase hexadecimal |
+
+Token-signing Ed25519 keys are separate from this RSA TLS identity.
 
 ---
 
-## 1. Overview
+## 5. Dormant Rust HTTP-v3 scaffolding at af3aad33
 
-LocalSend v3 introduces WebRTC support for faster, more reliable file transfers that work across different networks without requiring direct LAN connectivity. The protocol operates in two phases:
+### 5.1 Actually routed endpoints
 
-1. **Signaling** - WebSocket-based discovery and SDP exchange via a signaling server
-2. **Data Transfer** - Peer-to-peer file transfer over WebRTC data channels
+The Rust server route table implements exactly two v3 paths:
 
----
-
-## 2. Changes from v2.1
-
-| Feature | v2.1 | v3 |
-|---------|------|-----|
-| HTTP API | `/api/localsend/v2/*` | `/api/localsend/v3/*` (discovery only — nonce + register) |
-| File Transfer (HTTP) | Full support via v2 endpoints | **Not implemented** — falls back to v2 HTTP for LAN |
-| File Transfer (WebRTC) | N/A | Full support via data channels |
-| Nonce Exchange | Not required | Required before WebRTC session setup |
-| Register Response | - | Adds `hasWebInterface` field |
-| Certificate Verification | Optional | Verify signature + public key match |
-| Token in Discovery | `fingerprint` | `token` (used for peer merging) |
-
----
-
-## 3. Infrastructure
-
-### 3.1 Default Ports and Addresses
-
-| Protocol | Port | Address |
-|----------|------|--------|
-| HTTP/HTTPS | 53317 | - |
-| Multicast UDP | 53317 | 224.0.0.167 |
-
-### 3.2 Public Signaling Server
-
-LocalSend provides a public signaling server for WebRTC connection establishment:
-
-```
-wss://public.localsend.org/v1/ws
+```text
+POST /api/localsend/v3/nonce
+POST /api/localsend/v3/register
 ```
 
-This server:
-- Assigns UUIDs to connected clients
-- Groups clients by IP address into "rooms"
-- Relays SDP offers/answers between peers
-- Does NOT relay file data (that goes directly peer-to-peer)
+The source marks Register `TODO: not wired up yet`. The route is reachable, but
+the handler only deserializes the request and returns local identity data. It
+does not consume cached nonces or authenticate the request token.
 
-### 3.3 STUN Servers
+### 5.2 Register DTO differences from v2
 
-STUN servers are required for WebRTC NAT traversal. Example configuration:
+The implemented Rust v3 request is:
 
-```
-stun:stun.l.google.com:19302
-stun:stun1.l.google.com:19302
-```
-
-Clients should support configurable STUN/TURN servers for enterprise environments.
-
-## 4. Cryptographic Primitives
-
-### 4.1 Base64 Encoding
-
-All base64 encoding uses **URL-safe alphabet without padding** (`URL_SAFE_NO_PAD`).
-
-```
-Standard alphabet: A-Z a-z 0-9 + /
-URL-safe alphabet: A-Z a-z 0-9 - _
-Padding: NONE (no trailing '=' characters)
-```
-
-**Example:**
-```
-Raw bytes: [0xDE, 0xAD, 0xBE, 0xEF]
-Standard:  "3q2+7w=="
-URL-safe:  "3q2-7w"
-```
-
-### 4.2 Nonce Generation
-
-Nonces are cryptographically random byte sequences.
-
-```rust
-// Generation
-length: 32 bytes
-source: cryptographically secure random number generator
-
-// Validation
-valid if: 16 <= length <= 128 bytes
-```
-
-**WebRTC Combined Nonce:**
-```
-final_nonce = sender_nonce || receiver_nonce
-```
-
-The sender transmits their nonce first, then the final nonce is the concatenation of sender's nonce followed by receiver's nonce. Both peers compute the same combined nonce.
-
-> **Note on Salt Types:** Token salts come in two forms:
-> - **Nonces** (WebRTC): 16-128 bytes, used for peer authentication
-> - **Timestamps** (Discovery/HTTP): Exactly 8 bytes (little-endian u64 Unix seconds), valid for 1 hour
-
-### 4.3 Token Format
-
-Tokens are used for authentication and pairing. The format is:
-
-```
-{HASH_METHOD}.{HASH}.{SALT}.{SIGN_METHOD}.{SIGNATURE}
-```
-
-| Field | Description |
-|-------|-------------|
-| `HASH_METHOD` | Always `sha256` |
-| `HASH` | Base64-encoded SHA-256 hash of `(public_key_spki_der \|\| salt)` |
-| `SALT` | Base64-encoded salt (nonce bytes or timestamp) |
-| `SIGN_METHOD` | `ed25519` or `rsa-pss` |
-| `SIGNATURE` | Base64-encoded signature of the hash |
-
-> **Important:** The public key MUST be encoded in **SPKI DER format** (SubjectPublicKeyInfo), not raw key bytes. This is the format returned by `to_public_key_der()` in most cryptographic libraries.
-
-**Example token:**
-```
-sha256.VGhpcyBpcyBhIHRlc3Q.MTIzNDU2Nzg.ed25519.U2lnbmF0dXJlRGF0YUhlcmU
-```
-
-### 4.4 Token Generation
-
-There are two token types with different salt sources:
-
-#### Nonce-based Tokens (WebRTC)
-Used for WebRTC authentication where both peers exchange nonces.
-
-```python
-def generate_token_nonce(signing_key, nonce):
-    # 1. Get public key in SPKI DER format
-    public_key_der = signing_key.to_public_key_der()  # SPKI format
-
-    # 2. Compute hash
-    hash_input = public_key_der + nonce
-    digest = sha256(hash_input)
-
-    # 3. Sign the hash
-    signature = signing_key.sign(digest)
-
-    # 4. Format token
-    return f"sha256.{base64(digest)}.{base64(nonce)}.ed25519.{base64(signature)}"
-```
-
-#### Timestamp-based Tokens (Discovery/HTTP)
-Used for HTTP discovery and registration where no prior nonce exchange exists.
-
-```python
-def generate_token_timestamp(signing_key):
-    # 1. Get current Unix timestamp as 8-byte little-endian
-    salt = unix_timestamp_u64().to_le_bytes()  # 8 bytes
-
-    # 2. Get public key in SPKI DER format
-    public_key_der = signing_key.to_public_key_der()
-
-    # 3. Compute hash
-    hash_input = public_key_der + salt
-    digest = sha256(hash_input)
-
-    # 4. Sign the hash
-    signature = signing_key.sign(digest)
-
-    # 5. Format token
-    return f"sha256.{base64(digest)}.{base64(salt)}.ed25519.{base64(signature)}"
-```
-
-### 4.5 Token Verification
-
-> [!WARNING]
-> **Implementation Note (as of 2025-12-30):** The Rust core fully implements nonce-based token verification for WebRTC. The web client only verifies timestamp-based tokens for discovery; it does **not** verify the remote peer's nonce-based token during WebRTC handshake. See [Appendix C](#appendix-c-implementation-differences-rust-vs-web) for details.
-
-#### Nonce-based Token Verification
-```python
-def verify_token_nonce(public_key, token, expected_nonce):
-    # 1. Parse token
-    hash_method, hash_b64, salt_b64, sign_method, sig_b64 = token.split('.')
-
-    # 2. Validate methods
-    assert hash_method == "sha256"
-    assert sign_method == public_key.signature_method()  # "ed25519" or "rsa-pss"
-
-    # 3. Decode and validate salt matches expected nonce
-    salt = base64_decode(salt_b64)
-    assert salt == expected_nonce
-
-    # 4. Recompute hash using SPKI DER format
-    public_key_der = public_key.to_der()  # SPKI format
-    expected_digest = sha256(public_key_der + salt)
-
-    # 5. Verify hash matches
-    provided_digest = base64_decode(hash_b64)
-    assert expected_digest == provided_digest
-
-    # 6. Verify signature
-    signature = base64_decode(sig_b64)
-    public_key.verify(expected_digest, signature)
-```
-
-#### Timestamp-based Token Verification
-```python
-def verify_token_timestamp(public_key, token):
-    # 1. Parse token
-    hash_method, hash_b64, salt_b64, sign_method, sig_b64 = token.split('.')
-
-    # 2. Validate methods
-    assert hash_method == "sha256"
-    assert sign_method == public_key.signature_method()
-
-    # 3. Decode and validate timestamp
-    salt = base64_decode(salt_b64)
-    assert len(salt) == 8  # Must be exactly 8 bytes
-    timestamp = u64_from_le_bytes(salt)
-    now = unix_timestamp_u64()
-    assert now - timestamp <= 3600  # Token valid for 1 hour
-
-    # 4. Recompute hash using SPKI DER format
-    public_key_der = public_key.to_der()
-    expected_digest = sha256(public_key_der + salt)
-
-    # 5. Verify hash matches
-    provided_digest = base64_decode(hash_b64)
-    assert expected_digest == provided_digest
-
-    # 6. Verify signature
-    signature = base64_decode(sig_b64)
-    public_key.verify(expected_digest, signature)
-```
-
-### 4.6 Supported Signature Algorithms
-
-| Algorithm | Identifier | Key Format | Generation | Verification |
-|-----------|------------|------------|------------|--------------|
-| Ed25519 | `ed25519` | PKCS#8 PEM | ✅ Yes | ✅ Yes |
-| RSA-PSS with SHA-256 | `rsa-pss` | PKCS#8 PEM | ❌ No | ✅ Yes (legacy interop) |
-
-> [!NOTE]
-> Current implementations generate tokens exclusively with Ed25519 (`SigningTokenKey` wraps `ed25519_dalek::SigningKey`). RSA-PSS support exists for **verification only** — implementations must be able to verify RSA-PSS tokens received from older clients, but will never generate them. The `generate_token_nonce` and `generate_token_timestamp` functions hardcode `sign_method = "ed25519"`.
-
-**Ed25519 Example Public Key:**
-```
------BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAZmdXP230oqK92o65ra3XaF2F8r3+fK5DEBK4c40qVts=
------END PUBLIC KEY-----
-```
-
----
-
-## 5. TLS Certificates
-
-### 5.1 Certificate Structure
-
-LocalSend uses self-signed X.509 certificates:
-
-| Field | Value |
-|-------|-------|
-| Common Name (CN) | `LocalSend User` |
-| Validity | 10 years |
-| Key Algorithm | RSA 2048 or Ed25519 |
-| Signature Algorithm | SHA-256 with RSA |
-
-### 5.2 Certificate Verification
-
-When connecting over HTTPS, verify:
-
-1. **Signature validity** - Certificate is properly self-signed
-2. **Time validity** - Current time is within certificate's validity period
-3. **Public key match** - If expecting a specific peer, verify the certificate's public key matches
-
-```python
-def verify_certificate(cert_der, expected_public_key=None):
-    cert = parse_x509(cert_der)
-    
-    # 1. Check time validity
-    if not cert.is_valid_now():
-        raise Error("Time validity error")
-    
-    # 2. Check signature (self-signed)
-    cert.verify_signature()
-    
-    # 3. Optional: Check public key
-    if expected_public_key:
-        cert_key = cert.public_key.to_pem()
-        if cert_key != expected_public_key:
-            raise Error("Public key mismatch")
-```
-
----
-
-## 6. HTTP API v3
-
-The v3 HTTP API is limited to **discovery and session setup**. File transfer over HTTP uses v2 endpoints exclusively (see §2). The v3 additions are:
-
-- **Nonce exchange** (`/nonce`) — cryptographic handshake for WebRTC session setup
-- **Register** (`/register`) — enhanced device discovery with `hasWebInterface` field
-
-The v3 Rust client library includes `prepare_upload`, `upload`, and `cancel` methods targeting `/api/localsend/v3/*` paths, but **no server implementation routes these endpoints** — neither the Rust HTTP server nor the Flutter app's HTTP server. In practice, v3 file transfers use WebRTC data channels (§8), and LAN-only transfers fall back to v2 HTTP.
-
-> [!NOTE]
-> HTTP file transfer remains on v2 endpoints. This includes both the upload API (`/prepare-upload`, `/upload`, `/cancel`) and the reverse-transfer Download API (`/info`, `/prepare-download`, `/download`). See the [v2.1 protocol spec](https://github.com/localsend/protocol) for details.
-
-### 6.1 Nonce Exchange
-
-Used for secure handshakes before sensitive operations.
-
-`POST /api/localsend/v3/nonce`
-
-**Request:**
-```json5
-{
-  "nonce": "base64-url-safe-nonce-string"  // 32 bytes recommended
-}
-```
-
-**Response:**
-```json5
-{
-  "nonce": "base64-url-safe-nonce-string"  // New nonce for client to use
-}
-```
-
-The server validates: `16 <= len(nonce) <= 128` bytes.
-
-### 6.2 Register
-
-Same as v2 register but with additional field.
-
-`POST /api/localsend/v3/register`
-
-**Request:**
 ```json5
 {
   "alias": "Nice Orange",
-  "version": "2.0",
-  "deviceModel": "Samsung",       // nullable
-  "deviceType": "MOBILE",         // nullable, SCREAMING_SNAKE_CASE
-  "token": "unique-client-token",
+  "version": "2.2",            // plain string; not enforced
+  "deviceModel": "Samsung",   // optional; omitted when absent
+  "deviceType": "MOBILE",     // optional; SCREAMING_SNAKE_CASE
+  "token": "opaque-or-signed-token",
   "port": 53317,
-  "protocol": "HTTPS",            // "HTTP" | "HTTPS"
-  "hasWebInterface": false        // optional, default false
+  "protocol": "HTTPS",        // SCREAMING_SNAKE_CASE
+  "hasWebInterface": true      // defaults false; omitted when false on serialization
 }
 ```
 
-**Response:**
+The response omits `port` and `protocol`:
+
 ```json5
 {
   "alias": "Secret Banana",
-  "version": "2.0",
+  "version": "2.2",
   "deviceModel": "Windows",
   "deviceType": "DESKTOP",
-  "token": "unique-client-token",
+  "token": "server-token",
   "hasWebInterface": true
 }
 ```
 
-### 6.3 Prepare Upload, Upload, Cancel (v3 — client-only, not routed by any server)
+Compared with v2, this is not “the same DTO plus one field.” It renames
+`fingerprint` to `token`, renames `download` to `hasWebInterface`, and changes
+`deviceType` and `protocol` wire casing to `SCREAMING_SNAKE_CASE`.
 
-The Rust core's v3 HTTP client (`core/src/http/client/v3.rs`) includes `prepare_upload()`, `upload()`, and `cancel()` methods that target `/api/localsend/v3/prepare-upload`, `/api/localsend/v3/upload`, and `/api/localsend/v3/cancel` respectively. However, **no server implementation handles these routes**:
+### 5.3 HTTP nonce exchange is not the WebRTC nonce exchange
 
-- The Rust HTTP server (`core/src/http/server/mod.rs`) only routes `/api/localsend/v3/nonce` and `/api/localsend/v3/register`
-- The Flutter app's HTTP server (`receive_controller.dart`) only registers v1 and v2 routes via `ApiRoute.*.v2` (the `ApiRoute` enum in `api_route_builder.dart` generates only v1 and v2 paths)
+`POST /api/localsend/v3/nonce` accepts:
 
-These v3 client methods appear to be scaffolding for future use or are used internally by the WebRTC sender during session setup. The actual request/response formats are identical to v2 (see [v2.1 spec §4](https://github.com/localsend/protocol#4-file-transfer-http-aka-upload-api)). In practice, v3 file transfers use WebRTC data channels (§8).
-
-> [!WARNING]
-> Do not implement v3 `/prepare-upload`, `/upload`, or `/cancel` server endpoints expecting interoperability with the official LocalSend app. Use v2 HTTP endpoints for LAN file transfers.
-
-### 6.4 Error Handling
-
-**Error Response Format:**
-```json5
-{
-  "message": "Error description"
-}
+```json
+{"nonce":"<base64url-no-pad, decoded length 16..128>"}
 ```
 
-**Error Codes:**
+It stores the received nonce and returns a newly generated 32-byte nonce:
 
-| HTTP Code | Description |
-|-----------|-------------|
-| 204 | Finished (no file transfer needed) |
-| 400 | Invalid body / Missing parameters |
-| 401 | PIN required / Invalid PIN |
-| 403 | Rejected / Invalid token |
-| 409 | Blocked by another session |
-| 429 | Too many requests |
-| 500 | Unknown error |
-
-## 7. WebRTC Signaling Protocol
-
-The signaling server facilitates WebRTC connection establishment between peers.
-
-### 7.1 Connection
-
-Connect to the signaling server via WebSocket:
-
-```
-wss://<signaling-server>/ws?d=<base64-client-info>
+```json
+{"nonce":"<base64url-no-pad>"}
 ```
 
-The `d` query parameter contains base64-encoded JSON (URL_SAFE_NO_PAD):
+Both client and server keep 200-entry LRU caches for received and generated
+nonces. The server key is the certificate public key when TLS identity is
+available, otherwise the client IP.
+
+No routed Register or WebRTC code consumes those HTTP nonce caches at this pin.
+WebRTC performs a separate nonce exchange **inside the data channel after it
+opens**. Calling HTTP `/nonce` is not a prerequisite for the implemented WebRTC
+scaffolding.
+
+### 5.4 Dormant client-only transfer methods
+
+`LsHttpClientV3` contains methods targeting:
+
+```text
+POST /api/localsend/v3/prepare-upload
+POST /api/localsend/v3/upload
+POST /api/localsend/v3/cancel
+```
+
+No pinned server route handles them, and the WebRTC implementation does not call
+them. There is no Rust v3 `/pair` client method either.
+
+Their DTO/wire behavior is not identical to v2. In particular, the v3
+`prepare_upload` method has no PIN query argument, while v2 explicitly supports
+`?pin=...`; its nested `info` is the renamed uppercase-cased v3 Register DTO.
+These methods are dormant client scaffolding, not an interoperable HTTP-v3 file
+transfer.
+
+### 5.5 Implemented HTTP-v3 errors
+
+Implemented behavior must be separated from the draft's transfer statuses:
+
+| Condition | Implemented response |
+|---|---|
+| Valid `/nonce` | `200` with `NonceResponse` |
+| Invalid JSON/body | `400` JSON `{"message":"..."}` |
+| Invalid base64 or nonce length | `400` JSON `{"message":"Invalid nonce format"}` or `{"message":"Invalid nonce"}` |
+| Valid `/register` body | `200` with `RegisterResponseDto` |
+| Internal handler failure | `500` JSON `{"message":"Internal server error"}` |
+| Any other v3 path | `404` with an empty body from the route table |
+
+The v2 transfer statuses `204`, `401`, `403`, `409`, `422`, and `429` are not
+implemented v3 route behavior. They remain relevant only to shipping v2 routes
+or to the unimplemented Mermaid design in §7.
+
+---
+
+## 6. Dormant Rust signaling and WebRTC wire behavior
+
+Everything in this section describes code present at `af3aad33`, not an enabled
+shipping feature.
+
+### 6.1 Signaling service and peer visibility
+
+The default disabled-app settings are:
+
+```text
+Signaling: wss://public.localsend.org/v1/ws
+STUN:      stun:stun.localsend.org:5349
+```
+
+The signaling server assigns a UUID and exposes/relays peers only within a group
+derived from the source address:
+
+- IPv4: exact source address;
+- IPv6: the source `/64` prefix.
+
+It does not provide arbitrary global peer discovery, and it relays SDP rather
+than file bytes.
+
+### 6.2 Signaling URL, identity, and messages
+
+The route is exactly:
+
+```text
+wss://<host>/v1/ws?d=<base64url-no-pad(JSON ClientInfoWithoutId)>
+```
+
+Example identity for the pinned app if the disabled path were enabled:
 
 ```json5
 {
   "alias": "Nice Orange",
-  "version": "2.0",
-  "deviceModel": "Samsung",    // optional
-  "deviceType": "mobile",      // optional, lowercase
-  "token": "unique-client-token"
+  "version": "2.2",
+  "deviceModel": "Samsung",
+  "deviceType": "MOBILE",
+  "token": "timestamp-signed-token"
 }
 ```
 
-### 7.2 Server Messages
+The server-to-client message tags are `HELLO`, `JOIN`, `UPDATE`, `LEFT`,
+`OFFER`, `ANSWER`, and `ERROR`. Client-to-server tags are `UPDATE`, `OFFER`, and
+`ANSWER`. Fields within message objects are camelCase. Device types are
+SCREAMING_SNAKE_CASE.
 
-Messages sent from server to client. All use `type` field with `SCREAMING_SNAKE_CASE`.
+`OFFER` and `ANSWER` carry `sessionId`, peer/target identity, and `sdp`. SDP is
+UTF-8, zlib-compressed at best compression, then URL-safe base64 encoded without
+padding.
 
-#### HELLO
-Sent immediately after connection. Contains your assigned info and current peers.
+The Rust signaling client sends a WebSocket Ping frame after 120 seconds without
+an outgoing application message. No current web-client keep-alive behavior is
+implied here; the independently pinned historical behavior is in §8.
 
-```json5
-{
-  "type": "HELLO",
-  "client": {
-    "id": "uuid",              // Server-assigned UUID
-    "alias": "Nice Orange",
-    "version": "2.0",
-    "deviceModel": "Samsung",  // optional
-    "deviceType": "mobile",    // optional
-    "token": "unique-client-token"
-  },
-  "peers": [
-    // Array of other connected clients (same structure as client)
-  ]
-}
+### 6.3 STUN and ICE behavior
+
+STUN is configurable and useful for server-reflexive candidates, but it is not
+inherently required when host candidates can connect directly on a LAN. The
+disabled Flutter app's current default is LocalSend's STUN URI above, not
+Google's.
+
+The Rust core accepts caller-provided STUN URLs and constructs one
+`RTCIceServer` with only `urls`; credentials remain default. Authenticated TURN
+is not represented by this API.
+
+The peer connection otherwise uses library defaults. The code does **not** set a
+custom ICE port range, disconnected timeout, candidate pool, or other tuning. It
+reacts when the peer-connection state becomes `Disconnected`.
+
+Both Rust offer and answer paths wait for complete ICE gathering before sending
+the compressed SDP; this is non-trickle ICE.
+
+### 6.4 Data channel configuration and framing
+
+The sender creates one data channel:
+
+```text
+label = "data"
+ordered = true
+maxPacketLifeTime = unset
+maxRetransmits = unset
+protocol = unset
+negotiated = unset
 ```
 
-#### JOIN
-A new peer joined the room.
+Wire framing:
 
-```json5
-{
-  "type": "JOIN",
-  "peer": { /* ClientInfo */ }
-}
+- ordinary handshake/header/status messages are text JSON;
+- large JSON messages and file bodies are binary chunks;
+- binary output is repacked to at most 16 KiB per data-channel message;
+- chunked JSON is followed by a text delimiter;
+- the implementation emits text `"0"` as the delimiter;
+- Rust delimiter recognition is broader than emission: any text message whose
+  byte length is zero or one is treated as a delimiter.
+
+A text message is therefore structural. Do not insert arbitrary text frames in
+a file body.
+
+### 6.5 Handshake and file-list exchange
+
+The actual Rust sequence after the data channel opens is:
+
+1. **In-band nonce exchange.** Sender sends its nonce; receiver replies with its
+   nonce. Both compute `sender_nonce || receiver_nonce`.
+2. **Token exchange.** Sender sends `RTCTokenRequest`; receiver replies with
+   `RTCTokenResponse::Ok {token}`, `PinRequired {token}`, or
+   `InvalidSignature`. Initial verification is conditional as described in
+   §4.2.
+3. **Optional receiver PIN.** If the receiver requires a PIN, it challenges the
+   sender with `PIN_REQUIRED`, `OK`, or `TOO_MANY_ATTEMPTS` status messages.
+4. **Optional sender PIN.** The sender may independently require the receiver to
+   prove a PIN before disclosing the file list.
+5. **File list.** Sender emits chunked `RTCPinSendingResponse::Ok {files}` and a
+   delimiter.
+6. **Selection.** Receiver returns chunked `RTCFileListResponse::Ok {files}`
+   mapping accepted file IDs to file-specific tokens, then a delimiter; it may
+   instead return `DECLINED`. File tokens generated by Rust are UUID v4 strings.
+
+Core wire enums also define `PAIR` and related responses, but official-app
+pairing is incomplete (§6.7).
+
+### 6.6 Actual file boundaries and acknowledgements
+
+The Rust sender does **not** send a delimiter after each file and does **not**
+wait for one status inside each file loop.
+
+Actual sender behavior:
+
+```text
+for each accepted file:
+    send text RTCSendFileHeaderRequest {id, token}
+    send binary file chunks
+send one final text "0"
+receive exactly one data-channel message
+close
 ```
 
-#### UPDATE
-A peer updated its info.
+On the receiver, the next text frame closes the previous file. That text is
+either the next file's header or the final delimiter. For each completed file,
+the receiver:
 
-```json5
-{
-  "type": "UPDATE",
-  "peer": { /* ClientInfo */ }
-}
+1. waits for the application to provide an `RTCSendFileResponse` through the
+   FRB `send_file_status` action;
+2. serializes and sends that result to the sender;
+3. if the boundary text is the final delimiter, waits briefly for output to
+   flush and exits;
+4. otherwise parses the same text as the next `RTCSendFileHeaderRequest`.
+
+This is an application-status handshake; completion of the byte stream does not
+automatically manufacture success.
+
+`RTCSendFileResponse.error` is optional and omitted on success:
+
+```json
+{"id":"file-1","success":true}
 ```
 
-#### LEFT
-A peer disconnected.
+A failure includes the field:
 
-```json5
-{
-  "type": "LEFT",
-  "peerId": "uuid"
-}
+```json
+{"id":"file-1","success":false,"error":"checksum mismatch"}
 ```
 
-#### OFFER
-SDP offer from another peer.
+Because the Rust sender drains only one message after the final delimiter, it
+does not consume and associate every per-file response in the way the official
+Mermaid draft depicts. Implementers reproducing the pinned Rust wire must not
+invent per-file delimiters; implementers designing a corrected protocol should
+resolve this incomplete acknowledgement behavior explicitly.
 
-```json5
-{
-  "type": "OFFER",
-  "peer": { /* ClientInfo of sender */ },
-  "sessionId": "unique-session-id",
-  "sdp": "zlib-compressed-base64-sdp"
-}
-```
+### 6.7 Pairing is incomplete
 
-#### ANSWER
-SDP answer from another peer.
+Pair-related enum variants and a sender-side parser exist in the core. If the
+sender receives `RTCFileListResponse::Pair {publicKey}`, it can verify the
+remote token using that key, ask an application callback, and send `OK`,
+`PAIR_DECLINED`, or `INVALID_SIGNATURE`.
 
-```json5
-{
-  "type": "ANSWER",
-  "peer": { /* ClientInfo of sender */ },
-  "sessionId": "unique-session-id",
-  "sdp": "zlib-compressed-base64-sdp"
-}
-```
+The pinned official application does not complete that flow:
 
-#### ERROR
-```json5
-{
-  "type": "ERROR",
-  "code": 500
-}
-```
+- the FRB sender bridge has `TODO: support pairing` and automatically answers
+  the pairing decision `false`;
+- the receiver selection API exposes only “accept a set” or “decline”; it has no
+  Pair-request action;
+- the core receiver path emits `OK` or `DECLINED`, not `PAIR`;
+- Flutter receive-page accept/decline callbacks are no-ops and session setup is
+  marked TODO.
 
-### 7.3 Client Messages
+Pairing is therefore wire-model scaffolding, not a complete official-app
+feature.
 
-Messages sent from client to server.
+### 6.8 Buffer sizes and back-pressure
 
-#### UPDATE
-```json5
-{
-  "type": "UPDATE",
-  "info": { /* ClientInfoWithoutId */ }
-}
-```
+Pinned Rust values:
 
-#### OFFER
-```json5
-{
-  "type": "OFFER",
-  "sessionId": "unique-session-id",  // Client-generated UUID
-  "target": "target-peer-uuid",
-  "sdp": "zlib-compressed-base64-sdp"
-}
-```
+| Layer | Value |
+|---|---:|
+| File-backed source read buffer | 512 KiB |
+| File-backed source channel capacity | 16 chunks |
+| WebRTC output chunk size | 16 KiB |
+| Data-channel receive queue capacity | 16 messages |
+| Back-pressure polling | every 100 ms until `buffered_amount() == 0` |
 
-#### ANSWER
-```json5
-{
-  "type": "ANSWER",
-  "sessionId": "unique-session-id",  // Same as the offer's sessionId
-  "target": "target-peer-uuid",
-  "sdp": "zlib-compressed-base64-sdp"
-}
-```
-
-### 7.4 Keep-Alive
-
-Clients should send periodic keep-alive messages to prevent WebSocket timeout:
-
-| Implementation | Method | Interval |
-|----------------|--------|----------|
-| Rust Core | WebSocket Ping frame (`Message::Ping`) | 120 seconds |
-| Web Client | Empty text message (`""`) | 120 seconds |
-
-Both methods are acceptable; the signaling server handles both.
-
-**Token Refresh (Web-specific):**
-
-The web client also refreshes its identity token periodically to handle long-running browser sessions:
-
-```javascript
-// Every 30 minutes, generate new token and send UPDATE
-setInterval(async () => {
-  const info = await generateNewInfo();  // New token with fresh timestamp
-  socket.send(JSON.stringify({ type: "UPDATE", info }));
-}, 30 * 60 * 1000);
-```
-
-### 7.5 SDP Encoding
-
-SDP strings are compressed and encoded:
-
-```python
-def encode_sdp(sdp_string):
-    compressed = zlib.compress(sdp_string.encode(), level=BEST_COMPRESSION)
-    return base64_url_safe_no_pad_encode(compressed)
-
-def decode_sdp(encoded):
-    compressed = base64_url_safe_no_pad_decode(encoded)
-    return zlib.decompress(compressed).decode()
-```
+The 512 KiB source chunks are repacked into 16 KiB data-channel messages. The
+old 1 KiB file-read claim was incorrect. Historical browser thresholds, where
+relevant, are isolated in §8 rather than stated as current Rust behavior.
 
 ---
 
-## 8. WebRTC Data Channel Protocol
+## 7. Official v3 Mermaid draft at bf371ab
 
-After SDP exchange, peers communicate over a WebRTC data channel.
+Commit `bf371ab` added `v3/http-diagram.mermaid` and
+`v3/webrtc-diagram.mermaid` to the official protocol repository. The pinned
+protocol checkout at `62bd340` contains those files, while its normative prose
+README remains v2.2.
 
-### 8.1 Data Channel Configuration
+Treat the Mermaid files as an official **draft design**, not as proof of shipped
+routes or exact `af3aad33` wire behavior.
 
-```javascript
-{
-  label: "data",
-  ordered: true,
-  maxPacketLifeTime: null,
-  maxRetransmits: null,
-  protocol: null,
-  negotiated: false
-}
+### 7.1 HTTP draft versus implementation
+
+The HTTP diagram uses version `3.0` and depicts:
+
+- multicast/legacy Register using `fingerprint` and `download`;
+- `/nonce`, followed by an authenticated re-register using a nonce-signed token;
+- token failure and PIN-required Register responses with status DTOs;
+- `/prepare-upload?pin=...`;
+- `202 PAIR_REQUESTED` and `POST /api/localsend/v3/pair`;
+- `/api/localsend/v3/upload` and `/api/localsend/v3/cancel`;
+- session/token/IP validation and nonce cleanup.
+
+At `af3aad33`, only `/nonce` and `/register` are routed. Register uses the
+`token`/`hasWebInterface` DTO from §5.2, performs no authentication, and returns
+ordinary identity data. The draft's authenticated Register response DTOs,
+`/pair`, transfer routes, statuses, and cleanup flow are unimplemented.
+
+The dormant Rust client methods also do not exactly implement the draft:
+notably, v3 `prepare_upload` has no PIN argument, and there is no v3 Pair client
+method.
+
+### 7.2 WebRTC draft versus implementation
+
+The draft's high-level signaling, in-band nonce/token exchange, optional PINs,
+and 16 KiB chunks correspond broadly to Rust types.
+
+Its file loop does not match the pinned Rust sender. The diagram shows:
+
+```text
+header -> file chunks -> delimiter -> RTCSendFileResponse
 ```
 
-### 8.2 Message Framing
+for every file, followed by another final delimiter. Rust sends no per-file
+delimiters; the next header implicitly terminates the preceding file, and only
+one delimiter terminates the entire batch. Rust also receives only once after
+that final delimiter instead of waiting once per file inside the loop.
 
-#### Chunk Size
-All binary data is chunked at **16 KiB (16,384 bytes)**.
-
-```
-CHUNK_SIZE = 16 * 1024  // 16 KiB
-```
-
-#### Message Types
-- **String messages**: JSON protocol messages (headers, responses)
-- **Binary messages**: File data chunks, chunked JSON for large messages
-
-#### Delimiter
-A **text message containing `"0"`** signals the end of a chunked message or file transfer.
-
-```
-Delimiter = text message "0"
-Detection = msg.is_string && msg.data.len() <= 1
-```
-
-#### Chunked String Messages
-Large JSON messages (like file lists) are sent as:
-1. Binary chunks (max 16 KiB each)
-2. Text delimiter `"0"` to signal end
-3. Receiver concatenates binary chunks until delimiter
-
-```python
-# Sending
-def send_string_in_chunks(channel, json_string):
-    data = json_string.encode()
-    for i in range(0, len(data), CHUNK_SIZE):
-        chunk = data[i:i+CHUNK_SIZE]
-        channel.send_binary(chunk)
-    channel.send_text("0")  # delimiter
-
-# Receiving
-def receive_string_from_chunks(channel):
-    buffer = bytearray()
-    while True:
-        msg = channel.receive()
-        if msg.is_string:  # hit delimiter
-            break
-        buffer.extend(msg.data)
-    return buffer.decode()
-```
-
-### 8.3 Complete Flow Diagram
-
-```mermaid
-sequenceDiagram
-    participant S as Sender
-    participant R as Receiver
-    
-    Note over S,R: Data Channel Opens (label="data", ordered=true)
-    
-    rect rgb(240, 248, 255)
-    Note over S,R: Phase 1: Nonce Exchange
-    S->>R: RTCNonceMessage {nonce: base64(32 bytes)}
-    R->>S: RTCNonceMessage {nonce: base64(32 bytes)}
-    Note over S,R: combined_nonce = sender_nonce || receiver_nonce
-    end
-    
-    rect rgb(255, 248, 240)
-    Note over S,R: Phase 2: Token Exchange
-    S->>R: RTCTokenRequest {token: "sha256.hash.nonce.ed25519.sig"}
-    R->>S: RTCTokenResponse {status: "OK", token: "..."}
-    Note over S,R: Both verify token signature using combined_nonce
-    end
-    
-    rect rgb(240, 255, 240)
-    Note over S,R: Phase 3: PIN Handling (Optional)
-    alt Receiver requires PIN
-        Note right of R: Receiver sends PIN_REQUIRED challenge
-        loop Until correct PIN or max attempts
-            S->>R: RTCPinMessage {pin: "123456"}
-            alt Wrong PIN
-                R->>S: RTCPinReceivingResponse {status: "PIN_REQUIRED"}
-            else Max attempts exceeded
-                R->>S: RTCPinReceivingResponse {status: "TOO_MANY_ATTEMPTS"}
-                Note over S,R: Session terminated
-            end
-        end
-        R->>S: RTCPinReceivingResponse {status: "OK"}
-    end
-    alt Sender requires PIN
-        S->>R: RTCPinSendingResponse {status: "PIN_REQUIRED"}
-        loop Until correct PIN or max attempts
-            R->>S: RTCPinMessage {pin: "123456"}
-            alt Wrong PIN
-                S->>R: RTCPinSendingResponse {status: "PIN_REQUIRED"}
-            else Max attempts exceeded
-                S->>R: RTCPinSendingResponse {status: "TOO_MANY_ATTEMPTS"}
-                Note over S,R: Session terminated
-            end
-        end
-        S->>R: RTCPinSendingResponse {status: "OK", files: [...]}
-    end
-    end
-    
-    rect rgb(255, 240, 255)
-    Note over S,R: Phase 4: File List Exchange
-    S->>R: [binary chunks] RTCPinSendingResponse with files
-    S->>R: delimiter "0"
-    R->>S: [binary chunks] RTCFileListResponse with tokens
-    R->>S: delimiter "0"
-    end
-    
-    rect rgb(248, 248, 248)
-    Note over S,R: Phase 5: File Transfer
-    loop For each accepted file
-        S->>R: RTCSendFileHeaderRequest {id, token} (text)
-        S->>R: [binary chunks up to 16KB each]
-    end
-    S->>R: delimiter "0" (end of all files)
-    end
-```
-
-### 8.4 Sending Flow (Sender Perspective)
-
-1. **Create data channel** with label `"data"`, ordered=true
-2. **Wait for channel open event**
-3. **Wait for buffer to empty** before sending
-
-#### Phase 1: Nonce Exchange
-```python
-# Generate and send local nonce
-local_nonce = random_bytes(32)
-send_text(json({nonce: base64(local_nonce)}))
-
-# Receive remote nonce
-remote_msg = receive()  # must be string
-remote_nonce = base64_decode(json_parse(remote_msg).nonce)
-
-# Combine: sender first, receiver second
-combined_nonce = local_nonce + remote_nonce
-```
-
-#### Phase 2: Token Exchange
-```python
-# Generate token using combined nonce as salt
-token = generate_token(signing_key, combined_nonce)
-send_text(json({token: token}))
-
-# Receive response
-response = receive()  # RTCTokenResponse
-if response.status == "INVALID_SIGNATURE":
-    disconnect()
-if expecting_public_key:
-    verify_token(expecting_public_key, response.token, combined_nonce)
-```
-
-#### Phase 3: PIN Handling
-```python
-if response.status == "PIN_REQUIRED":
-    while True:
-        pin = prompt_user_for_pin()
-        send_text(json({pin: pin}))
-        result = receive()
-        if result.status == "OK":
-            break
-        if result.status == "TOO_MANY_ATTEMPTS":
-            disconnect()
-
-if own_pin_config:
-    # Verify remote's PIN attempts
-    send_result = verify_remote_pin(receive_rx, own_pin_config)
-```
-
-#### Phase 4: File List
-```python
-# Send file list (chunked)
-file_list = RTCPinSendingResponse(status="OK", files=[...])
-send_string_in_chunks(json(file_list))
-send_delimiter()
-
-# Receive file tokens (chunked)
-response = receive_string_from_chunks()  # RTCFileListResponse
-if response.status == "DECLINED":
-    return
-file_tokens = response.files  # {file_id: token}
-```
-
-#### Phase 5: File Transfer
-```python
-for file in selected_files:
-    token = file_tokens[file.id]
-    
-    # Send header as text
-    header = {id: file.id, token: token}
-    send_text(json(header))
-    
-    # Send file data in 16KB chunks
-    for chunk in file.read_chunks(16384):
-        send_binary(chunk)
-
-# Final delimiter
-wait_buffer_empty()
-send_delimiter()
-receive()  # Wait for ack before closing
-```
-
-### 8.5 Receiving Flow (Receiver Perspective)
-
-1. **Wait for data channel** with label `"data"`
-2. **Set up message handler**
-
-The flow mirrors the sender, with nonce order reversed:
-
-```python
-# Nonce: receive first, then send
-remote_nonce = receive_nonce()
-local_nonce = random_bytes(32)
-send_text(json({nonce: base64(local_nonce)}))
-combined_nonce = remote_nonce + local_nonce  # sender's first!
-```
-
-#### Receiving Files
-```python
-file_state = None
-while True:
-    msg = receive()
-    
-    if msg.is_string:
-        if is_delimiter(msg):
-            # End of all files
-            break
-            
-        # New file header or end of previous file
-        if file_state:
-            file_state.complete()
-            send_text(json({id: file_state.id, success: true}))
-        
-        header = json_parse(msg)  # RTCSendFileHeaderRequest
-        if file_tokens[header.id] != header.token:
-            error("Invalid token")
-            continue
-        
-        file_state = start_receiving_file(header.id)
-    else:
-        # Binary file data
-        if file_state:
-            file_state.write(msg.data)
-```
-
-### 8.6 Message Types
-
-All messages use JSON with `camelCase` field names. Status fields use `SCREAMING_SNAKE_CASE`.
-
-#### RTCNonceMessage
-```json5
-{
-  "nonce": "base64-encoded-32-bytes"
-}
-```
-
-#### RTCTokenRequest
-```json5
-{
-  "token": "sha256.{hash}.{nonce}.ed25519.{signature}"
-}
-```
-
-#### RTCTokenResponse
-```json5
-{
-  "status": "OK",           // "OK" | "PIN_REQUIRED" | "INVALID_SIGNATURE"
-  "token": "..."            // Present if status != "INVALID_SIGNATURE"
-}
-```
-
-#### RTCPinMessage
-```json5
-{
-  "pin": "123456"
-}
-```
-
-#### RTCPinReceivingResponse
-```json5
-{
-  "status": "OK"            // "OK" | "PIN_REQUIRED" | "TOO_MANY_ATTEMPTS"
-}
-```
-
-#### RTCPinSendingResponse
-```json5
-{
-  "status": "OK",           // "OK" | "PIN_REQUIRED" | "TOO_MANY_ATTEMPTS"
-  "files": [                // Only if status == "OK"
-    {
-      "id": "uuid",
-      "fileName": "photo.png",
-      "size": 12345,
-      "fileType": "image/png",
-      "sha256": "...",              // optional
-      "preview": "base64-data",     // optional
-      "metadata": {                 // optional
-        "modified": "2024-01-01T12:00:00Z",
-        "accessed": "2024-01-01T12:00:00Z"
-      }
-    }
-  ]
-}
-```
-
-#### RTCFileListResponse
-```json5
-{
-  "status": "OK",           // "OK" | "PAIR" | "DECLINED" | "INVALID_SIGNATURE"
-  "files": {                // Present if status == "OK"
-    "file-id-1": "token-uuid-1",
-    "file-id-2": "token-uuid-2"
-  },
-  "publicKey": "PEM-key"    // Present if status == "PAIR"
-}
-```
-
-#### RTCPairResponse
-```json5
-{
-  "status": "OK",           // "OK" | "PAIR_DECLINED" | "INVALID_SIGNATURE"
-  "publicKey": "PEM-key"    // Present if status == "OK"
-}
-```
-
-#### RTCSendFileHeaderRequest
-```json5
-{
-  "id": "file-uuid",
-  "token": "file-token-uuid"
-}
-```
-
-#### RTCSendFileResponse
-```json5
-{
-  "id": "file-uuid",
-  "success": true,
-  "error": null             // String if success == false
-}
-```
+The draft's Pair flow is also not exposed end to end by the pinned official app.
 
 ---
 
-## 9. Enums
+## 8. Separately pinned historical web implementation
 
-### Device Type
+A real Nuxt/TypeScript WebRTC implementation exists in the separate
+[`localsend/web`](https://github.com/localsend/web) repository. The local
+reference is pinned at `ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8`.
+It is **not** a current authority for the `af3aad33` monorepo or shipping
+LocalSend 1.18.x.
 
-| Value | Description |
-|-------|-------------|
-| `MOBILE` | Mobile device (Android, iOS, FireOS) |
-| `DESKTOP` | Desktop (Windows, macOS, Linux) |
-| `WEB` | Web browser (Firefox, Chrome) |
-| `HEADLESS` | Program without GUI running on a terminal |
-| `SERVER` | (Self-hosted) cloud service running 24/7 |
+Pin-specific historical behavior:
 
-> **Note:** In signaling messages, device types use lowercase (`mobile`, `desktop`). In HTTP API, they use SCREAMING_SNAKE_CASE.
+| Area | Historical web behavior at `ea5d55d` |
+|---|---|
+| Version | `protocolVersion = "2.3"` |
+| Default STUN | `stun:stun.l.google.com:19302` |
+| Signaling keep-alive | empty text WebSocket message every 120 seconds |
+| Signaling identity refresh | new timestamp token sent with `UPDATE` every 30 minutes |
+| Session ID | `Math.random().toString(36).substring(2, 15)` |
+| File token | `Math.random().toString()` |
+| Pair request | automatically sends `PAIR_DECLINED` |
+| Output chunk | 16 KiB |
+| Streaming back-pressure | while `bufferedAmount > 1 MiB`, sleep 50 ms |
+| Final flush polling | while buffered amount is nonzero, sleep 50 ms |
 
-### Protocol Type
+The historical sender and receiver generate nonce-signed tokens but do not call
+the repository's `verifyToken` function during the WebRTC handshake; they log or
+store the remote token. That `verifyToken` helper itself validates an eight-byte
+timestamp salt, not the combined WebRTC nonce.
 
-| Value | Description |
-|-------|-------------|
-| `HTTP` | Unencrypted HTTP |
-| `HTTPS` | Encrypted HTTPS with TLS |
+Its file framing interoperates with the intended implicit-boundary model:
 
----
+- it sends the first header, then each file's bytes;
+- before waiting for that file's response, it sends the next header or the final
+  delimiter, thereby closing the previous file;
+- unlike the pinned Rust sender, it then reads one `RTCSendFileResponse` per
+  file;
+- its receiver automatically sends success after saving the previous file and
+  omits `error` on success.
 
-## 10. Implementation Notes
+Its WebCrypto implementation defaults to RSA-PSS for older-browser support and
+switches to Ed25519 when available. This is a historical browser implementation
+difference; it does not change the pinned Rust core's Ed25519-only generation
+and Ed25519/RSA-PSS verification behavior.
 
-### 10.1 URL Construction
-
-IPv6 addresses must be enclosed in brackets:
-
-```python
-def build_url(protocol, host, port, path):
-    if ':' in host:  # IPv6
-        host = f"[{host}]"
-    return f"{protocol}://{host}:{port}/api/localsend/v3{path}"
-
-# Examples:
-# build_url("https", "192.168.1.1", 53317, "/register")
-#   -> "https://192.168.1.1:53317/api/localsend/v3/register"
-# build_url("https", "::1", 53317, "/register")
-#   -> "https://[::1]:53317/api/localsend/v3/register"
-```
-
-Servers that advertise or accept IPv6 addresses must listen on IPv6 as well as IPv4 (using a dual-stack listener where supported, or separate listeners). Binding only to `0.0.0.0` is IPv4-only and will fail when a hostname such as `localhost` resolves to `::1`.
-
-### 10.2 Nonce Cache
-
-Implementations should use an LRU cache for nonce management:
-
-```
-Cache size: 200 entries
-Key: Client identifier (public key for HTTPS, IP for HTTP)
-Value: Nonce bytes
-```
-
-Two caches are maintained:
-- **received_nonce_map**: Nonces received from remote
-- **generated_nonce_map**: Nonces we generated and sent
-
-### 10.3 Buffer Management
-
-Before sending over WebRTC data channel, implementations should handle back-pressure:
-
-| Implementation | Buffer Check | Polling Interval |
-|----------------|--------------|------------------|
-| Rust Core | Wait until `buffered_amount() == 0` | 100ms |
-| Web Client | Wait while `bufferedAmount > 1 MiB` | 50ms |
-
-**Rust approach (wait for empty):**
-```python
-def wait_buffer_empty(data_channel):
-    while data_channel.buffered_amount() != 0:
-        sleep(100ms)
-```
-
-**Web approach (threshold-based):**
-```javascript
-const MAX_BUFFERED_AMOUNT = 1024 * 1024;  // 1 MiB
-while (dataChannel.bufferedAmount > MAX_BUFFERED_AMOUNT) {
-    await sleep(50);
-}
-```
-
-Both approaches work; the web approach allows more pipelining while the Rust approach is more conservative.
-
-### 10.4 File Read Chunk Size
-
-When reading files for transfer, recommended buffer size:
-
-```
-Read buffer: 1 KiB (for file reading)
-Send chunk:  16 KiB (for data channel transmission)
-```
-
-### 10.5 WebRTC ICE Configuration
-
-For WebRTC implementations, consider these ICE-related settings:
-
-**Ephemeral UDP Port Range:**
-On restricted environments (embedded devices, firewalls), limit the ephemeral UDP port range used by ICE candidates:
-
-```
-Recommended range: 50000-50100 (101 ports)
-Default range:     1-65535 (full ephemeral range)
-```
-
-Restricting the port range:
-- Makes firewall configuration simpler and more secure
-- Reduces the attack surface on embedded devices
-- Ensures compatibility with NAT and firewall rules
-
-**ICE Timeouts:**
-For reliable connections across varying network conditions:
-
-```
-ICE disconnected timeout: 25 seconds (extended from default)
-ICE candidate pool size:  2 (for faster connection setup)
-```
-
-**ICE Candidate Types:**
-LocalSend primarily uses host and server-reflexive (STUN) candidates. TURN relay is optional for enterprise environments.
-
-### 10.6 ICE Gathering Strategy
-
-Both official implementations use **complete ICE gathering** (not trickle ICE):
-
-```python
-# Wait for all ICE candidates before sending SDP
-offer = peer_connection.create_offer()
-peer_connection.set_local_description(offer)
-await gathering_complete_promise()  # Block until complete
-send_sdp(peer_connection.local_description.sdp)
-```
-
-This simplifies the signaling protocol by including all ICE candidates in a single SDP message, at the cost of slightly longer connection setup time.
-
-### 10.7 Session and File Token Generation
-
-| Token Type | Rust Core | Web Client |
-|------------|-----------|------------|
-| Session ID | UUID v4 (`Uuid::new_v4()`) | Random alphanumeric (`Math.random().toString(36).substring(2,15)`) |
-| File Token | UUID v4 | Random decimal (`Math.random().toString()`) |
-
-For new implementations, UUID v4 is recommended for stronger uniqueness guarantees.
-
-### 10.8 Data Channel JavaScript Configuration
-
-For JavaScript/TypeScript implementations, set the binary type explicitly:
-
-```javascript
-const dataChannel = peerConnection.createDataChannel("data");
-dataChannel.binaryType = "arraybuffer";  // Required for proper binary handling
-```
-
-### 10.9 v2 Download API Session Semantics
-
-These routes remain under `/api/localsend/v2/*`; they are documented here because v3-capable implementations still use the v2 HTTP Download API for reverse LAN transfers.
-
-- `GET /info` advertises an active Download API with `"download": true`.
-- `POST /prepare-download` exchanges a valid PIN for an opaque `sessionId`. A valid accepted session may refresh the file list by resending `sessionId` without the PIN.
-- The official Rust server associates accepted sessions with the requesting source IP. A session presented by another client must be rejected, and a new session for the same client replaces its previous session.
-- `GET /download` uses `sessionId` and `fileId`; the PIN is not resent for each file. Invalid sessions and unknown file IDs return HTTP `403`.
-- A missing PIN returns HTTP `401` but is not counted as a failed guess. An incorrect PIN is counted per source IP; after three failed guesses, subsequent attempts return HTTP `429` while blocked.
-- Browser download links should remain relative to the address used to authenticate. Generating absolute links for every server interface can change the browser's source IP and invalidate an IP-bound session.
+Do not copy these historical constants into current implementation guidance
+without deliberately choosing compatibility with this exact commit.
 
 ---
 
-## Appendix A: Test Vectors
+## 9. Interoperability guidance
 
-These JSON examples are taken directly from the Rust unit tests and can be used to verify your implementation's serialization/deserialization.
+1. **For official-app interoperability, implement v2.2 first.** Use v2 multicast
+   and HTTP routes, including v2.2 checksum mismatch `422` and the v2 Download
+   API.
+2. **Do not advertise complete official v3 support.** The app disables WebRTC,
+   the Rust HTTP-v3 surface is incomplete, and the official v3 draft conflicts
+   with the implementation.
+3. **Keep the three nonce/token contexts separate:** timestamp signaling token,
+   dormant HTTP `/nonce` caches, and the in-band WebRTC combined nonce.
+4. **Use the correct DTO family:** v2 is lowercase with
+   `fingerprint`/`download`; Rust v3/signaling is uppercase for enums with
+   `token`/`hasWebInterface` where applicable; the official Mermaid draft has
+   its own inconsistent shape.
+5. **If experimenting with Rust WebRTC wire compatibility, reproduce actual
+   boundaries:** next text header closes the previous file; one final `"0"`
+   ends the batch.
+6. **Treat token authentication as conditional** unless a verified expected
+   public key or a completed pairing design supplies trust.
+7. **Do not invent ICE settings.** At the pin, Rust sets only caller-provided ICE
+   server URLs and otherwise uses defaults.
+8. **Pin historical web compatibility explicitly.** Its version, STUN,
+   keep-alive, token-verification gap, random identifiers, and buffering policy
+   are not current monorepo facts.
 
-### A.1 Signaling Messages
+---
 
-#### HELLO Message
+## Appendix A. Wire examples
+
+These examples are either direct DTO shapes or explicitly labeled fixture data.
+They are not claims that the official app enables WebRTC.
+
+### A.1 Signaling HELLO fixture
+
+Rust unit tests use `2.3` as fixture data:
+
 ```json
 {
   "type": "HELLO",
@@ -1173,49 +766,59 @@ These JSON examples are taken directly from the Rust unit tests and can be used 
 }
 ```
 
-#### OFFER Message
+This proves serialization and casing, not an implemented `2.3` product
+constant.
+
+### A.2 Signaling offer and answer
+
+Client to server:
+
+```json
+{
+  "type": "OFFER",
+  "sessionId": "sender-generated-session-id",
+  "target": "target-peer-uuid",
+  "sdp": "zlib-compressed-base64url-sdp"
+}
+```
+
+Server to target:
+
 ```json
 {
   "type": "OFFER",
   "peer": {
-    "id": "00000000-0000-0000-0000-000000000000",
+    "id": "sender-peer-uuid",
     "alias": "Cute Apple",
-    "version": "2.3",
+    "version": "2.2",
     "deviceType": "DESKTOP",
-    "token": "123"
+    "token": "timestamp-token"
   },
-  "sessionId": "456",
-  "sdp": "my-sdp"
+  "sessionId": "sender-generated-session-id",
+  "sdp": "zlib-compressed-base64url-sdp"
 }
 ```
 
-Note: `deviceModel` is omitted when null (not present).
+`ANSWER` uses the same shapes with `type: "ANSWER"`.
 
-#### Client UPDATE Message
+### A.3 WebRTC data-channel DTOs
+
+Nonce and token:
+
 ```json
-{
-  "type": "UPDATE",
-  "info": {
-    "alias": "Cute Apple",
-    "version": "2.3",
-    "deviceModel": "Dell",
-    "deviceType": "DESKTOP",
-    "token": "123"
-  }
-}
+{"nonce":"base64url-no-pad"}
 ```
 
-### A.2 WebRTC Data Channel Messages
-
-#### RTCFileListResponse (PAIR)
 ```json
-{
-  "status": "PAIR",
-  "publicKey": "123"
-}
+{"token":"sha256.<hash>.<combined-nonce>.ed25519.<signature>"}
 ```
 
-#### RTCFileListResponse (OK)
+```json
+{"status":"OK","token":"sha256.<hash>.<combined-nonce>.ed25519.<signature>"}
+```
+
+File-list selection:
+
 ```json
 {
   "status": "OK",
@@ -1226,379 +829,98 @@ Note: `deviceModel` is omitted when null (not present).
 }
 ```
 
-### A.3 Token Verification Test Vector
-
-```python
-# Test token from Rust tests
-public_key_pem = """-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAZmdXP230oqK92o65ra3XaF2F8r3+fK5DEBK4c40qVts=
------END PUBLIC KEY-----"""
-
-token = "sha256.RikOdJlAUTdMVFZjEk7Bft5G9cxnNBBLfgttPpyS2FY.hJCuZwAAAAA.ed25519.iNgHrRzX2Iel-Ozj47yn5o5v0cGY_BswK6JYqwY65j7Krpr43KanAaCrjUng7gHtc2pCcylUrKswR_rxyswhDA"
-
-# Token format: sha256.{hash}.{salt}.ed25519.{signature}
-# Salt is 8-byte little-endian timestamp: 0x67AE9084 = 1739456644
-
-# CRITICAL: Hash is computed over SPKI DER format, not raw key bytes
-# The PEM above decodes to SPKI DER (44 bytes for Ed25519):
-#   30 2a 30 05 06 03 2b 65 70 03 21 00 [32-byte raw key]
-# The hash input is: SPKI_DER || salt_bytes
-```
-
-### A.4 Chunk Processing Test
-
-Data chunking behavior with CHUNK_SIZE = 16384 (16 KiB):
-
-```python
-# Input: 32773 bytes (CHUNK_SIZE * 2 + 5)
-input_data = bytes(32773)
-
-# Expected output: 3 chunks
-# Chunk 0: 16384 bytes
-# Chunk 1: 16384 bytes  
-# Chunk 2: 5 bytes (remainder)
-
-assert len(chunks) == 3
-assert len(chunks[0]) == 16384
-assert len(chunks[1]) == 16384
-assert len(chunks[2]) == 5
-```
-
----
-
-## Appendix B: Integration Test Examples
-
-These examples from the Rust `main.rs` show complete working flows.
-
-### B.1 WebRTC Send Flow
-
-```python
-# 1. Connect to signaling server
-info = ClientInfoWithoutId(
-    alias="test",
-    version="2.3",
-    device_model="test",
-    device_type="desktop",
-    token="test"
-)
-connection = SignalingConnection.connect(
-    "wss://public.localsend.org/v1/ws",
-    info
-)
-
-# 2. Wait for peer to join
-peer = wait_for_join(connection)
-
-# 3. Prepare files
-files = [FileDto(
-    id="test-123-id",
-    file_name="test.mp4",
-    size=100,
-    file_type="video/mp4"
-)]
-
-# 4. Configure PIN (optional)
-pin_config = PinConfig(pin="456", max_tries=3)
-
-# 5. Send offer with PIN verification
-send_offer(
-    connection,
-    stun_servers=["stun:stun.l.google.com:19302"],
-    target_id=peer.id,
-    signing_key=generate_key(),
-    expecting_public_key=None,
-    pin=pin_config,
-    files=files
-)
-```
-
-### B.2 WebRTC Receive Flow
-
-```python
-# 1. Connect to signaling server (same as above)
-
-# 2. Wait for offer
-offer = wait_for_offer(connection)
-
-# 3. Accept offer with own PIN
-accept_offer(
-    connection,
-    stun_servers=["stun:stun.l.google.com:19302"],
-    offer=offer,
-    signing_key=generate_key(),
-    expecting_public_key=None,
-    pin=PinConfig(pin="123", max_tries=3)
-)
-
-# 4. Receive file list
-files = wait_for_files()
-
-# 5. Accept all files
-selected_files = {f.id for f in files}
-send_selection(selected_files)
-
-# 6. Receive file data
-for file in receiving_files:
-    write_file(f"/path/{file.file_name}", file.binary_rx)
-```
-
-### B.3 HTTP Client Test Flow
-
-```python
-# 1. Create client with identity
-client = LsHttpClient(private_key=PRIVATE_KEY, cert=CERT)
-
-# 2. Exchange nonce
-nonce = client.nonce(
-    protocol="https",
-    ip="localhost",
-    port=53317
-)
-
-# 3. Register
-register_dto = RegisterDto(
-    alias="test",
-    version="2.3",
-    device_model="test",
-    device_type="headless",
-    token="test",
-    port=53317,
-    protocol="https",
-    has_web_interface=False
-)
-response = client.register("https", "localhost", 53317, register_dto)
-
-# 4. Prepare upload
-prepare_dto = PrepareUploadRequestDto(
-    info=register_dto,
-    files={
-        "test-123-id": FileDto(
-            id="test-123-id",
-            file_name="test.mp4",
-            size=1000,
-            file_type="video/mp4"
-        )
-    }
-)
-response = client.prepare_upload(
-    "https", "localhost", 53317,
-    public_key=response.public_key,
-    payload=prepare_dto
-)
-
-# response contains sessionId and file tokens
-```
-
----
-
-## Appendix C: Implementation Differences (Rust vs Web)
-
-> **Analysis Date:** 2025-12-30
->
-> This appendix documents behavioral differences between the two official LocalSend implementations. Both are interoperable, but implementers should be aware of these variations.
-
-### C.1 Summary Table
-
-| Feature | Rust Core | Web Client | Interop Impact |
-|---------|-----------|------------|----------------|
-| Token verification (WebRTC) | Full verification with `verify_token_nonce()` | Token received but NOT verified | Web trusts unverified tokens |
-| File transfer pipelining | Sequential (waits for status) | Pipelined (sends next header before status) | Both work, different ordering |
-| Session ID format | UUID v4 | `Math.random().toString(36)` | Both unique, different entropy |
-| File token format | UUID v4 | `Math.random().toString()` | Both work |
-| Keep-alive method | WebSocket Ping frame | Empty text message `""` | Both accepted by server |
-| Back-pressure wait | 100ms, until buffer=0 | 50ms, until buffer<1MiB | Both work |
-| PAIR flow | Full implementation with user prompt | Auto-declines, waits for retry | Interoperable |
-| Token refresh | Not implemented | Every 30 minutes | Web-specific for long sessions |
-
-### C.2 Token Verification Gap
-
-**This is the most significant difference between implementations.**
-
-#### Rust Core (Full Verification)
-```rust
-// webrtc.rs:276-285
-if let Some(expecting_public_key) = expecting_public_key {
-    if !crypto::token::verify_token_nonce(
-        &*expecting_public_key,
-        &token,
-        &nonce,
-    ) {
-        return Err(anyhow::anyhow!("Invalid token signature or nonce"));
-    }
-}
-```
-
-The Rust implementation:
-1. Parses the token's 5 components
-2. Validates hash method is `sha256`
-3. Validates signature method matches key type
-4. Verifies the nonce in the token matches the expected combined nonce
-5. Recomputes the hash over `SPKI_DER || nonce`
-6. Verifies the signature over the hash
-
-#### Web Client (No Verification)
-```typescript
-// webrtc.ts:105-141
-const tokenResponse = JSON.parse(tokenResponseRaw) as RTCTokenResponse;
-if (tokenResponse.status === "INVALID_SIGNATURE") {
-    console.error("Invalid signature");
-    return;
-}
-// Token is stored but NEVER verified
-console.log(`Received token: ${remoteToken}`);
-```
-
-The web client:
-1. Receives the token
-2. Checks only the status field
-3. Logs the token but does not verify it
-
-**Security Implications:**
-- The WebRTC data channel is encrypted via DTLS, so confidentiality is maintained
-- The gap affects identity verification, not data protection
-- A malicious actor who can intercept signaling could potentially impersonate a peer to a web client
-- Rust clients verify tokens, so they're protected even when communicating with web clients
-
-### C.3 File Transfer Flow Differences
-
-#### Rust Core (Sequential)
-```
-For each file:
-  1. Send RTCSendFileHeaderRequest
-  2. Send file data chunks
-  3. Wait for RTCSendFileResponse
-  4. Proceed to next file
-```
-
-#### Web Client (Pipelined)
-```
-For each file:
-  1. Send RTCSendFileHeaderRequest
-  2. Send file data chunks
-  3. Send NEXT file's RTCSendFileHeaderRequest (or delimiter)
-  4. Wait for RTCSendFileResponse for previous file
-```
-
-The web client sends the next file's header **before** receiving the status for the current file. This creates slight message reordering but improves throughput on high-latency connections.
-
-Both approaches are interoperable because:
-- The receiver processes messages in order
-- Headers and data are clearly distinguishable (string vs binary)
-- The delimiter marks the true end of transfers
-
-### C.4 PAIR Flow Handling
-
-The PAIR flow allows devices to establish trusted relationships for future connections.
-
-#### Rust Core
-```rust
-RTCFileListResponse::Pair { public_key } => {
-    // 1. Verify the token with provided public key
-    // 2. Prompt user for confirmation via channel
-    // 3. Send RTCPairResponse::Ok or RTCPairResponse::PairDeclined
-    // 4. Wait for new RTCFileListResponse
-}
-```
-
-#### Web Client
-```typescript
-if (fileListResponse.status === "PAIR") {
-    console.log("Pairing required. Reject...");
-    dataChannel.send(JSON.stringify({ status: "PAIR_DECLINED" }));
-    // Wait for sender to retry with normal file list
-    fileListResponseRaw = await receiveStringFromChunks(dataChannelStream);
-}
-```
-
-The web client automatically declines pairing requests. This is intentional—browser sessions are typically ephemeral, so persistent pairing makes less sense.
-
-### C.5 Crypto Algorithm Selection
-
-Both implementations support Ed25519 and RSA-PSS, but with different capabilities:
-
-| Implementation | Token Generation | Token Verification |
-|----------------|-----------------|-------------------|
-| Rust Core | Ed25519 only | Ed25519 + RSA-PSS |
-| Web Client | Ed25519 (preferred) or RSA-PSS | Ed25519 + RSA-PSS |
-
-The web client defaults to RSA-PSS because older Chrome versions don't support Ed25519 in WebCrypto. It attempts to upgrade to Ed25519 on startup:
-
-```typescript
-export async function upgradeToEd25519IfSupported(): Promise<void> {
-    try {
-        await window.crypto.subtle.generateKey(
-            { name: "Ed25519" }, true, ["sign", "verify"]
-        );
-        selectedParams = cryptoParams.ed25519;
-    } catch (e) {
-        console.warn("Ed25519 not supported.");
-    }
-}
-```
-
-### C.6 Protocol Version Field
-
-Both implementations use `"2.3"` as the version string in client info:
+Dormant Pair wire variant:
 
 ```json
-{
-    "alias": "Device Name",
-    "version": "2.3",
-    "deviceModel": "...",
-    "deviceType": "DESKTOP",
-    "token": "..."
-}
+{"status":"PAIR","publicKey":"-----BEGIN PUBLIC KEY-----\n..."}
 ```
 
-This document refers to the protocol as "v3" because:
-- HTTP endpoints use `/api/localsend/v3/*`
-- This distinguishes it from the v2.1 LAN-only protocol
-- The `version` field represents client capability, not protocol version
+File header and statuses:
+
+```json
+{"id":"file-uuid-1","token":"token-uuid-1"}
+```
+
+```json
+{"id":"file-uuid-1","success":true}
+```
+
+```json
+{"id":"file-uuid-1","success":false,"error":"application write failed"}
+```
+
+No fixed token string is included: the previously quoted token was not a test
+vector in the pinned Rust source. Current Rust token tests use generated
+round-trips rather than that external constant.
 
 ---
 
-## References
+## Appendix B. Provenance and source map
 
-- [LocalSend Protocol v2.1 (Official)](https://github.com/localsend/protocol)
-- [Official Rust Implementation](https://github.com/localsend/localsend/tree/main/packages/core)
-- [Official Web Implementation](https://github.com/localsend/localsend/tree/main/packages/web)
-- Rust source files analyzed:
-  - `core/src/crypto/nonce.rs` - Nonce generation (32 bytes, valid 16-128)
-  - `core/src/crypto/token.rs` - Token format, Ed25519 & RSA-PSS support, SPKI DER key format, timestamp tokens
-  - `core/src/crypto/cert.rs` - Certificate verification
-  - `core/src/util/base64.rs` - Base64 encoding (URL_SAFE_NO_PAD)
-  - `core/src/util/time.rs` - Unix timestamp handling (little-endian u64)
-  - `core/src/http/client/mod.rs` - HTTP v3 client implementation
-  - `core/src/webrtc/signaling.rs` - WebSocket signaling (3 unit tests)
-  - `core/src/webrtc/webrtc.rs` - Data channel protocol, 16KB chunks, PIN handling (2 unit tests)
-  - `core/src/main.rs` - Integration test examples
-- Web source files analyzed (as of 2025-12-30):
-  - `web/services/signaling.ts` - WebSocket signaling, keep-alive, message types
-  - `web/services/webrtc.ts` - Data channel protocol, file transfer, PIN handling
-  - `web/services/crypto.ts` - Token generation/verification, Ed25519/RSA-PSS support
-  - `web/utils/base64.ts` - URL-safe base64 encoding
-  - `web/utils/nonce.ts` - Nonce generation and validation
+All material claims above were checked against these pinned local references.
+Paths are relative to the named checkout.
+
+### B.1 Official implementation — `af3aad33`
+
+- `app/lib/provider/network/webrtc/signaling_provider.dart` — WebRTC disabled,
+  signaling URL, STUN default, and shipping version passed into signaling.
+- `app/lib/provider/network/webrtc/webrtc_receiver.dart` — missing expected key,
+  no-op receive callbacks, and unfinished session state.
+- `packages/localsend_isolates/lib/constants.dart` — shipping protocol version
+  `2.2` and IPv4 defaults.
+- `packages/localsend_isolates/rust/src/api/webrtc.rs` — timestamp signaling
+  token, pairing auto-decline, selection API, and application file-status action.
+- `packages/core/src/model/discovery.rs` — v2 constant and v2/v3 enum casing.
+- `packages/core/src/model/transfer.rs` — 512 KiB file-read buffer.
+- `packages/core/src/crypto/{nonce,token,cert}.rs` — nonce, token, key, and
+  certificate behavior.
+- `packages/core/src/http/dto.rs` and `dto_v2.rs` — v3 versus v2 DTOs.
+- `packages/core/src/http/client/v2.rs` and `client/v3.rs` — PIN and dormant v3
+  client differences.
+- `packages/core/src/http/client/server_cert_verifier.rs` and
+  `packages/core/src/http/server/common/client_cert_verifier.rs` — client-side
+  peer pinning plus server-side client-certificate requirements and validation.
+- `packages/core/src/http/server/v2.rs` — TLS Register fingerprint binding.
+- `packages/core/src/http/client/{url,scoped_host}.rs` — IPv6 URL handling.
+- `packages/core/src/http/server/mod.rs` and `server/v3.rs` — actual route table,
+  nonce caches, and unauthenticated Register handler.
+- `packages/core/src/http/server/web.rs` and `server/common/pin.rs` — v2 Download
+  sessions and PIN behavior.
+- `packages/core/src/webrtc/{signaling,webrtc}.rs` — signaling DTOs, SDP,
+  in-band handshake, framing, file acknowledgements, pairing variants, and ICE.
+- `packages/core/src/multicast/mod.rs` and
+  `packages/localsend_isolates/rust/src/api/discovery.rs` — IPv6 multicast and
+  scope preservation.
+- `server/src/main.rs`, `server/src/util/ip.rs`, and
+  `server/src/controller/ws_controller.rs` — `/v1/ws`, grouping, and relay.
+
+### B.2 Official protocol — `62bd340` / v3 addition `bf371ab`
+
+- `README.md` — normative protocol v2.2, Upload API, `422`, Download API, and
+  defaults.
+- `CHANGELOG.md` — v2.2 checksum-mismatch change.
+- `v3/http-diagram.mermaid` — draft `3.0` HTTP flow and unimplemented routes.
+- `v3/webrtc-diagram.mermaid` — draft WebRTC flow and per-file delimiters.
+
+### B.3 Historical web — `ea5d55d`
+
+- `app/services/signaling.ts` — connection URL construction, keep-alive, and
+  identity refresh.
+- `app/services/webrtc.ts` — `2.3`, Google STUN, framing, per-file status drain,
+  Pair decline, identifiers, chunks, and buffering.
+- `app/services/crypto.ts` — browser Ed25519/RSA-PSS generation and timestamp
+  verification helper.
+- `app/services/store.ts` — signaling token refresh and default STUN use.
+- `app/utils/{base64,nonce}.ts` — base64 and nonce behavior.
+
+The separate web pin is historical evidence only. No unpinned integration
+pseudocode or nonexistent monorepo web package is used as current official
+implementation authority.
 
 ---
 
-## Revision History
+## Revision history
 
-| Date | Changes |
-|------|---------|
-| 2026-07-24 | **§6, §10.1, §10.9**: Documented the v2 reverse-transfer Download API, dual-stack listener requirements, client-bound session refresh, PIN throttling, exact authorization errors, and relative browser links. |
-| 2026-05-06 | **§2, §6**: Corrected major inaccuracy — v3 HTTP endpoints for file transfer (`/prepare-upload`, `/upload`, `/cancel`) do not exist on any server. LAN transfers use v2 HTTP exclusively. v3 adds only `/nonce` and `/register` for WebRTC session setup. |
-| 2026-05-06 | **§4.6**: Clarified RSA-PSS is verification-only; token generation is Ed25519-only. |
-| 2026-05-06 | **§8.3**: Expanded PIN handling flow to show the retry loop with `PIN_REQUIRED`/`TOO_MANY_ATTEMPTS` responses and final `OK`. |
-| 2026-05-06 | **Appendix A.1**: Fixed `deviceType` casing from `"desktop"` to `"DESKTOP"` (SCREAMING_SNAKE_CASE) in all 4 test vectors. |
-| 2025-12-30 | Added Appendix C: Implementation Differences (Rust vs Web) |
-| 2025-12-30 | Added Section 7.4: Keep-Alive mechanism (ping, token refresh) |
-| 2025-12-30 | Added Sections 10.6-10.8: ICE gathering, token generation, JS config |
-| 2025-12-30 | Updated Section 10.3: Buffer management with implementation comparison |
-| 2025-12-30 | Added warning note to Section 4.5 about token verification gap |
-| 2025-12-30 | Updated header to reference both Rust and Web implementations |
-| 2025-12-30 | Added version naming clarification (v3 endpoints vs "2.3" version field) |
-| 2025-12-28 | Added SPKI DER format clarification for token hashing |
-| 2025-12-28 | Added timestamp-based tokens for discovery/HTTP |
-| 2025-12-28 | Added salt type distinction (nonces vs timestamps) |
-| 2025-12-28 | Added WebRTC ICE configuration section (port ranges, timeouts) |
-| 2025-12-28 | Updated test vectors with SPKI DER format notes |
+| Date | Change |
+|---|---|
+| 2026-08-14 | Rewrote the document around pinned authority layers; restored shipping v2.2/WebRTC-disabled status; separated dormant Rust wire behavior, the `bf371ab` official `3.0` Mermaid draft, and historical web pin `ea5d55d`; corrected nonce, STUN, token verification, DTO/routes/errors, signaling, pairing, file acknowledgements, optional error fields, buffers, ICE, appendices, and provenance while retaining valid v2.2 download/checksum material. |
