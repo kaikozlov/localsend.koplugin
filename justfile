@@ -73,7 +73,7 @@ test-web:
 # Run transfer/file-I/O microbenchmarks without executing the ordinary test suite.
 [group('test')]
 bench-transfer:
-    {{ _run }} sh -c 'cd /opt/plugin && go test ./internal/utils ./internal/localsend/session ./internal/webrtc/transfer -run "^$" -bench "Benchmark(SHA256ofFile|SaveFile|RTC)" -benchmem'
+    {{ _run }} sh -c 'cd /opt/plugin && go test ./internal/utils ./internal/localsend/session ./internal/localsend/send ./internal/webrtc/transfer -run "^$" -bench "Benchmark(SHA256ofFile|SaveFile|EnsureSaveDir|UniqueFileAllocator|HTTPSUploadWriteBuffer|RTC|WaitForBufferedAmountBelow)" -benchmem'
 
 # Opt-in receiver stress test modeled after LocalSend 1.18's 1000 x 1 MiB harness.
 [group('test')]

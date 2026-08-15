@@ -82,10 +82,12 @@ type RTCReceiver struct {
 	pinProvider     func(attempt int) string
 
 	// Files
-	files       []RTCFileDto
-	fileByID    map[string]RTCFileDto // fileId -> metadata for O(1) hot-path lookup
-	fileTokens  map[string]string     // fileId -> token
-	acceptedIDs []string
+	files               []RTCFileDto
+	fileByID            map[string]RTCFileDto // fileId -> metadata for O(1) hot-path lookup
+	fileTokens          map[string]string     // fileId -> token
+	acceptedIDs         []string
+	folderTransferKnown bool
+	folderTransfer      bool
 
 	// File writers
 	currentFileID string
@@ -95,6 +97,8 @@ type RTCReceiver struct {
 	fileHashers   map[string]hash.Hash
 	currentBytes  int64
 	controlBuffer []byte
+	ensuredDirs   map[string]struct{}
+	uniqueFiles   utils.UniqueFileAllocator
 
 	// Callbacks
 	onSelectFiles  func([]RTCFileDto) []string
@@ -161,6 +165,7 @@ func NewRTCReceiver(sig *signaling.SignalingClient, key *crypto.SigningKey, pin,
 		fileBuffers: make(map[string]*bufio.Writer),
 		filePaths:   make(map[string]string),
 		fileHashers: make(map[string]hash.Hash),
+		ensuredDirs: make(map[string]struct{}),
 	}
 }
 
@@ -425,12 +430,33 @@ func (r *RTCReceiver) getSaveDir(filename string) string {
 }
 
 // isFolderTransfer checks if any file in the current transfer has subdirectory structure.
+// The result is cached because getSaveDir runs once per file in large batches.
 func (r *RTCReceiver) isFolderTransfer() bool {
-	filenames := make([]string, len(r.files))
-	for i, f := range r.files {
-		filenames[i] = f.FileName
+	if r.folderTransferKnown {
+		return r.folderTransfer
 	}
-	return utils.IsFolderTransfer(filenames)
+	for _, file := range r.files {
+		if strings.Contains(filepath.ToSlash(file.FileName), "/") {
+			r.folderTransfer = true
+			break
+		}
+	}
+	r.folderTransferKnown = true
+	return r.folderTransfer
+}
+
+func (r *RTCReceiver) ensureSaveDir(dir string) error {
+	if r.ensuredDirs == nil {
+		r.ensuredDirs = make(map[string]struct{})
+	}
+	if _, ok := r.ensuredDirs[dir]; ok {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	r.ensuredDirs[dir] = struct{}{}
+	return nil
 }
 
 // AcceptOffer accepts an incoming WebRTC offer.
@@ -465,6 +491,10 @@ func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 	r.files = nil
 	r.fileByID = make(map[string]RTCFileDto)
 	r.acceptedIDs = nil
+	r.folderTransferKnown = false
+	r.folderTransfer = false
+	r.ensuredDirs = make(map[string]struct{})
+	r.uniqueFiles.Reset()
 	r.currentFileID = ""
 	r.currentBytes = 0
 	r.controlBuffer = nil
@@ -827,6 +857,8 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 
 	r.files = fileListMsg.Files
 	r.rebuildFileIndex()
+	r.folderTransferKnown = false
+	_ = r.isFolderTransfer()
 	slog.Info("Received file list", "count", len(r.files))
 
 	// A large transfer can contain thousands of files. Keep the aggregate at
@@ -1056,11 +1088,11 @@ func (r *RTCReceiver) startReceivingFile(header *RTCSendFileHeader) bool {
 	if subDir != "." && subDir != "" {
 		saveDir = filepath.Join(saveDir, subDir)
 	}
-	if err := os.MkdirAll(saveDir, 0755); err != nil {
+	if err := r.ensureSaveDir(saveDir); err != nil {
 		r.rejectFileTransfer("failed to create destination")
 		return false
 	}
-	file, path, err := utils.CreateUniqueFile(saveDir, baseName)
+	file, path, err := r.uniqueFiles.Create(saveDir, baseName)
 	if err != nil {
 		r.rejectFileTransfer("failed to create file")
 		return false

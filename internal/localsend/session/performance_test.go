@@ -57,3 +57,21 @@ func BenchmarkSaveFile_1MiB_NoChecksum(b *testing.B) {
 func BenchmarkSaveFile_1MiB_WithChecksum(b *testing.B) {
 	benchmarkSaveFile1MiB(b, true)
 }
+
+func BenchmarkEnsureSaveDir_Cached(b *testing.B) {
+	dir := b.TempDir()
+	sess, err := NewRecvSession("bench-dir", "192.0.2.1")
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := sess.ensureSaveDir(dir); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := sess.ensureSaveDir(dir); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

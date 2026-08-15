@@ -3,8 +3,10 @@ package session
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -83,5 +85,41 @@ func TestSaveFile_StopsSessionAfterThreeChecksumMismatches(t *testing.T) {
 	}
 	if _, err := sess.SaveFile(dir, "file1", token, "192.0.2.1", bytes.NewReader(content)); err != constants.ErrRejected {
 		t.Fatalf("fourth attempt error = %v; want ErrRejected", err)
+	}
+}
+
+func TestSaveFile_ChecksumRetryReusesSameDuplicateTarget(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "doc.pdf"), []byte("existing"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	good := []byte("good")
+	bad := []byte("baad")
+	sum := sha256.Sum256(good)
+	sess, _ := NewRecvSession("checksum-retry-path", "192.0.2.1")
+	meta := models.FileMeta{
+		Id:       "file1",
+		Filename: "doc.pdf",
+		Size:     int64(len(good)),
+		Checksum: hex.EncodeToString(sum[:]),
+	}
+	if err := sess.AcceptFile("file1", meta); err != nil {
+		t.Fatal(err)
+	}
+	sess.Start()
+	token := sess.FileTokens()["file1"]
+	if _, err := sess.SaveFile(dir, "file1", token, "192.0.2.1", bytes.NewReader(bad)); err != constants.ErrChecksum {
+		t.Fatalf("first attempt error = %v; want ErrChecksum", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "doc (1).pdf")); !os.IsNotExist(err) {
+		t.Fatalf("failed checksum left retry target on disk: %v", err)
+	}
+
+	saved, err := sess.SaveFile(dir, "file1", token, "192.0.2.1", bytes.NewReader(good))
+	if err != nil {
+		t.Fatalf("retry failed: %v", err)
+	}
+	if saved != "doc (1).pdf" {
+		t.Fatalf("retry saved as %q; want doc (1).pdf", saved)
 	}
 }

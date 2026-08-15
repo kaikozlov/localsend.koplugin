@@ -38,13 +38,14 @@ type controlChannelOps interface {
 
 // PeerConnection wraps a pion/webrtc PeerConnection for file transfer.
 type PeerConnection struct {
-	pc            *webrtc.PeerConnection
-	dataChannel   *webrtc.DataChannel
-	mu            sync.Mutex
-	onMessage     func([]byte)
-	onDataMessage func([]byte, bool)
-	onOpen        func()
-	onClose       func()
+	pc                *webrtc.PeerConnection
+	dataChannel       *webrtc.DataChannel
+	mu                sync.Mutex
+	onMessage         func([]byte)
+	onDataMessage     func([]byte, bool)
+	onOpen            func()
+	onClose           func()
+	bufferedAmountLow chan struct{}
 }
 
 // PeerConfig configures a new peer connection.
@@ -96,7 +97,8 @@ func NewPeerConnection(config PeerConfig) (*PeerConnection, error) {
 	}
 
 	p := &PeerConnection{
-		pc: pc,
+		pc:                pc,
+		bufferedAmountLow: make(chan struct{}, 1),
 	}
 
 	// Set up connection state handler
@@ -171,7 +173,21 @@ func NewPeerConnection(config PeerConfig) (*PeerConnection, error) {
 func (p *PeerConnection) setupDataChannel(dc *webrtc.DataChannel) {
 	p.mu.Lock()
 	p.dataChannel = dc
+	if p.bufferedAmountLow == nil {
+		p.bufferedAmountLow = make(chan struct{}, 1)
+	}
+	bufferedAmountLow := p.bufferedAmountLow
 	p.mu.Unlock()
+
+	// Pion exposes the browser-equivalent bufferedamountlow event. Use one
+	// shared notification channel so the sender only allocates when it really
+	// has to block; the common below-threshold path is just a BufferedAmount read.
+	dc.OnBufferedAmountLow(func() {
+		select {
+		case bufferedAmountLow <- struct{}{}:
+		default:
+		}
+	})
 
 	dc.OnOpen(func() {
 		slog.Info("Data channel opened", "label", dc.Label(), "id", dc.ID())
@@ -361,30 +377,82 @@ func (p *PeerConnection) WaitBufferEmpty(ctx context.Context) error {
 	}
 }
 
-// WaitBufferBelow waits until the data-channel send queue is at or below limit.
-// LocalSend Web throttles file streaming above 1 MiB; keeping the same bound
-// avoids unbounded buffering on constrained KOReader devices.
-func (p *PeerConnection) WaitBufferBelow(ctx context.Context, limit uint64) error {
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
+type bufferedAmountChannel interface {
+	BufferedAmount() uint64
+	SetBufferedAmountLowThreshold(uint64)
+}
 
+func waitForBufferedAmountBelow(dc bufferedAmountChannel, low <-chan struct{}, limit uint64, timeout time.Duration) error {
+	// This is the hot path: avoid constructing a context, timer, or ticker for
+	// every 16 KiB WebRTC frame when the queue is already below LocalSend Web's
+	// 1 MiB threshold.
+	if dc.BufferedAmount() <= limit {
+		return nil
+	}
+
+	dc.SetBufferedAmountLowThreshold(limit)
+	// The queue may have drained between the first read and installing the
+	// threshold. Recheck so a missed edge cannot stall until timeout.
+	if dc.BufferedAmount() <= limit {
+		return nil
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
 	for {
-		if p.BufferedAmount() <= limit {
-			return nil
-		}
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+		case <-low:
+			if dc.BufferedAmount() <= limit {
+				return nil
+			}
+		case <-timer.C:
+			return context.DeadlineExceeded
 		}
 	}
 }
 
-// WaitBufferBelowWithTimeout is WaitBufferBelow with a timeout.
+func (p *PeerConnection) flowControlState() (*webrtc.DataChannel, <-chan struct{}) {
+	p.mu.Lock()
+	dc := p.dataChannel
+	low := p.bufferedAmountLow
+	p.mu.Unlock()
+	return dc, low
+}
+
+// WaitBufferBelow waits until the data-channel send queue is at or below limit.
+// It is event-driven rather than polling; LocalSend Web's 1 MiB bound is unchanged.
+func (p *PeerConnection) WaitBufferBelow(ctx context.Context, limit uint64) error {
+	dc, low := p.flowControlState()
+	if dc == nil {
+		return fmt.Errorf("data channel not ready")
+	}
+	if dc.BufferedAmount() <= limit {
+		return nil
+	}
+	dc.SetBufferedAmountLowThreshold(limit)
+	if dc.BufferedAmount() <= limit {
+		return nil
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-low:
+			if dc.BufferedAmount() <= limit {
+				return nil
+			}
+		}
+	}
+}
+
+// WaitBufferBelowWithTimeout has an allocation-free common path and allocates a
+// timer only when backpressure is actually active.
 func (p *PeerConnection) WaitBufferBelowWithTimeout(limit uint64, timeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	return p.WaitBufferBelow(ctx, limit)
+	dc, low := p.flowControlState()
+	if dc == nil {
+		return fmt.Errorf("data channel not ready")
+	}
+	return waitForBufferedAmountBelow(dc, low, limit, timeout)
 }
 
 // WaitBufferEmptyWithTimeout is WaitBufferEmpty with a timeout.

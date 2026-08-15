@@ -141,3 +141,21 @@ func BenchmarkRTCReceiverFileLookup_1000Files(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkRTCReceiverIsFolderTransfer_1000Files(b *testing.B) {
+	r := NewRTCReceiver(nil, nil, "", b.TempDir())
+	r.files = make([]RTCFileDto, 1000)
+	for i := range r.files {
+		r.files[i] = RTCFileDto{ID: fmt.Sprintf("file-%04d", i), FileName: fmt.Sprintf("Books/file-%04d.epub", i)}
+	}
+	if !r.isFolderTransfer() {
+		b.Fatal("expected folder transfer")
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if !r.isFolderTransfer() {
+			b.Fatal("expected folder transfer")
+		}
+	}
+}

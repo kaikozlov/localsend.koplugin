@@ -9,6 +9,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -31,9 +32,11 @@ type ForwardSender struct {
 }
 
 const (
-	requestTimeout          = 30 * time.Second
-	maxControlResponseBytes = 1 << 20
-	maxUploadAttempts       = 3
+	requestTimeout             = 30 * time.Second
+	maxControlResponseBytes    = 1 << 20
+	maxUploadAttempts          = 3
+	uploadConcurrency          = 2
+	httpsUploadWriteBufferSize = 64 * 1024
 )
 
 func NewForwardSender() *ForwardSender {
@@ -44,8 +47,22 @@ func NewForwardSender() *ForwardSender {
 		},
 		remotePort:   constants.DefaultPortStr,
 		httpClient:   &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes},
-		uploadClient: &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes},
+		uploadClient: newUploadClient(nil, false),
 	}
+}
+
+func newUploadClient(tlsConfig *tls.Config, https bool) *fasthttp.Client {
+	client := &fasthttp.Client{
+		MaxResponseBodySize: maxControlResponseBytes,
+		TLSConfig:           tlsConfig,
+	}
+	if https {
+		// fasthttp defaults to a 4 KiB connection write buffer. TLS cannot use
+		// the plain file->TCP sendfile path, and a 64 KiB buffer removes most of
+		// that per-record/write overhead without spending 512 KiB per connection.
+		client.WriteBufferSize = httpsUploadWriteBufferSize
+	}
+	return client
 }
 
 func (fsp *ForwardSender) Init(target *models.DeviceInfo, https bool) error {
@@ -80,7 +97,7 @@ func (fsp *ForwardSender) Init(target *models.DeviceInfo, https bool) error {
 	localInfo := models.NewDeviceInfo(alias, fingerprint)
 	fsp.local = &localInfo
 	fsp.httpClient = &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes, TLSConfig: clientTLSConfig}
-	fsp.uploadClient = &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes, TLSConfig: clientTLSConfig}
+	fsp.uploadClient = newUploadClient(clientTLSConfig, https)
 
 	fsp.reset()
 
@@ -211,15 +228,40 @@ func (fsp *ForwardSender) Start() error {
 		return fmt.Errorf("pre-upload failed: %w", err)
 	}
 
-	// Collect and return errors instead of just logging
-	var errs []error
-	for fid, ftoken := range fsp.tokens {
-		err := fsp.sendFileWithRetry(fid, ftoken)
-		if err != nil {
-			slog.Error("Fail to send file", "error", err, "fileId", fid)
-			errs = append(errs, fmt.Errorf("file %s: %w", fid, err))
-		}
+	// Match LocalSend 1.18's native HTTP scheduler: upload up to two files in
+	// parallel. The protocol treats each file upload as an independent request
+	// within the prepared session, so this changes scheduling, not wire format.
+	type uploadJob struct {
+		id    string
+		token string
 	}
+	jobs := make(chan uploadJob)
+	var wg sync.WaitGroup
+	var errsMu sync.Mutex
+	errs := make([]error, 0)
+	workers := uploadConcurrency
+	if len(fsp.tokens) < workers {
+		workers = len(fsp.tokens)
+	}
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				if err := fsp.sendFileWithRetry(job.id, job.token); err != nil {
+					slog.Error("Fail to send file", "error", err, "fileId", job.id)
+					errsMu.Lock()
+					errs = append(errs, fmt.Errorf("file %s: %w", job.id, err))
+					errsMu.Unlock()
+				}
+			}
+		}()
+	}
+	for fid, ftoken := range fsp.tokens {
+		jobs <- uploadJob{id: fid, token: ftoken}
+	}
+	close(jobs)
+	wg.Wait()
 
 	if len(errs) > 0 {
 		// Release the receiver's session so it can accept new transfers

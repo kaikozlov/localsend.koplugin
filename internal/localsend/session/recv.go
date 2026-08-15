@@ -38,8 +38,9 @@ const (
 )
 
 type fileUploadState struct {
-	status   fileUploadStatus
-	attempts uint8
+	status     fileUploadStatus
+	attempts   uint8
+	targetPath string // stable across checksum retries
 }
 
 // activityReader wraps an io.Reader and updates a timestamp pointer periodically.
@@ -85,6 +86,12 @@ type RecvSession struct {
 	// Cached folder transfer detection (computed once)
 	isFolderTransferOnce   sync.Once
 	isFolderTransferCached bool
+
+	// Session-local filesystem caches. ensuredDirs avoids repeated MkdirAll/stat
+	// work for many files targeting the same directory; uniqueFiles remembers
+	// the next likely duplicate suffix while O_EXCL remains authoritative.
+	ensuredDirs sync.Map
+	uniqueFiles utils.UniqueFileAllocator
 }
 
 func NewRecvSession(sessionId string, clientIP string) (*RecvSession, error) {
@@ -175,6 +182,17 @@ func (sess *RecvSession) applyFolderRemap(sanitizedPath string) string {
 	return sess.folderRemapper.Apply(sanitizedPath)
 }
 
+func (sess *RecvSession) ensureSaveDir(dir string) error {
+	if _, ok := sess.ensuredDirs.Load(dir); ok {
+		return nil
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	sess.ensuredDirs.Store(dir, struct{}{})
+	return nil
+}
+
 // applyFileTimes applies the sender-declared modification and access
 // timestamps from FileMeta metadata to the saved file. Malformed timestamps
 // and unsupported filesystems are skipped with a debug log; the completed
@@ -244,6 +262,7 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 	}
 	state.status = fileInProgress
 	state.attempts++
+	targetPath := state.targetPath
 	sess.mu.Unlock()
 
 	result := fileFailed
@@ -275,14 +294,34 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 		fullSaveDir = filepath.Join(saveToDir, subDir)
 	}
 
-	// Ensure the directory exists (including any subdirectories)
-	if err := os.MkdirAll(fullSaveDir, 0755); err != nil {
+	// Ensure each destination directory once per receive session. Concurrent
+	// uploads may race on the first call, but MkdirAll is idempotent and the
+	// cache removes all steady-state filesystem probes afterwards.
+	if err := sess.ensureSaveDir(fullSaveDir); err != nil {
 		slog.Error("Failed to create save directory", "dir", fullSaveDir, "error", err)
 		return "", lserrors.ErrFileIO
 	}
 
-	// Atomically create a file with a unique name (prevents race conditions)
-	file, saveAs, err := utils.CreateUniqueFile(fullSaveDir, baseName)
+	// Atomically create a file with a session-local suffix hint. This preserves
+	// LocalSend's file (N).ext naming while avoiding O(n²) collision scans for
+	// large duplicate batches. A checksum retry reuses the exact target chosen
+	// by the first attempt, matching the official receiver's retry contract.
+	var file *os.File
+	var saveAs string
+	var err error
+	if targetPath != "" {
+		saveAs = targetPath
+		file, err = os.OpenFile(saveAs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	} else {
+		file, saveAs, err = sess.uniqueFiles.Create(fullSaveDir, baseName)
+		if err == nil {
+			sess.mu.Lock()
+			if current := sess.fileStates[fileId]; current != nil {
+				current.targetPath = saveAs
+			}
+			sess.mu.Unlock()
+		}
+	}
 	if err != nil {
 		slog.Error("Failed to create unique file", "error", err)
 		return "", lserrors.ErrFileIO
