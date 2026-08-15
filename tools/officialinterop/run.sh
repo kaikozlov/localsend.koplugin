@@ -68,11 +68,21 @@ docker run --rm \
     -v localsend-go-mod:/root/go/pkg/mod \
     -v localsend-go-build:/root/.cache/go-build \
     "$dev_image" \
-    sh -c 'cd /opt/plugin && GOFLAGS=-buildvcs=false CGO_ENABLED=0 go build -o /opt/interop/localsend .'
+    sh -c 'cd /opt/plugin && GOFLAGS=-buildvcs=false CGO_ENABLED=0 go build -o /opt/interop/localsend . && GOFLAGS=-buildvcs=false CGO_ENABLED=0 go build -o /opt/interop/certgen ./tools/officialinterop/certgen'
+
+# Pre-generate the Go TLS identity next to the binary: the interop tests run
+# the binary from a read-only volume, so it cannot create certs at runtime.
+# The receiver's certificate fingerprint is exported for tests to pin.
+GO_RECEIVER_FINGERPRINT="$(docker run --rm \
+    -v "$binary_volume:/opt/interop" \
+    "$dev_image" \
+    /opt/interop/certgen --dir /opt/interop)"
+export GO_RECEIVER_FINGERPRINT
 
 echo "Running official-core interoperability tests in $rust_image"
 docker run --rm \
     -e LOCALSEND_BIN=/opt/interop/localsend \
+    -e GO_RECEIVER_FINGERPRINT \
     -v "$root:/opt/plugin:ro" \
     -v "$official_dir/packages/core:/opt/official-core:ro" \
     -v "$binary_volume:/opt/interop:ro" \
