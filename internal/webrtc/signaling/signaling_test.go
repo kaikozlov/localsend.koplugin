@@ -266,19 +266,11 @@ func TestRustVectorOfferMessage(t *testing.T) {
 
 // TestRustVectorClientUpdateMessage verifies exact JSON format from Rust tests.
 func TestRustVectorClientUpdateMessage(t *testing.T) {
-	// From Rust: ws_client_update_message_encoding (signaling.rs)
-	expected := `{"type":"UPDATE","info":{"alias":"Cute Apple","version":"2.3","deviceModel":"Dell","deviceType":"desktop","token":"123"}}`
+	// Production vector built through the same constructor used by the CLI. The
+	// pinned Rust source serializes DeviceType with SCREAMING_SNAKE_CASE.
+	expected := `{"type":"UPDATE","info":{"alias":"Cute Apple","version":"2.3","deviceModel":"LocalSend-CLI","deviceType":"HEADLESS","token":"123"}}`
 
-	msg := WsClientMessage{
-		Type: "UPDATE",
-		Info: &ClientInfoWithoutID{
-			Alias:       "Cute Apple",
-			Version:     "2.3",
-			DeviceModel: "Dell",
-			DeviceType:  "desktop",
-			Token:       "123",
-		},
-	}
+	msg := NewUpdateMessage(NewClientInfo("Cute Apple", "123"))
 
 	data, err := json.Marshal(msg)
 	if err != nil {

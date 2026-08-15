@@ -116,8 +116,9 @@ func ParseRTCMessage(data []byte) (interface{}, string, error) {
 				}
 			}
 
-			// Check for pair response (has publicKey but NO files)
-			if _, hasPublicKey := generic["publicKey"]; hasPublicKey {
+			// A PAIR request is an RTCFileListResponse and must remain status_PAIR.
+			// Only the sender's actual PAIR response variants use pair_response.
+			if _, hasPublicKey := generic["publicKey"]; hasPublicKey && status != StatusPair {
 				if _, hasFiles := generic["files"]; !hasFiles {
 					var pairResp RTCPairResponse
 					if err := json.Unmarshal(data, &pairResp); err == nil {
@@ -136,10 +137,12 @@ func ParseRTCMessage(data []byte) (interface{}, string, error) {
 		return &tokenReq, "token_request", nil
 	}
 
-	// Check for PIN
-	var pin RTCPinMessage
-	if err := json.Unmarshal(data, &pin); err == nil && pin.Pin != "" {
-		return &pin, "pin", nil
+	// Check for PIN. Presence of the field, not a non-empty value, identifies an
+	// attempt: the official implementation serializes and counts empty strings.
+	if rawPin, ok := generic["pin"]; ok {
+		if pinValue, ok := rawPin.(string); ok {
+			return &RTCPinMessage{Pin: pinValue}, "pin", nil
+		}
 	}
 
 	// Check for file response (success/error ack from receiver)

@@ -27,6 +27,16 @@ var DefaultSTUNServers = []string{
 	"stun:stun1.l.google.com:19302",
 }
 
+// controlChannelOps is the WebRTC control-plane surface used by both state
+// machines. Keeping it narrow also lets transcript tests assert frame type and
+// ordering without constructing a live PeerConnection.
+type controlChannelOps interface {
+	SendJSON(v interface{}) error
+	SendJSONBinary(v interface{}) error
+	SendDelimiter() error
+	Close() error
+}
+
 // PeerConnection wraps a pion/webrtc PeerConnection for file transfer.
 type PeerConnection struct {
 	pc            *webrtc.PeerConnection

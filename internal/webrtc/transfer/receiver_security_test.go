@@ -1048,34 +1048,21 @@ func TestRTCReceiver_handleToken_TransitionsAccordingToPIN(t *testing.T) {
 	}
 }
 
-func TestRTCReceiver_handleToken_InvalidSignatureHonorsStrictMode(t *testing.T) {
-	tests := []struct {
-		name      string
-		strict    bool
-		wantState int
-	}{
-		{name: "strict rejects", strict: true, wantState: stateWaitToken},
-		{name: "lenient continues", strict: false, wantState: stateWaitFileList},
+func TestRTCReceiver_handleToken_InvalidExpectedSignatureIsTerminal(t *testing.T) {
+	r, _ := newTokenTestReceiver(t, "")
+	untrustedKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r, _ := newTokenTestReceiver(t, "")
-			untrustedKey, err := crypto.GenerateKeyPair()
-			if err != nil {
-				t.Fatal(err)
-			}
-			token, err := untrustedKey.GenerateTokenWithNonce(r.finalNonce)
-			if err != nil {
-				t.Fatal(err)
-			}
-			r.strictVerification = tt.strict
+	token, err := untrustedKey.GenerateTokenWithNonce(r.finalNonce)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-			r.handleToken(&RTCTokenRequest{Token: token}, "token_request")
+	r.handleToken(&RTCTokenRequest{Token: token}, "token_request")
 
-			if r.state != tt.wantState {
-				t.Fatalf("state = %d; want %d", r.state, tt.wantState)
-			}
-		})
+	if r.state != stateDone {
+		t.Fatalf("state = %d; want terminal stateDone", r.state)
 	}
 }
 

@@ -130,6 +130,23 @@ func TestParseRTCMessagePin(t *testing.T) {
 	}
 }
 
+func TestParseRTCMessagePin_AllowsEmptyAttempt(t *testing.T) {
+	msg, msgType, err := ParseRTCMessage([]byte(`{"pin":""}`))
+	if err != nil {
+		t.Fatalf("Unexpected error: %v", err)
+	}
+	if msgType != "pin" {
+		t.Fatalf("msgType = %q; want pin", msgType)
+	}
+	pin, ok := msg.(*RTCPinMessage)
+	if !ok {
+		t.Fatalf("msg type = %T; want *RTCPinMessage", msg)
+	}
+	if pin.Pin != "" {
+		t.Fatalf("Pin = %q; want empty attempt", pin.Pin)
+	}
+}
+
 // TestParseRTCMessagePinResponse tests parsing of PIN response messages.
 func TestParseRTCMessagePinResponse(t *testing.T) {
 	jsonData := `{"status":"OK"}`
@@ -516,10 +533,12 @@ func TestPairResponseVsFileListResponse(t *testing.T) {
 		t.Errorf("PAIR response parsed as %q; want 'pair_response'", type2)
 	}
 
-	// Test PAIR status (PAIR status with publicKey)
+	// Test PAIR status: a PAIR request is an RTCFileListResponse (receiver
+	// asking to pair), consumed by the sender as status_PAIR. Only the
+	// sender's actual PAIR response variants classify as pair_response.
 	_, type3, _ := ParseRTCMessage([]byte(pairStatusJSON))
-	if type3 != "pair_response" {
-		t.Errorf("PAIR status parsed as %q; want 'pair_response'", type3)
+	if type3 != "status_PAIR" {
+		t.Errorf("PAIR status parsed as %q; want 'status_PAIR'", type3)
 	}
 }
 

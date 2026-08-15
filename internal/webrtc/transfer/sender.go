@@ -3,6 +3,7 @@ package transfer
 import (
 	"bytes"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -47,6 +48,7 @@ const (
 	senderStateWaitNonce
 	senderStateWaitToken
 	senderStateWaitPin
+	senderStateWaitRequiredPIN
 	senderStateWaitFileAccept
 	senderStateSendingFiles
 	senderStateDone
@@ -59,18 +61,23 @@ type FileMeta struct {
 	FilePath string
 	Size     int64
 	FileType string
+	SHA256   string
 	Modified time.Time
+	Accessed time.Time
 }
 
 // RTCSender handles sending files over WebRTC using official protocol.
 type RTCSender struct {
-	signaling   *signaling.SignalingClient
-	signingKey  *crypto.SigningKey
-	peer        *PeerConnection
-	pin         string
-	sessionID   string
-	pinAttempts int
-	mu          sync.Mutex
+	signaling           *signaling.SignalingClient
+	signingKey          *crypto.SigningKey
+	peer                *PeerConnection
+	pin                 string
+	sessionID           string
+	pinAttempts         int
+	requiredPINAttempts int
+	requiredPIN         string
+	requirePIN          bool
+	mu                  sync.Mutex
 
 	// State machine
 	state       int
@@ -79,9 +86,12 @@ type RTCSender struct {
 	finalNonce  []byte
 
 	// Token verification (optional, requires PAIR flow for public key)
-	receiverPublicKey  crypto.VerifyingKey // Set via PAIR flow
-	strictVerification bool                // If true, fail on invalid tokens
-	receiverToken      string              // Stored for verification
+	receiverPublicKey crypto.VerifyingKey // Set via PAIR flow
+	receiverToken     string              // Stored for verification
+
+	// PIN provider is called for every challenge attempt from the receiver. When
+	// nil, pin is used as a fixed fallback (including when it is empty).
+	pinProvider func(attempt int) string
 
 	// Receiver info (for PAIR flow)
 	receiverAlias string // Set via SetReceiverInfo
@@ -112,6 +122,8 @@ type RTCSender struct {
 	// sendOpsOverride is a test seam for SendFiles' data-channel operations.
 	// When nil, SendFiles uses s.peer.
 	sendOpsOverride sendOps
+	// controlOpsOverride records control-plane transcripts in tests.
+	controlOpsOverride controlChannelOps
 }
 
 // NewRTCSender creates a new WebRTC sender.
@@ -138,12 +150,53 @@ func (s *RTCSender) SetReceiverPublicKey(key crypto.VerifyingKey) {
 	s.receiverPublicKey = key
 }
 
-// SetStrictVerification enables strict token verification mode.
-// When enabled, transfers will fail if token verification fails.
-func (s *RTCSender) SetStrictVerification(strict bool) {
+// SetRequiredPIN enables a sender-owned PIN challenge before the file list is
+// published. Calling it enables the challenge even when pin is empty, matching
+// the official PinConfig/Option distinction.
+func (s *RTCSender) SetRequiredPIN(pin string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.strictVerification = strict
+	s.requiredPIN = pin
+	s.requirePIN = true
+}
+
+// SetPINProvider supplies a fresh response for each receiver-owned PIN
+// challenge. The callback may return an empty string; that is a real attempt.
+func (s *RTCSender) SetPINProvider(provider func(attempt int) string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pinProvider = provider
+}
+
+func (s *RTCSender) controlOps() controlChannelOps {
+	if s.controlOpsOverride != nil {
+		return s.controlOpsOverride
+	}
+	if s.peer != nil {
+		return s.peer
+	}
+	return nil
+}
+
+func (s *RTCSender) sendJSON(v interface{}) error {
+	if ops := s.controlOps(); ops != nil {
+		return ops.SendJSON(v)
+	}
+	return fmt.Errorf("data channel not initialized")
+}
+
+func (s *RTCSender) sendJSONBinary(v interface{}) error {
+	if ops := s.controlOps(); ops != nil {
+		return ops.SendJSONBinary(v)
+	}
+	return fmt.Errorf("data channel not initialized")
+}
+
+func (s *RTCSender) sendDelimiter() error {
+	if ops := s.controlOps(); ops != nil {
+		return ops.SendDelimiter()
+	}
+	return fmt.Errorf("data channel not initialized")
 }
 
 // SetReceiverInfo sets receiver information for the PAIR flow.
@@ -295,7 +348,7 @@ func (s *RTCSender) startNonceExchange() {
 
 	// Send nonce
 	msg := RTCNonceMessage{Nonce: crypto.EncodeNonce(nonce)}
-	if err := s.peer.SendJSON(msg); err != nil {
+	if err := s.sendJSON(msg); err != nil {
 		if !s.closed {
 			s.errors <- fmt.Errorf("failed to send nonce: %w", err)
 		}
@@ -373,6 +426,8 @@ func (s *RTCSender) handleDataMessage(data []byte, isString bool) {
 		s.handleNonceResponse(msg, msgType)
 	case senderStateWaitToken, senderStateWaitPin:
 		s.handleTokenResponse(msg, msgType, data)
+	case senderStateWaitRequiredPIN:
+		s.handleRequiredPIN(msg, msgType)
 	case senderStateWaitFileAccept:
 		s.handleFileAcceptance(msg, msgType, data)
 	}
@@ -410,7 +465,7 @@ func (s *RTCSender) handleNonceResponse(msg interface{}, msgType string) {
 	}
 
 	tokenMsg := RTCTokenRequest{Token: token}
-	if err := s.peer.SendJSON(tokenMsg); err != nil {
+	if err := s.sendJSON(tokenMsg); err != nil {
 		slog.Error("Failed to send token", "error", err)
 		return
 	}
@@ -419,35 +474,16 @@ func (s *RTCSender) handleNonceResponse(msg interface{}, msgType string) {
 }
 
 // handleTokenResponse processes the token response from receiver.
-func (s *RTCSender) handleTokenResponse(msg interface{}, msgType string, data []byte) {
-	// Status responses: OK, PIN_REQUIRED, TOO_MANY_ATTEMPTS, INVALID_SIGNATURE
+func (s *RTCSender) handleTokenResponse(_ interface{}, msgType string, data []byte) {
+	// Status responses: OK, PIN_REQUIRED, TOO_MANY_ATTEMPTS, INVALID_SIGNATURE.
 	if msgType == "status_TOO_MANY_ATTEMPTS" {
-		if !s.closed {
-			s.errors <- fmt.Errorf("too many PIN attempts, receiver blocked transfer")
-		}
-		// Close peer connection asynchronously to avoid deadlock
-		// (we're holding s.mu via handleMessage's defer)
-		if s.peer != nil {
-			go func(peer *PeerConnection) {
-				_ = peer.Close()
-			}(s.peer)
-		}
+		s.failLocked(fmt.Errorf("too many PIN attempts, receiver blocked transfer"))
 		return
 	}
-
 	if msgType == "status_INVALID_SIGNATURE" {
-		if !s.closed {
-			s.errors <- fmt.Errorf("receiver rejected our token signature")
-		}
-		// Close peer connection asynchronously to avoid deadlock
-		if s.peer != nil {
-			go func(peer *PeerConnection) {
-				_ = peer.Close()
-			}(s.peer)
-		}
+		s.failLocked(fmt.Errorf("receiver rejected our token signature"))
 		return
 	}
-
 	if msgType != "status_OK" && msgType != "status_PIN_REQUIRED" {
 		slog.Warn("Expected token response, got", "type", msgType)
 		return
@@ -458,78 +494,123 @@ func (s *RTCSender) handleTokenResponse(msg interface{}, msgType string, data []
 		slog.Error("Failed to parse token response", "error", err)
 		return
 	}
-
-	slog.Info("Token response received", "status", tokenResp.Status)
-
-	// Store receiver's token for verification
 	s.receiverToken = tokenResp.Token
 
-	// Optionally verify receiver's token if we have their public key
-	if s.receiverPublicKey != nil && tokenResp.Token != "" {
+	// Supplying an expected key is an explicit identity requirement. A missing or
+	// invalid token is therefore always terminal; there is no second leniency flag.
+	if s.receiverPublicKey != nil {
 		if err := crypto.VerifyTokenNonce(s.receiverPublicKey, tokenResp.Token, s.finalNonce); err != nil {
-			slog.Warn("Receiver token verification failed", "error", err)
-			if s.strictVerification {
-				if !s.closed {
-					s.errors <- fmt.Errorf("receiver token verification failed: %w", err)
-				}
-				return
-			}
-			// In lenient mode, log warning but continue
-			slog.Warn("Continuing despite token verification failure (strict mode disabled)")
-		} else {
-			slog.Info("Receiver token verified successfully")
+			s.failLocked(fmt.Errorf("receiver token verification failed: %w", err))
+			return
 		}
+		slog.Info("Receiver token verified successfully")
 	}
 
 	if tokenResp.Status == "PIN_REQUIRED" {
-		if s.pin == "" {
-			if !s.closed {
-				s.errors <- fmt.Errorf("receiver requires PIN but none provided")
-			}
-			return
-		}
-
-		if s.pinAttempts >= maxPINAttempts {
-			if !s.closed {
-				s.errors <- fmt.Errorf("max PIN attempts reached")
-			}
-			return
-		}
-
 		s.pinAttempts++
-		slog.Info("Sending PIN", "attempt", s.pinAttempts)
-
-		// Send PIN message
-		pinMsg := RTCPinMessage{Pin: s.pin}
-		if err := s.peer.SendJSON(pinMsg); err != nil {
-			if !s.closed {
-				s.errors <- fmt.Errorf("failed to send PIN: %w", err)
-			}
+		pin := s.pin
+		if s.pinProvider != nil {
+			provider := s.pinProvider
+			attempt := s.pinAttempts
+			s.mu.Unlock()
+			pin = provider(attempt)
+			s.mu.Lock()
+		}
+		if err := s.sendJSON(RTCPinMessage{Pin: pin}); err != nil {
+			s.failLocked(fmt.Errorf("failed to send PIN: %w", err))
 			return
 		}
 		s.state = senderStateWaitPin
 		return
 	}
 
-	// Send file list
-	slog.Info("Sending file list")
-	s.sendFileList()
+	s.beginFileListPhase()
 }
 
-// sendFileList sends the list of files to transfer.
-func (s *RTCSender) sendFileList() {
+func (s *RTCSender) beginFileListPhase() {
+	if !s.requirePIN {
+		s.sendFileList()
+		return
+	}
+	if err := s.sendPinSendingStatus(StatusPINRequired); err != nil {
+		s.failLocked(fmt.Errorf("failed to send sender PIN challenge: %w", err))
+		return
+	}
+	s.state = senderStateWaitRequiredPIN
+}
+
+func (s *RTCSender) handleRequiredPIN(msg interface{}, msgType string) {
+	if msgType != "pin" {
+		slog.Warn("Expected pin for sender challenge", "type", msgType)
+		return
+	}
+	pinMsg, ok := msg.(*RTCPinMessage)
+	if !ok {
+		s.failLocked(fmt.Errorf("invalid PIN message type %T", msg))
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(pinMsg.Pin), []byte(s.requiredPIN)) == 1 {
+		s.sendFileList()
+		return
+	}
+
+	s.requiredPINAttempts++
+	status := StatusPINRequired
+	if s.requiredPINAttempts >= maxPINAttempts {
+		status = StatusTooManyAttempts
+	}
+	if err := s.sendPinSendingStatus(status); err != nil {
+		s.failLocked(fmt.Errorf("failed to send sender PIN result: %w", err))
+		return
+	}
+	if status == StatusTooManyAttempts {
+		s.failLocked(fmt.Errorf("too many incorrect PIN attempts"))
+	}
+}
+
+func (s *RTCSender) sendPinSendingStatus(status string) error {
+	if err := s.sendJSONBinary(RTCPinSendingResponse{Status: status}); err != nil {
+		return err
+	}
+	return s.sendDelimiter()
+}
+
+func (s *RTCSender) failLocked(err error) {
+	s.state = senderStateDone
+	if s.closed {
+		return
+	}
+	select {
+	case s.errors <- err:
+	default:
+	}
+}
+
+func (s *RTCSender) fileDTOs() []RTCFileDto {
 	files := make([]RTCFileDto, len(s.files))
 	for i, f := range s.files {
+		metadata := RTCFileMetadata{}
+		if !f.Modified.IsZero() {
+			metadata.Modified = f.Modified.Format(time.RFC3339Nano)
+		}
+		if !f.Accessed.IsZero() {
+			metadata.Accessed = f.Accessed.Format(time.RFC3339Nano)
+		}
 		files[i] = RTCFileDto{
 			ID:       f.ID,
 			FileName: f.FileName,
 			Size:     f.Size,
 			FileType: f.FileType,
-			Metadata: RTCFileMetadata{
-				Modified: f.Modified.Format(time.RFC3339Nano),
-			},
+			SHA256:   f.SHA256,
+			Metadata: metadata,
 		}
 	}
+	return files
+}
+
+// sendFileList sends the list of files to transfer.
+func (s *RTCSender) sendFileList() {
+	files := s.fileDTOs()
 
 	fileList := RTCPinSendingResponse{
 		Status: "OK",
@@ -537,11 +618,11 @@ func (s *RTCSender) sendFileList() {
 	}
 
 	// Send as binary + delimiter
-	if err := s.peer.SendJSONBinary(fileList); err != nil {
+	if err := s.sendJSONBinary(fileList); err != nil {
 		slog.Error("Failed to send file list", "error", err)
 		return
 	}
-	if err := s.peer.SendDelimiter(); err != nil {
+	if err := s.sendDelimiter(); err != nil {
 		slog.Error("Failed to send delimiter", "error", err)
 		return
 	}
@@ -585,8 +666,8 @@ func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []b
 				slog.Error("Failed to parse receiver's public key", "error", err)
 				// Send INVALID_SIGNATURE response
 				pairResponse := RTCPairResponse{Status: "INVALID_SIGNATURE"}
-				_ = s.peer.SendJSONBinary(pairResponse)
-				_ = s.peer.SendDelimiter()
+				_ = s.sendJSON(pairResponse)
+				s.failLocked(fmt.Errorf("invalid receiver PAIR public key: %w", err))
 				return
 			}
 
@@ -596,8 +677,8 @@ func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []b
 				if err := crypto.VerifyTokenNonce(key, s.receiverToken, s.finalNonce); err != nil {
 					slog.Error("Receiver token does not match PAIR public key - potential identity mismatch", "error", err)
 					pairResponse := RTCPairResponse{Status: "INVALID_SIGNATURE"}
-					_ = s.peer.SendJSONBinary(pairResponse)
-					_ = s.peer.SendDelimiter()
+					_ = s.sendJSON(pairResponse)
+					s.failLocked(fmt.Errorf("receiver PAIR identity mismatch: %w", err))
 					return
 				}
 				slog.Info("Receiver token verified against PAIR public key")
@@ -634,12 +715,8 @@ func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []b
 			pairResponse := RTCPairResponse{
 				Status: "PAIR_DECLINED",
 			}
-			if err := s.peer.SendJSONBinary(pairResponse); err != nil {
+			if err := s.sendJSON(pairResponse); err != nil {
 				slog.Error("Failed to send PAIR decline", "error", err)
-				return
-			}
-			if err := s.peer.SendDelimiter(); err != nil {
-				slog.Error("Failed to send delimiter after PAIR decline", "error", err)
 				return
 			}
 			// Continue without pairing - receiver will send a new file list response
@@ -651,12 +728,8 @@ func (s *RTCSender) handleFileAcceptance(_ interface{}, msgType string, data []b
 			Status:    "OK",
 			PublicKey: s.signingKey.PublicKeyPEM(),
 		}
-		if err := s.peer.SendJSONBinary(pairResponse); err != nil {
+		if err := s.sendJSON(pairResponse); err != nil {
 			slog.Error("Failed to send PAIR response", "error", err)
-			return
-		}
-		if err := s.peer.SendDelimiter(); err != nil {
-			slog.Error("Failed to send delimiter after PAIR response", "error", err)
 			return
 		}
 		slog.Info("Sent PAIR response with our public key")
@@ -759,6 +832,11 @@ func (s *RTCSender) SendFiles() error {
 	}
 
 	queue := s.prepareSendQueue()
+	if len(queue) == 0 {
+		if err := ops.SendDelimiter(); err != nil {
+			return fmt.Errorf("failed to send final delimiter: %w", err)
+		}
+	}
 
 	// Get buffer from pool (reuse for all files to reduce GC)
 	bufPtr := chunkPool.Get().(*[]byte)

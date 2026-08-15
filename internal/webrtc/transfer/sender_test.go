@@ -74,6 +74,47 @@ func TestComputeFingerprint_DifferentInputs(t *testing.T) {
 	}
 }
 
+func TestRTCSender_FileDTOsIncludeChecksumAndBothTimestamps(t *testing.T) {
+	modified := time.Unix(1_700_000_000, 123_456_789)
+	accessed := time.Unix(1_700_000_001, 987_654_321)
+	sender := NewRTCSender(nil, nil, "")
+	sender.files = []FileMeta{{
+		ID:       "file-1",
+		FileName: "book.epub",
+		FilePath: "/tmp/book.epub",
+		Size:     42,
+		FileType: "application/epub+zip",
+		SHA256:   "0123456789abcdef",
+		Modified: modified,
+		Accessed: accessed,
+	}}
+
+	files := sender.fileDTOs()
+	if len(files) != 1 {
+		t.Fatalf("file DTO count = %d; want 1", len(files))
+	}
+	got := files[0]
+	if got.SHA256 != "0123456789abcdef" {
+		t.Fatalf("sha256 = %q; want advertised checksum", got.SHA256)
+	}
+	if got.Metadata.Modified != modified.Format(time.RFC3339Nano) {
+		t.Fatalf("modified = %q", got.Metadata.Modified)
+	}
+	if got.Metadata.Accessed != accessed.Format(time.RFC3339Nano) {
+		t.Fatalf("accessed = %q", got.Metadata.Accessed)
+	}
+}
+
+func TestRTCSender_FileDTOsOmitUnavailableTimestamps(t *testing.T) {
+	sender := NewRTCSender(nil, nil, "")
+	sender.files = []FileMeta{{ID: "file-1", FileName: "book.epub", Size: 42}}
+
+	got := sender.fileDTOs()[0].Metadata
+	if got.Modified != "" || got.Accessed != "" {
+		t.Fatalf("zero timestamps serialized as %#v; want omitted fields", got)
+	}
+}
+
 func TestRTCSender_SetOnPairRequest(t *testing.T) {
 	sender := NewRTCSender(nil, nil, "")
 

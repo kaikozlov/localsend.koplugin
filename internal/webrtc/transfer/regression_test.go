@@ -15,6 +15,40 @@ import (
 	"localsend-cli/internal/webrtc/signaling"
 )
 
+type controlFrame struct {
+	kind string
+	data string
+}
+
+type recordingControlOps struct {
+	frames []controlFrame
+	closed int
+}
+
+func (r *recordingControlOps) record(kind string, v interface{}) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	r.frames = append(r.frames, controlFrame{kind: kind, data: string(data)})
+	return nil
+}
+
+func (r *recordingControlOps) SendJSON(v interface{}) error       { return r.record("text", v) }
+func (r *recordingControlOps) SendJSONBinary(v interface{}) error { return r.record("binary", v) }
+func (r *recordingControlOps) SendDelimiter() error {
+	r.frames = append(r.frames, controlFrame{kind: "text", data: "0"})
+	return nil
+}
+func (r *recordingControlOps) Close() error { r.closed++; return nil }
+
+func assertControlFrames(t *testing.T, got []controlFrame, want ...controlFrame) {
+	t.Helper()
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("frames = %#v; want %#v", got, want)
+	}
+}
+
 func TestRTCReceiver_WritesOneByteBinaryFrame(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "one-byte.bin")
@@ -115,6 +149,8 @@ func TestRTCReceiver_AcceptOfferResetsPreviousSenderIdentity(t *testing.T) {
 
 func TestRTCReceiver_RequirePairingRejectsPairDeclined(t *testing.T) {
 	r := NewRTCReceiver(nil, nil, "", t.TempDir())
+	rec := &recordingControlOps{}
+	r.controlOpsOverride = rec
 	r.requirePairing = true
 	r.state = stateWaitPairResponse
 	panicked := false
@@ -125,8 +161,11 @@ func TestRTCReceiver_RequirePairingRejectsPairDeclined(t *testing.T) {
 	if panicked {
 		t.Fatal("PAIR_DECLINED continued into file acceptance")
 	}
-	if r.state != stateWaitPairResponse {
-		t.Fatalf("state = %d; want stateWaitPairResponse", r.state)
+	if r.state != stateDone {
+		t.Fatalf("state = %d; want terminal stateDone", r.state)
+	}
+	if len(rec.frames) != 0 {
+		t.Fatalf("PAIR decline emitted nonstandard response frames: %#v", rec.frames)
 	}
 }
 
@@ -367,6 +406,167 @@ func TestRTCSender_SendFiles_PreFiltersAcceptedIDsWithNoLocalFile(t *testing.T) 
 		t.Fatalf("data must not be attributed to skipped B (header desync); trace=%v", rec.events)
 	}
 
+	if countExactEvent(rec.events, "delimiter") != 1 {
+		t.Fatalf("expected exactly one final delimiter; trace=%v", rec.events)
+	}
+}
+
+func TestRTCSender_SenderOwnedPINTranscript_RetriesEmptyAttemptThenSendsFiles(t *testing.T) {
+	rec := &recordingControlOps{}
+	s := NewRTCSender(nil, nil, "")
+	s.controlOpsOverride = rec
+	s.SetRequiredPIN("2468")
+	s.state = senderStateWaitToken
+
+	s.handleDataMessage([]byte(`{"status":"OK"}`), true)
+	s.handleDataMessage([]byte(`{"pin":""}`), true)
+	s.handleDataMessage([]byte(`{"pin":"2468"}`), true)
+
+	assertControlFrames(t, rec.frames,
+		controlFrame{kind: "binary", data: `{"status":"PIN_REQUIRED"}`},
+		controlFrame{kind: "text", data: "0"},
+		controlFrame{kind: "binary", data: `{"status":"PIN_REQUIRED"}`},
+		controlFrame{kind: "text", data: "0"},
+		controlFrame{kind: "binary", data: `{"status":"OK"}`},
+		controlFrame{kind: "text", data: "0"},
+	)
+	if s.state != senderStateWaitFileAccept {
+		t.Fatalf("state = %d; want senderStateWaitFileAccept", s.state)
+	}
+}
+
+func TestRTCSender_SenderOwnedPINTranscript_TooManyAttemptsIsTerminal(t *testing.T) {
+	rec := &recordingControlOps{}
+	s := NewRTCSender(nil, nil, "")
+	s.controlOpsOverride = rec
+	s.SetRequiredPIN("2468")
+	s.state = senderStateWaitToken
+
+	s.handleDataMessage([]byte(`{"status":"OK"}`), true)
+	for i := 0; i < maxPINAttempts; i++ {
+		s.handleDataMessage([]byte(`{"pin":"wrong"}`), true)
+	}
+
+	if s.state != senderStateDone {
+		t.Fatalf("state = %d; want senderStateDone", s.state)
+	}
+	assertControlFrames(t, rec.frames[len(rec.frames)-2:],
+		controlFrame{kind: "binary", data: `{"status":"TOO_MANY_ATTEMPTS"}`},
+		controlFrame{kind: "text", data: "0"},
+	)
+}
+
+func TestRTCSender_ReceiverOwnedPINTranscript_ProviderRetriesAndSendsEmptyAttempt(t *testing.T) {
+	rec := &recordingControlOps{}
+	s := NewRTCSender(nil, nil, "fallback")
+	s.controlOpsOverride = rec
+	attempts := []string{"", "correct"}
+	s.SetPINProvider(func(attempt int) string { return attempts[attempt-1] })
+	s.state = senderStateWaitToken
+
+	s.handleDataMessage([]byte(`{"status":"PIN_REQUIRED"}`), true)
+	s.handleDataMessage([]byte(`{"status":"PIN_REQUIRED"}`), true)
+	s.handleDataMessage([]byte(`{"status":"OK"}`), true)
+
+	assertControlFrames(t, rec.frames,
+		controlFrame{kind: "text", data: `{"pin":""}`},
+		controlFrame{kind: "text", data: `{"pin":"correct"}`},
+		controlFrame{kind: "binary", data: `{"status":"OK"}`},
+		controlFrame{kind: "text", data: "0"},
+	)
+}
+
+func TestRTCReceiver_SenderOwnedPINTranscript_RetriesThenAcceptsFileList(t *testing.T) {
+	rec := &recordingControlOps{}
+	r := NewRTCReceiver(nil, nil, "fallback", t.TempDir())
+	r.controlOpsOverride = rec
+	attempts := []string{"", "2468"}
+	r.SetPINProvider(func(attempt int) string { return attempts[attempt-1] })
+	r.OnSelectFiles(func(files []RTCFileDto) []string { return []string{files[0].ID} })
+	r.state = stateWaitFileList
+
+	for i := 0; i < 2; i++ {
+		r.handleDataMessage([]byte(`{"status":"PIN_REQUIRED"}`), false)
+		r.handleDataMessage([]byte("0"), true)
+	}
+	r.handleDataMessage([]byte(`{"status":"OK","files":[{"id":"f","fileName":"f.bin","size":0}]}`), false)
+	r.handleDataMessage([]byte("0"), true)
+
+	if r.state != stateWaitFiles {
+		t.Fatalf("state = %d; want stateWaitFiles", r.state)
+	}
+	if len(rec.frames) < 2 || rec.frames[0] != (controlFrame{kind: "text", data: `{"pin":""}`}) || rec.frames[1] != (controlFrame{kind: "text", data: `{"pin":"2468"}`}) {
+		t.Fatalf("PIN frames = %#v", rec.frames)
+	}
+}
+
+func TestRTCReceiver_SenderOwnedPINTranscript_TooManyAttemptsIsTerminal(t *testing.T) {
+	rec := &recordingControlOps{}
+	r := NewRTCReceiver(nil, nil, "", t.TempDir())
+	r.controlOpsOverride = rec
+	r.state = stateWaitFileList
+
+	r.handleDataMessage([]byte(`{"status":"TOO_MANY_ATTEMPTS"}`), false)
+	r.handleDataMessage([]byte("0"), true)
+
+	if r.state != stateDone {
+		t.Fatalf("state = %d; want stateDone", r.state)
+	}
+}
+
+func TestRTCReceiver_AnyTextFrameFinishesFileThenMalformedHeaderIsTerminal(t *testing.T) {
+	dir := t.TempDir()
+	r := NewRTCReceiver(nil, nil, "", dir)
+	rec := &recordingControlOps{}
+	r.controlOpsOverride = rec
+	r.files = []RTCFileDto{{ID: "f", FileName: "boundary.bin", Size: 3}}
+	tokens := r.prepareFilesForReceive([]string{"f"})
+	if !r.startReceivingFile(&RTCSendFileHeader{ID: "f", Token: tokens["f"]}) {
+		t.Fatal("failed to start file")
+	}
+	path := r.filePaths["f"]
+	r.handleDataMessage([]byte("abc"), false)
+	r.handleDataMessage([]byte("not-a-header"), true)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "abc" {
+		t.Fatalf("saved data = %q; text boundary was appended", data)
+	}
+	if r.state != stateDone {
+		t.Fatalf("state = %d; want stateDone after malformed text header", r.state)
+	}
+	if len(rec.frames) != 1 || rec.frames[0].kind != "text" || !strings.Contains(rec.frames[0].data, `"success":true`) {
+		t.Fatalf("file acknowledgement frames = %#v", rec.frames)
+	}
+}
+
+func TestRTCReceiver_OneByteNonDelimiterTextIsTerminalHeaderError(t *testing.T) {
+	dir := t.TempDir()
+	r := NewRTCReceiver(nil, nil, "", dir)
+	r.controlOpsOverride = &recordingControlOps{}
+	r.files = []RTCFileDto{{ID: "f", FileName: "delimiter.bin", Size: 1}}
+	tokens := r.prepareFilesForReceive([]string{"f"})
+	if !r.startReceivingFile(&RTCSendFileHeader{ID: "f", Token: tokens["f"]}) {
+		t.Fatal("failed to start file")
+	}
+	r.handleDataMessage([]byte{0xab}, false)
+	r.handleDataMessage([]byte("x"), true)
+	if r.state != stateDone {
+		t.Fatalf("state = %d; want stateDone", r.state)
+	}
+}
+
+func TestRTCSender_SendFiles_EmptyQueueSendsExactlyOneDelimiter(t *testing.T) {
+	s := NewRTCSender(nil, nil, "")
+	rec := &recordingSendOps{results: s.fileResults}
+	s.sendOpsOverride = rec
+
+	if err := s.SendFiles(); err != nil {
+		t.Fatalf("SendFiles returned error: %v", err)
+	}
 	if countExactEvent(rec.events, "delimiter") != 1 {
 		t.Fatalf("expected exactly one final delimiter; trace=%v", rec.events)
 	}
