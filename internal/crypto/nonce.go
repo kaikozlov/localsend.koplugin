@@ -37,15 +37,14 @@ func EncodeNonce(nonce []byte) string {
 	return base64.RawURLEncoding.EncodeToString(nonce)
 }
 
-// DecodeNonce decodes a URL-safe base64-encoded nonce.
-// Uses URL-safe encoding to match official LocalSend protocol.
-// Uses ValidateSalt to allow both 8-byte timestamps and 16+ byte nonces.
+// DecodeNonce decodes a URL-safe base64-encoded protocol nonce and enforces
+// the official 16-128 byte bounds. Eight-byte timestamp salts are not nonces.
 func DecodeNonce(encoded string) ([]byte, error) {
 	nonce, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, err
 	}
-	if !ValidateSalt(nonce) {
+	if !ValidateNonce(nonce) {
 		return nil, errors.New("invalid nonce length")
 	}
 	return nonce, nil

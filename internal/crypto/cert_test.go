@@ -3,8 +3,9 @@ package crypto
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"crypto/x509"
-	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"strings"
 	"testing"
@@ -190,10 +191,10 @@ func TestFingerprintFromCertDER(t *testing.T) {
 		t.Fatal("FingerprintFromCertDER returned empty string")
 	}
 
-	// Verify URL-safe base64 format (no padding, only valid characters)
-	_, err = base64.RawURLEncoding.DecodeString(fingerprint)
-	if err != nil {
-		t.Errorf("Fingerprint is not valid URL-safe base64: %v", err)
+	wantDigest := sha256.Sum256(block.Bytes)
+	wantFingerprint := strings.ToUpper(hex.EncodeToString(wantDigest[:]))
+	if fingerprint != wantFingerprint {
+		t.Errorf("Fingerprint = %q; want certificate DER SHA-256 %q", fingerprint, wantFingerprint)
 	}
 
 	// Verify consistent - calling again should produce same result
@@ -202,10 +203,9 @@ func TestFingerprintFromCertDER(t *testing.T) {
 		t.Error("FingerprintFromCertDER is not consistent")
 	}
 
-	// Verify fingerprint length (SHA256 hash is 32 bytes)
-	decoded, _ := base64.RawURLEncoding.DecodeString(fingerprint)
-	if len(decoded) != 32 {
-		t.Errorf("Fingerprint decoded length = %d; want 32 (SHA256)", len(decoded))
+	// SHA-256 is rendered as 64 uppercase hexadecimal characters.
+	if len(fingerprint) != 64 || fingerprint != strings.ToUpper(fingerprint) {
+		t.Errorf("Fingerprint format = %q; want 64 uppercase hex characters", fingerprint)
 	}
 }
 

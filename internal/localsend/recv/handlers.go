@@ -11,6 +11,7 @@ import (
 	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/models"
+	"localsend-cli/internal/utils"
 )
 
 const (
@@ -104,6 +105,19 @@ func (fr *FileReceiver) preUploadHandler(c fiber.Ctx) error {
 		}
 		slog.Warn("Prepare upload body rejected", "remote", c.IP(), "status", fiber.StatusBadRequest, "error", err)
 		return c.SendStatus(400)
+	}
+	if metaReq.Info == nil {
+		slog.Warn("Prepare upload body rejected: missing info", "remote", c.IP())
+		return c.SendStatus(fiber.StatusBadRequest)
+	}
+	if fingerprint, ok := tlsPeerFingerprint(c); ok {
+		metaReq.Info.Fingerprint = fingerprint
+	}
+	for fileID, file := range metaReq.Files {
+		if file.Size < 0 {
+			slog.Warn("Prepare upload body rejected: negative file size", "remote", c.IP(), "fileId", fileID, "size", file.Size)
+			return c.SendStatus(fiber.StatusBadRequest)
+		}
 	}
 
 	// Filter files by extension if filter is enabled
@@ -241,6 +255,9 @@ func (fr *FileReceiver) registerHandler(c fiber.Ctx) error {
 		}
 		return c.SendStatus(400)
 	}
+	if fingerprint, ok := tlsPeerFingerprint(c); ok {
+		announcement.Fingerprint = fingerprint
+	}
 
 	// Register the discovered device
 	announcement.IP = c.IP()
@@ -250,6 +267,14 @@ func (fr *FileReceiver) registerHandler(c fiber.Ctx) error {
 
 	// Respond with our device info
 	return c.JSON(&fr.identity)
+}
+
+func tlsPeerFingerprint(c fiber.Ctx) (string, bool) {
+	state := c.RequestCtx().TLSConnectionState()
+	if state == nil || len(state.PeerCertificates) == 0 {
+		return "", false
+	}
+	return utils.SHA256ofCert(state.PeerCertificates[0]), true
 }
 
 // nonceExchangeHandler implements POST /api/localsend/v3/nonce

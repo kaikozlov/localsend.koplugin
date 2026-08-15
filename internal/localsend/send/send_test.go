@@ -1,9 +1,11 @@
 package send
 
 import (
+	"bytes"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -938,6 +940,108 @@ func TestForwardSender_Start_ReturnsNilOnSuccess(t *testing.T) {
 	// Should return nil when all files transfer successfully
 	if err != nil {
 		t.Errorf("Start() should return nil on success, got: %v", err)
+	}
+}
+
+func TestForwardSender_Start_RetriesChecksumMismatchUntilSuccess(t *testing.T) {
+	app := fiber.New()
+	app.Post(constants.PreuploadPath, func(c fiber.Ctx) error {
+		return c.JSON(map[string]interface{}{
+			"sessionId": "checksum-session",
+			"files":     map[string]string{"file1": "file-token"},
+		})
+	})
+
+	wantBody := []byte("content that must be reopened for every attempt")
+	attempts := 0
+	app.Post(constants.UploadPath, func(c fiber.Ctx) error {
+		attempts++
+		if got := c.Body(); !bytes.Equal(got, wantBody) {
+			t.Fatalf("attempt %d body = %q; want %q", attempts, got, wantBody)
+		}
+		if attempts < 3 {
+			return c.SendStatus(fiber.StatusUnprocessableEntity)
+		}
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = app.Listener(ln) }()
+	defer func() { _ = app.Shutdown() }()
+
+	path := filepath.Join(t.TempDir(), "retry.bin")
+	if err := os.WriteFile(path, wantBody, 0644); err != nil {
+		t.Fatal(err)
+	}
+	sender := NewForwardSender()
+	if err := sender.Init(&models.DeviceInfo{Alias: "Test", IP: "127.0.0.1"}, false); err != nil {
+		t.Fatal(err)
+	}
+	sender.SetRemotePort(fmt.Sprintf("%d", ln.Addr().(*net.TCPAddr).Port))
+	sender.files["file1"] = models.FileMeta{
+		Id:       "file1",
+		Filename: "retry.bin",
+		Size:     int64(len(wantBody)),
+		FullPath: path,
+	}
+
+	if err := sender.Start(); err != nil {
+		t.Fatalf("Start failed after recoverable checksum mismatches: %v", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("upload attempts = %d; want 3", attempts)
+	}
+}
+
+func TestForwardSender_Start_StopsAfterThreeChecksumMismatches(t *testing.T) {
+	app := fiber.New()
+	app.Post(constants.PreuploadPath, func(c fiber.Ctx) error {
+		return c.JSON(map[string]interface{}{
+			"sessionId": "checksum-session",
+			"files":     map[string]string{"file1": "file-token"},
+		})
+	})
+
+	attempts := 0
+	app.Post(constants.UploadPath, func(c fiber.Ctx) error {
+		attempts++
+		return c.SendStatus(fiber.StatusUnprocessableEntity)
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	go func() { _ = app.Listener(ln) }()
+	defer func() { _ = app.Shutdown() }()
+
+	content := []byte("persistent mismatch")
+	path := filepath.Join(t.TempDir(), "mismatch.bin")
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatal(err)
+	}
+	sender := NewForwardSender()
+	if err := sender.Init(&models.DeviceInfo{Alias: "Test", IP: "127.0.0.1"}, false); err != nil {
+		t.Fatal(err)
+	}
+	sender.SetRemotePort(fmt.Sprintf("%d", ln.Addr().(*net.TCPAddr).Port))
+	sender.files["file1"] = models.FileMeta{
+		Id:       "file1",
+		Filename: "mismatch.bin",
+		Size:     int64(len(content)),
+		FullPath: path,
+	}
+
+	if err := sender.Start(); !errors.Is(err, constants.ErrChecksum) {
+		t.Fatalf("Start error = %v; want checksum mismatch", err)
+	}
+	if attempts != 3 {
+		t.Fatalf("upload attempts = %d; want 3", attempts)
 	}
 }
 

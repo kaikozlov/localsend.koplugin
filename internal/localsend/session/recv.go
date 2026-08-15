@@ -24,6 +24,22 @@ import (
 // Sessions that don't receive any file uploads within this time will be cleaned up.
 const SessionTimeout = 1 * time.Minute
 
+const maxChecksumAttempts = 3
+
+type fileUploadStatus uint8
+
+const (
+	filePending fileUploadStatus = iota
+	fileInProgress
+	fileFinished
+	fileFailed
+)
+
+type fileUploadState struct {
+	status   fileUploadStatus
+	attempts uint8
+}
+
 // activityReader wraps an io.Reader and updates a timestamp pointer periodically.
 // This keeps the session alive during long file transfers without excessive writes.
 type activityReader struct {
@@ -53,6 +69,7 @@ type RecvSession struct {
 	lastActivity int64 // Unix timestamp in seconds, updated on each file save
 	fileMetas    models.FileMetas
 	fileTokens   models.FileTokens
+	fileStates   map[string]*fileUploadState
 	mu           sync.RWMutex
 	id           string
 	clientIP     string // IP address of the client that initiated the session (per protocol spec Section 4.2)
@@ -72,6 +89,7 @@ func NewRecvSession(sessionId string, clientIP string) (*RecvSession, error) {
 	sess := &RecvSession{
 		fileMetas:    make(models.FileMetas),
 		fileTokens:   make(models.FileTokens),
+		fileStates:   make(map[string]*fileUploadState),
 		id:           sessionId,
 		clientIP:     clientIP,
 		lastActivity: time.Now().Unix(),
@@ -105,6 +123,7 @@ func (sess *RecvSession) AcceptFile(fileId string, fileMeta models.FileMeta) err
 
 	// generate file token
 	sess.fileTokens[fileId] = uuid.NewString()
+	sess.fileStates[fileId] = &fileUploadState{status: filePending}
 
 	// increment files count (inside lock to prevent race condition)
 	atomic.AddInt64(&sess.filesCount, 1)
@@ -210,15 +229,23 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 		return "", lserrors.ErrRejected
 	}
 
-	sess.mu.RLock()
+	sess.mu.Lock()
 	expectedMeta, metaExist := sess.fileMetas[fileId]
 	expectedToken, tokenExist := sess.fileTokens[fileId]
-	sess.mu.RUnlock()
+	state, stateExists := sess.fileStates[fileId]
 
 	// validate (constant-time comparison to prevent timing attacks on file tokens)
-	if !metaExist || !tokenExist || subtle.ConstantTimeCompare([]byte(expectedToken), []byte(token)) != 1 {
+	if !metaExist || !tokenExist || !stateExists || state.status != filePending ||
+		subtle.ConstantTimeCompare([]byte(expectedToken), []byte(token)) != 1 {
+		sess.mu.Unlock()
 		return "", lserrors.ErrRejected
 	}
+	state.status = fileInProgress
+	state.attempts++
+	sess.mu.Unlock()
+
+	result := fileFailed
+	defer func() { sess.finishFileAttempt(fileId, result) }()
 
 	// Sanitize filename to allow subdirectories but prevent directory traversal attacks.
 	// A malicious client could send "../../../etc/passwd" to write outside saveToDir.
@@ -320,6 +347,7 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 				"session", sess.id,
 				"remote", sess.clientIP,
 			)
+			result = filePending
 			return "", lserrors.ErrChecksum
 		}
 	}
@@ -332,16 +360,9 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 
 	// All validations passed - mark as success to prevent cleanup
 	success = true
+	result = fileFinished
 
 	slog.Info("Recv file", "file", saveAs, "session", sess.id, "bytes", written, "durationMs", time.Since(transferStarted).Milliseconds())
-
-	// remove finished file
-	atomic.AddInt64(&sess.filesCount, -1)
-
-	// end this session if it is the last file it received
-	if count := atomic.LoadInt64(&sess.filesCount); count == 0 {
-		sess.End()
-	}
 
 	// Return the actual saved filename (may differ from original if renamed due to conflict).
 	// Include the subdirectory path if present.
@@ -352,6 +373,28 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 		savedFilename = filepath.ToSlash(savedFilename)
 	}
 	return savedFilename, nil
+}
+
+func (sess *RecvSession) finishFileAttempt(fileID string, result fileUploadStatus) {
+	terminal := false
+	sess.mu.Lock()
+	state, ok := sess.fileStates[fileID]
+	if ok && state.status == fileInProgress {
+		if result == filePending && state.attempts < maxChecksumAttempts {
+			state.status = filePending
+		} else if result == fileFinished {
+			state.status = fileFinished
+			terminal = true
+		} else {
+			state.status = fileFailed
+			terminal = true
+		}
+	}
+	sess.mu.Unlock()
+
+	if terminal && atomic.AddInt64(&sess.filesCount, -1) == 0 {
+		sess.End()
+	}
 }
 
 func (sess *RecvSession) FileTokens() models.FileTokens {

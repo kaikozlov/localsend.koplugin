@@ -2,6 +2,7 @@ package crypto
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -85,6 +86,28 @@ func TestNonceEncodeDecode(t *testing.T) {
 		if decoded[i] != nonce[i] {
 			t.Errorf("Decoded nonce differs at position %d", i)
 		}
+	}
+}
+
+func TestDecodeNonce_EnforcesOfficialLengthBounds(t *testing.T) {
+	tests := []struct {
+		length  int
+		wantErr bool
+	}{
+		{length: 8, wantErr: true},
+		{length: 15, wantErr: true},
+		{length: 16, wantErr: false},
+		{length: 128, wantErr: false},
+		{length: 129, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(fmt.Sprintf("length_%d", tt.length), func(t *testing.T) {
+			_, err := DecodeNonce(EncodeNonce(make([]byte, tt.length)))
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("DecodeNonce(length=%d) error = %v; wantErr %v", tt.length, err, tt.wantErr)
+			}
+		})
 	}
 }
 

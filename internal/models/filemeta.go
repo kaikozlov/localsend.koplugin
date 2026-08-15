@@ -50,8 +50,8 @@ func GenFileMeta(fpath string) (FileMeta, error) {
 		FileMIME: fileType,
 		Checksum: checksum,
 		Metadata: &FileMetadata{
-			Modified: fd.ModTime().Format(time.RFC3339),
-			Accessed: getAccessTime(fd).Format(time.RFC3339),
+			Modified: fd.ModTime().Format(time.RFC3339Nano),
+			Accessed: getAccessTime(fd).Format(time.RFC3339Nano),
 		},
 		FullPath: fpath,
 	}, nil
@@ -95,8 +95,8 @@ func GenFileMetaWithBase(fpath string, baseDir string) (FileMeta, error) {
 		FileMIME: fileType,
 		Checksum: checksum,
 		Metadata: &FileMetadata{
-			Modified: fd.ModTime().Format(time.RFC3339),
-			Accessed: getAccessTime(fd).Format(time.RFC3339),
+			Modified: fd.ModTime().Format(time.RFC3339Nano),
+			Accessed: getAccessTime(fd).Format(time.RFC3339Nano),
 		},
 		FullPath: fpath,
 	}, nil

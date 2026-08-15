@@ -154,15 +154,15 @@ func TestTokenVerificationRustVector(t *testing.T) {
 		t.Fatalf("ParsePublicKeyPEM failed: %v", err)
 	}
 
-	// Salt is extracted from the token by VerifyTokenNonce if we pass nil or the correct bytes
-	// However, VerifyTokenNonce in current implementation might expect it as an argument.
-	// Let's decode the salt from the token to pass it.
+	// The token salt is an 8-byte timestamp, not a protocol nonce, so decode
+	// it with raw base64 rather than DecodeNonce (which enforces 16-128
+	// byte nonce bounds).
 	parts := strings.Split(token, ".")
 	if len(parts) != 5 {
 		t.Fatalf("Invalid token format: %d parts", len(parts))
 	}
 
-	salt, err := DecodeNonce(parts[2])
+	salt, err := base64.RawURLEncoding.DecodeString(parts[2])
 	if err != nil {
 		t.Fatalf("Failed to decode salt from token: %v", err)
 	}

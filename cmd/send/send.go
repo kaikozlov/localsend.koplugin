@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -270,13 +271,16 @@ func makeFileMeta(path string, info os.FileInfo) transfer.FileMeta {
 	if fileType == "" {
 		fileType = "application/octet-stream"
 	}
+	checksum, accessed := fileIntegrityMetadata(path)
 	return transfer.FileMeta{
 		ID:       uuid.New().String(),
 		FileName: info.Name(),
 		FilePath: path,
 		Size:     info.Size(),
 		FileType: fileType,
+		SHA256:   checksum,
 		Modified: info.ModTime(),
+		Accessed: accessed,
 	}
 }
 
@@ -296,6 +300,7 @@ func makeFileMetaWithBase(path string, info os.FileInfo, baseDir string) transfe
 		// Normalize to forward slashes for protocol compatibility
 		relPath = filepath.ToSlash(relPath)
 	}
+	checksum, accessed := fileIntegrityMetadata(path)
 
 	return transfer.FileMeta{
 		ID:       uuid.New().String(),
@@ -303,8 +308,22 @@ func makeFileMetaWithBase(path string, info os.FileInfo, baseDir string) transfe
 		FilePath: path,
 		Size:     info.Size(),
 		FileType: fileType,
+		SHA256:   checksum,
 		Modified: info.ModTime(),
+		Accessed: accessed,
 	}
+}
+
+func fileIntegrityMetadata(path string) (string, time.Time) {
+	meta, err := models.GenFileMeta(path)
+	if err != nil || meta.Metadata == nil {
+		return "", time.Time{}
+	}
+	accessed, err := time.Parse(time.RFC3339Nano, meta.Metadata.Accessed)
+	if err != nil {
+		return meta.Checksum, time.Time{}
+	}
+	return meta.Checksum, accessed
 }
 
 func init() {

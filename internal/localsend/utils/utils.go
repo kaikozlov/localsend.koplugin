@@ -3,9 +3,11 @@ package utils
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -13,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"localsend-cli/internal/utils"
@@ -199,6 +202,70 @@ func LoadOrGenTLScert(privKeyFile, certFile string) (tls.Certificate, error) {
 	return GenAndSaveTLScert(privKeyFile, certFile)
 }
 
+func CertificateFingerprint(cert tls.Certificate) (string, error) {
+	if len(cert.Certificate) == 0 {
+		return "", fmt.Errorf("TLS certificate chain is empty")
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return "", fmt.Errorf("failed to parse TLS certificate: %w", err)
+	}
+	digest := sha256.Sum256(leaf.Raw)
+	return strings.ToUpper(hex.EncodeToString(digest[:])), nil
+}
+
+func verifyPeerCertificate(expectedFingerprint string, usage x509.ExtKeyUsage) func([][]byte, [][]*x509.Certificate) error {
+	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return fmt.Errorf("localsend: TLS peer presented no certificate")
+		}
+		cert, err := x509.ParseCertificate(rawCerts[0])
+		if err != nil {
+			return fmt.Errorf("localsend: parse peer certificate: %w", err)
+		}
+		roots := x509.NewCertPool()
+		roots.AddCert(cert)
+		if _, err := cert.Verify(x509.VerifyOptions{
+			Roots:     roots,
+			KeyUsages: []x509.ExtKeyUsage{usage},
+		}); err != nil {
+			return fmt.Errorf("localsend: verify self-signed peer certificate: %w", err)
+		}
+		digest := sha256.Sum256(cert.Raw)
+		actual := strings.ToUpper(hex.EncodeToString(digest[:]))
+		if expectedFingerprint != "" && !strings.EqualFold(actual, expectedFingerprint) {
+			return fmt.Errorf("localsend: certificate fingerprint mismatch: expected %s, peer holds %s", expectedFingerprint, actual)
+		}
+		return nil
+	}
+}
+
+func VerifyServerCertificate(expectedFingerprint string) func([][]byte, [][]*x509.Certificate) error {
+	return verifyPeerCertificate(expectedFingerprint, x509.ExtKeyUsageServerAuth)
+}
+
+func VerifyClientCertificate() func([][]byte, [][]*x509.Certificate) error {
+	return verifyPeerCertificate("", x509.ExtKeyUsageClientAuth)
+}
+
+func TLSClientConfig(cert tls.Certificate, expectedFingerprint string) *tls.Config {
+	config := &tls.Config{
+		InsecureSkipVerify:    true, // verified by VerifyPeerCertificate below
+		VerifyPeerCertificate: VerifyServerCertificate(expectedFingerprint),
+	}
+	if len(cert.Certificate) > 0 {
+		// Present our LocalSend identity unconditionally. Configuring
+		// Certificates directly would let crypto/tls drop the certificate
+		// whenever the server's certificate_authorities hint (the official
+		// server hints its own self-signed subject) does not list our
+		// issuer, breaking mTLS with self-signed peer identities.
+		config.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			return &cert, nil
+		}
+	}
+	return config
+}
+
 func GenAlias() string {
 	adj := utils.RandChoice(aliasAdj)
 	fruit := utils.RandChoice(aliasFruit)
@@ -236,6 +303,24 @@ func ListenWithTLS(server *fiber.App, addr string, cert tls.Certificate, useHTTP
 	}
 	if useHTTPS {
 		config.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+	}
+	return server.Listen(addr, config)
+}
+
+// ListenWithMutualTLS serves a non-web LocalSend endpoint. Unlike ListenWithTLS,
+// which is also used by the browser-facing reverse sender, HTTPS here requires
+// every peer to present a valid self-signed LocalSend certificate.
+func ListenWithMutualTLS(server *fiber.App, addr string, cert tls.Certificate, useHTTPS bool) error {
+	config := fiber.ListenConfig{
+		DisableStartupMessage: true,
+		ListenerNetwork:       "tcp",
+	}
+	if useHTTPS {
+		config.TLSConfig = &tls.Config{
+			Certificates:          []tls.Certificate{cert},
+			ClientAuth:            tls.RequireAnyClientCert,
+			VerifyPeerCertificate: VerifyClientCertificate(),
+		}
 	}
 	return server.Listen(addr, config)
 }

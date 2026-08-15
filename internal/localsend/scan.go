@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,7 +20,9 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/valyala/fasthttp"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 	"localsend-cli/internal/localsend/constants"
+	lsutils "localsend-cli/internal/localsend/utils"
 	"localsend-cli/internal/models"
 	"localsend-cli/internal/utils"
 )
@@ -37,8 +40,9 @@ const (
 	// discoveryTTL is the time-to-live for discovered device entries
 	discoveryTTL = 5 * time.Minute
 	// discoveryCleanupInterval is how often stale discoveries are cleaned up
-	discoveryCleanupInterval = 1 * time.Minute
-	maxDiscoveredDevices     = 512
+	discoveryCleanupInterval  = 1 * time.Minute
+	maxDiscoveredDevices      = 512
+	maxDiscoveryDatagramBytes = 64 << 10
 )
 
 var multicastDiscoveryAddr = &net.UDPAddr{
@@ -46,10 +50,19 @@ var multicastDiscoveryAddr = &net.UDPAddr{
 	Port: constants.DefaultPort,
 }
 
+var multicastDiscoveryAddrV6 = &net.UDPAddr{
+	IP:   net.ParseIP("ff12::fd3a:e420"),
+	Port: constants.DefaultPort,
+}
+
 var discoveryResponseHTTPClient = &fasthttp.Client{
+	MaxResponseBodySize: maxDiscoveryResponseBytes,
+	DialDualStack:       true,
 	// #nosec G402 -- LocalSend authenticates self-signed certificates by fingerprint.
 	TLSConfig: &tls.Config{InsecureSkipVerify: true},
 }
+
+const maxDiscoveryResponseBytes = 64 << 10
 
 // verifyAnnouncedFingerprint returns a tls.Config VerifyPeerCertificate hook
 // that pins the HTTPS peer to the certificate fingerprint announced in its
@@ -64,8 +77,15 @@ func verifyAnnouncedFingerprint(expected string) func([][]byte, [][]*x509.Certif
 		if err != nil {
 			return fmt.Errorf("localsend: parse peer certificate: %w", err)
 		}
+		now := time.Now()
+		if now.Before(cert.NotBefore) || now.After(cert.NotAfter) {
+			return fmt.Errorf("localsend: peer certificate is not valid at %s", now.Format(time.RFC3339))
+		}
+		if err := cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature); err != nil {
+			return fmt.Errorf("localsend: verify self-signed peer certificate: %w", err)
+		}
 		actual := utils.SHA256ofCert(cert)
-		if !strings.EqualFold(actual, expected) {
+		if expected != "" && !strings.EqualFold(actual, expected) {
 			return fmt.Errorf("localsend: certificate fingerprint mismatch: announced %s, peer holds %s", expected, actual)
 		}
 		return nil
@@ -79,19 +99,24 @@ type discoveryEntry struct {
 }
 
 type Discoverer struct {
-	mcastConn       *net.UDPConn
-	mcastPacketConn *ipv4.PacketConn
-	mcastInterfaces []*net.Interface
-	selfAnno        *models.Announcement
-	discovered      map[string]discoveryEntry
-	mu              *sync.RWMutex
-	stop            chan struct{}
-	stopOnce        sync.Once
-	cachedIPs       []net.IP
-	ipCacheTime     time.Time
-	ipCacheMu       sync.RWMutex // protects cachedIPs and ipCacheTime
-	readBuf         []byte       // reusable buffer for UDP reads
-	responseSem     chan struct{}
+	mcastConn         *net.UDPConn
+	mcastPacketConn   *ipv4.PacketConn
+	mcastInterfaces   []*net.Interface
+	mcastConnV6       *net.UDPConn
+	mcastPacketConnV6 *ipv6.PacketConn
+	mcastInterfacesV6 []*net.Interface
+	selfAnno          *models.Announcement
+	cert              tls.Certificate
+	discovered        map[string]discoveryEntry
+	mu                *sync.RWMutex
+	stop              chan struct{}
+	stopOnce          sync.Once
+	cachedIPs         []net.IP
+	ipCacheTime       time.Time
+	ipCacheMu         sync.RWMutex // protects cachedIPs and ipCacheTime
+	readBuf           []byte       // reusable buffer for UDP reads
+	readBufV6         []byte
+	responseSem       chan struct{}
 
 	// Injectable scan settings keep scheduling and cancellation testable without
 	// depending on the host's real network.
@@ -100,6 +125,38 @@ type Discoverer struct {
 }
 
 func NewDiscoverer(devInfo models.DeviceInfo, supportHttps bool) (*Discoverer, error) {
+	if !supportHttps {
+		return newDiscoverer(devInfo, false, tls.Certificate{})
+	}
+	privateKeyFile, certFile, pathErr := lsutils.GetCertPaths()
+	if pathErr != nil {
+		if supportHttps {
+			return nil, pathErr
+		}
+		return newDiscoverer(devInfo, supportHttps, tls.Certificate{})
+	}
+	cert, certErr := lsutils.LoadOrGenTLScert(privateKeyFile, certFile)
+	if certErr != nil {
+		if supportHttps {
+			return nil, certErr
+		}
+		slog.Debug("HTTPS discovery disabled because device certificate is unavailable", "error", certErr)
+	}
+	return newDiscoverer(devInfo, supportHttps, cert)
+}
+
+func NewDiscovererWithCertificate(devInfo models.DeviceInfo, supportHttps bool, cert tls.Certificate) (*Discoverer, error) {
+	return newDiscoverer(devInfo, supportHttps, cert)
+}
+
+func newDiscoverer(devInfo models.DeviceInfo, supportHttps bool, cert tls.Certificate) (*Discoverer, error) {
+	if supportHttps {
+		fingerprint, err := lsutils.CertificateFingerprint(cert)
+		if err != nil {
+			return nil, err
+		}
+		devInfo.Fingerprint = fingerprint
+	}
 	conn, err := net.ListenMulticastUDP("udp", nil, multicastDiscoveryAddr)
 	if err != nil {
 		return nil, err
@@ -110,7 +167,7 @@ func NewDiscoverer(devInfo models.DeviceInfo, supportHttps bool) (*Discoverer, e
 		protocol = "https"
 	}
 
-	_ = conn.SetReadBuffer(512)
+	_ = conn.SetReadBuffer(maxDiscoveryDatagramBytes)
 	packetConn := ipv4.NewPacketConn(conn)
 	interfaces, interfaceErr := eligibleMulticastInterfaces()
 	if interfaceErr != nil {
@@ -129,11 +186,16 @@ func NewDiscoverer(devInfo models.DeviceInfo, supportHttps bool) (*Discoverer, e
 	if len(configured) > 0 {
 		slog.Info("Configured LocalSend multicast interfaces", "interfaces", configured)
 	}
+	connV6, packetConnV6, interfacesV6 := newIPv6MulticastListener()
 
 	return &Discoverer{
-		mcastConn:       conn,
-		mcastPacketConn: packetConn,
-		mcastInterfaces: interfaces,
+		mcastConn:         conn,
+		mcastPacketConn:   packetConn,
+		mcastInterfaces:   interfaces,
+		mcastConnV6:       connV6,
+		mcastPacketConnV6: packetConnV6,
+		mcastInterfacesV6: interfacesV6,
+		cert:              cert,
 		selfAnno: &models.Announcement{
 			DeviceInfo: devInfo,
 			Port:       constants.DefaultPort,
@@ -143,11 +205,59 @@ func NewDiscoverer(devInfo models.DeviceInfo, supportHttps bool) (*Discoverer, e
 		stop:            make(chan struct{}, 1),
 		discovered:      make(map[string]discoveryEntry),
 		mu:              &sync.RWMutex{},
-		readBuf:         make([]byte, 512),
+		readBuf:         make([]byte, maxDiscoveryDatagramBytes),
+		readBufV6:       make([]byte, maxDiscoveryDatagramBytes),
 		responseSem:     make(chan struct{}, maxConcurrentAnnouncementResponses),
 		scanHTTPClient:  httpClientForScan,
 		scanConcurrency: maxConcurrentScans,
 	}, nil
+}
+
+func newIPv6MulticastListener() (*net.UDPConn, *ipv6.PacketConn, []*net.Interface) {
+	interfaces, err := eligibleIPv6MulticastInterfaces()
+	if err != nil {
+		slog.Debug("Failed to enumerate IPv6 multicast interfaces", "error", err)
+		return nil, nil, nil
+	}
+	if len(interfaces) == 0 {
+		return nil, nil, nil
+	}
+
+	var conn *net.UDPConn
+	var first *net.Interface
+	for _, ifi := range interfaces {
+		firstTarget := *multicastDiscoveryAddrV6
+		firstTarget.Zone = ifi.Name
+		candidate, listenErr := net.ListenMulticastUDP("udp6", ifi, &firstTarget)
+		if listenErr != nil {
+			slog.Debug("Could not bind IPv6 multicast interface", "interface", ifi.Name, "error", listenErr)
+			continue
+		}
+		conn, first = candidate, ifi
+		break
+	}
+	if conn == nil {
+		return nil, nil, nil
+	}
+	_ = conn.SetReadBuffer(maxDiscoveryDatagramBytes)
+	packetConn := ipv6.NewPacketConn(conn)
+	joined := make([]*net.Interface, 0, len(interfaces))
+	joined = append(joined, first)
+	configured := make([]string, 0, len(interfaces))
+	configured = append(configured, first.Name)
+	for _, ifi := range interfaces {
+		if ifi.Index == first.Index {
+			continue
+		}
+		if err := packetConn.JoinGroup(ifi, multicastDiscoveryAddrV6); err != nil {
+			slog.Debug("Could not join IPv6 multicast interface", "interface", ifi.Name, "error", err)
+			continue
+		}
+		joined = append(joined, ifi)
+		configured = append(configured, ifi.Name)
+	}
+	slog.Info("Configured LocalSend IPv6 multicast interfaces", "interfaces", configured)
+	return conn, packetConn, joined
 }
 
 func eligibleMulticastInterfaces() ([]*net.Interface, error) {
@@ -184,15 +294,59 @@ func interfaceHasPrivateIPv4(addresses []net.Addr) bool {
 	return false
 }
 
+func eligibleIPv6MulticastInterfaces() ([]*net.Interface, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+
+	eligible := make([]*net.Interface, 0, len(interfaces))
+	for i := range interfaces {
+		ifi := &interfaces[i]
+		required := net.FlagUp | net.FlagRunning | net.FlagMulticast
+		if ifi.Flags&required != required || ifi.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addresses, err := ifi.Addrs()
+		if err != nil {
+			continue
+		}
+		if interfaceHasUsableIPv6(addresses) {
+			eligible = append(eligible, ifi)
+		}
+	}
+	return eligible, nil
+}
+
+func interfaceHasUsableIPv6(addresses []net.Addr) bool {
+	for _, address := range addresses {
+		ip, _, err := net.ParseCIDR(address.String())
+		if err == nil && ip.To4() == nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+			return true
+		}
+	}
+	return false
+}
+
 func (ma *Discoverer) Listen() error {
 	// Receiving must remain independent from advertising. In particular, a short
 	// CLI scan must be able to drain every response triggered by its announcement
 	// instead of reading only one datagram per advertisement interval.
 	go ma.announcementTask()
 	go ma.discoveryCleanupTask()
+	if ma.mcastConnV6 != nil {
+		go func() {
+			if err := ma.listenOn(ma.mcastConnV6, ma.readBufV6); err != nil && !isClosedConnError(err) {
+				slog.Debug("IPv6 multicast listener stopped", "error", err)
+			}
+		}()
+	}
+	return ma.listenOn(ma.mcastConn, ma.readBuf)
+}
 
+func (ma *Discoverer) listenOn(conn *net.UDPConn, readBuf []byte) error {
 	for {
-		err := ma.readAndRegister()
+		err := ma.readAndRegisterFrom(conn, readBuf)
 		if err == nil {
 			continue
 		}
@@ -293,9 +447,20 @@ func (ma *Discoverer) advertise() error {
 	if err != nil {
 		return err
 	}
+	v4Err := ma.advertiseV4(b)
+	if ma.mcastConnV6 == nil {
+		return v4Err
+	}
+	v6Err := ma.advertiseV6(b)
+	if v4Err == nil || v6Err == nil {
+		return nil
+	}
+	return errors.Join(v4Err, v6Err)
+}
 
+func (ma *Discoverer) advertiseV4(b []byte) error {
 	if ma.mcastPacketConn == nil || len(ma.mcastInterfaces) == 0 {
-		_, err = ma.mcastConn.WriteToUDP(b, multicastDiscoveryAddr)
+		_, err := ma.mcastConn.WriteToUDP(b, multicastDiscoveryAddr)
 		return err
 	}
 
@@ -318,11 +483,39 @@ func (ma *Discoverer) advertise() error {
 	return lastErr
 }
 
+func (ma *Discoverer) advertiseV6(b []byte) error {
+	var lastErr error
+	sent := false
+	for _, ifi := range ma.mcastInterfacesV6 {
+		if err := ma.mcastPacketConnV6.SetMulticastInterface(ifi); err != nil {
+			lastErr = err
+			continue
+		}
+		target := *multicastDiscoveryAddrV6
+		target.Zone = ifi.Name
+		if _, err := ma.mcastConnV6.WriteToUDP(b, &target); err != nil {
+			lastErr = err
+			continue
+		}
+		sent = true
+	}
+	if sent {
+		return nil
+	}
+	if lastErr == nil {
+		return errors.New("localsend: no IPv6 multicast interface available")
+	}
+	return lastErr
+}
+
 func (ma *Discoverer) Shutdown() error {
 	ma.stopOnce.Do(func() {
-		// Close connection first to unblock any pending reads in readAndRegister(),
+		// Close connections first to unblock pending multicast reads,
 		// allowing Listen() to return to the select and receive the stop signal
 		_ = ma.mcastConn.Close()
+		if ma.mcastConnV6 != nil {
+			_ = ma.mcastConnV6.Close()
+		}
 		close(ma.stop) // Close the channel so all goroutines watching it exit
 	})
 	return nil
@@ -356,14 +549,14 @@ func (mcs *Discoverer) getCachedIPs() ([]net.IP, error) {
 	return ips, nil
 }
 
-func (mcs *Discoverer) readAndRegister() error {
-	n, remoteAddr, err := mcs.mcastConn.ReadFromUDP(mcs.readBuf)
+func (mcs *Discoverer) readAndRegisterFrom(conn *net.UDPConn, readBuf []byte) error {
+	n, remoteAddr, err := conn.ReadFromUDP(readBuf)
 	if err != nil {
 		return err
 	}
 
 	var anno models.Announcement
-	err = json.Unmarshal(mcs.readBuf[:n], &anno)
+	err = json.Unmarshal(readBuf[:n], &anno)
 	if err != nil {
 		return err
 	}
@@ -373,16 +566,9 @@ func (mcs *Discoverer) readAndRegister() error {
 		return nil
 	}
 
-	// Register the discovered device (IPv4 only - LocalSend protocol uses IPv4)
-	ip4 := remoteAddr.IP.To4()
-	if ip4 == nil {
-		// Skip IPv6 addresses - LocalSend discovery is IPv4 only
-		return nil
-	}
-	mcs.PutDiscovered(ip4.String(), anno)
-
 	// Per protocol spec Section 3.1: respond when we receive an announcement with announce:true
-	// First try HTTP POST (primary method), then UDP fallback
+	// First try HTTP POST (primary method), then UDP fallback. Announcements do
+	// not enter the store until /register confirms the peer is reachable.
 	if anno.Announce {
 		mcs.respondToAnnouncement(remoteAddr, anno)
 	}
@@ -390,7 +576,16 @@ func (mcs *Discoverer) readAndRegister() error {
 	return nil
 }
 
+func discoveryHost(addr *net.UDPAddr) string {
+	host := addr.IP.String()
+	if addr.Zone != "" {
+		host += "%" + addr.Zone
+	}
+	return host
+}
+
 func (mcs *Discoverer) respondToAnnouncement(remoteAddr *net.UDPAddr, anno models.Announcement) {
+	host := discoveryHost(remoteAddr)
 	if mcs.responseSem == nil {
 		mcs.responseSem = make(chan struct{}, maxConcurrentAnnouncementResponses)
 	}
@@ -398,17 +593,19 @@ func (mcs *Discoverer) respondToAnnouncement(remoteAddr *net.UDPAddr, anno model
 	case mcs.responseSem <- struct{}{}:
 		go func() {
 			defer func() { <-mcs.responseSem }()
-			mcs.sendHTTPResponse(remoteAddr.IP.String(), anno)
+			if confirmed, ok := mcs.sendHTTPResponse(host, anno); ok {
+				mcs.PutDiscovered(host, confirmed)
+			}
 			mcs.sendUDPResponse(remoteAddr)
 		}()
 	default:
-		slog.Debug("Dropping multicast response while response limit is full", "remote", remoteAddr.IP.String())
+		slog.Debug("Dropping multicast response while response limit is full", "remote", host)
 	}
 }
 
 // sendHTTPResponse sends our device info via HTTP POST to /api/localsend/v2/register
 // per protocol spec Section 3.1: "First, an HTTP/TCP request is sent to the origin"
-func (mcs *Discoverer) sendHTTPResponse(ip string, anno models.Announcement) {
+func (mcs *Discoverer) sendHTTPResponse(ip string, anno models.Announcement) (models.Announcement, bool) {
 	// Build the registration request body (same fields as announcement, without announce)
 	regBody := models.Announcement{
 		DeviceInfo: mcs.selfAnno.DeviceInfo,
@@ -420,7 +617,7 @@ func (mcs *Discoverer) sendHTTPResponse(ip string, anno models.Announcement) {
 	bodyBytes, err := json.Marshal(regBody)
 	if err != nil {
 		slog.Debug("Failed to marshal HTTP response body", "error", err)
-		return
+		return models.Announcement{}, false
 	}
 
 	// Use the protocol and port from the received announcement
@@ -433,7 +630,7 @@ func (mcs *Discoverer) sendHTTPResponse(ip string, anno models.Announcement) {
 		port = constants.DefaultPort
 	}
 
-	remoteAddr := fmt.Sprintf("%s:%d", ip, port)
+	remoteAddr := net.JoinHostPort(ip, strconv.Itoa(port))
 
 	req := fasthttp.AcquireRequest()
 	defer fasthttp.ReleaseRequest(req)
@@ -446,28 +643,57 @@ func (mcs *Discoverer) sendHTTPResponse(ip string, anno models.Announcement) {
 
 	// Skip TLS verification for self-signed certs
 	resp := fasthttp.AcquireResponse()
-	resp.SkipBody = true
 	defer fasthttp.ReleaseResponse(resp)
 
 	client := discoveryResponseHTTPClient
-	if scheme == "https" && anno.Fingerprint != "" {
-		// Pin the announced fingerprint during the handshake so nothing is
-		// sent to a peer that does not hold the matching certificate.
-		// Each announcement gets its own client: the pin is peer-specific.
+	if scheme == "https" {
+		// Validate the self-signed certificate during the handshake and, when
+		// announced, pin its fingerprint before sending any request bytes.
+		// Each announcement gets its own client because the pin is peer-specific.
 		client = &fasthttp.Client{
-			// #nosec G402 -- fingerprint pinning below replaces CA verification.
-			TLSConfig: &tls.Config{
-				InsecureSkipVerify:    true,
-				VerifyPeerCertificate: verifyAnnouncedFingerprint(anno.Fingerprint),
-			},
+			MaxResponseBodySize: maxDiscoveryResponseBytes,
+			DialDualStack:       true,
+			TLSConfig:           lsutils.TLSClientConfig(mcs.cert, anno.Fingerprint),
 		}
 	}
 	if err := client.DoTimeout(req, resp, 2*time.Second); err != nil {
 		slog.Debug("Failed to send HTTP register response", "remote", remoteAddr, "error", err)
-		return
+		return models.Announcement{}, false
+	}
+	if resp.StatusCode() != fiber.StatusOK {
+		slog.Debug("HTTP register response was rejected", "remote", remoteAddr, "status", resp.StatusCode())
+		return models.Announcement{}, false
 	}
 
+	var confirmed models.Announcement
+	if err := json.Unmarshal(resp.Body(), &confirmed); err != nil {
+		slog.Debug("Failed to decode HTTP register response", "remote", remoteAddr, "error", err)
+		return models.Announcement{}, false
+	}
+	if confirmed.Alias == "" || confirmed.Version == "" {
+		slog.Debug("HTTP register response omitted required identity fields", "remote", remoteAddr)
+		return models.Announcement{}, false
+	}
+	if scheme == "https" {
+		// The peer authenticated with the certificate pinned during the
+		// handshake. Per protocol v2.2 / official discovery, the register
+		// body fingerprint is ignored in HTTPS mode: retain the announced
+		// certificate fingerprint as the device identity and never replace
+		// it with the peer-controlled response-body value.
+		confirmed.Fingerprint = anno.Fingerprint
+	} else {
+		// HTTP mode has no certificate identity; the body fingerprint is
+		// the device identity and must be present.
+		if confirmed.Fingerprint == "" {
+			slog.Debug("HTTP register response omitted fingerprint", "remote", remoteAddr)
+			return models.Announcement{}, false
+		}
+	}
+	confirmed.Protocol = scheme
+	confirmed.Port = port
+
 	slog.Debug("Sent HTTP register response", "remote", remoteAddr)
+	return confirmed, true
 }
 
 // sendUDPResponse sends our device info via UDP as a fallback response
@@ -483,8 +709,17 @@ func (mcs *Discoverer) sendUDPResponse(remoteAddr *net.UDPAddr) {
 		return
 	}
 
-	// Send directly to the remote address (unicast response)
-	_, err = mcs.mcastConn.WriteToUDP(b, remoteAddr)
+	// Send directly to the remote address (unicast response) on the same address
+	// family that carried the announcement.
+	conn := mcs.mcastConn
+	if remoteAddr.IP.To4() == nil {
+		conn = mcs.mcastConnV6
+	}
+	if conn == nil {
+		slog.Warn("Failed to send UDP response", "error", "matching UDP socket unavailable")
+		return
+	}
+	_, err = conn.WriteToUDP(b, remoteAddr)
 	if err != nil {
 		slog.Warn("Failed to send UDP response", "error", err)
 	}
@@ -588,6 +823,16 @@ func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
 		slog.Error("Failed to marshal registration body", "error", err)
 		return
 	}
+	httpsRegBody := regBody
+	httpsRegBody.Protocol = "https"
+	if fingerprint, fingerprintErr := lsutils.CertificateFingerprint(mcs.cert); fingerprintErr == nil {
+		httpsRegBody.Fingerprint = fingerprint
+	}
+	httpsBodyBytes, err := json.Marshal(httpsRegBody)
+	if err != nil {
+		slog.Error("Failed to marshal HTTPS registration body", "error", err)
+		return
+	}
 
 	targets := buildSubnetTargets(ips)
 	concurrency := mcs.scanConcurrency
@@ -598,6 +843,7 @@ func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
 	type scanJob struct {
 		ip     string
 		scheme string
+		body   []byte
 	}
 	jobs := make(chan scanJob)
 	var wg sync.WaitGroup
@@ -610,7 +856,7 @@ func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
 			defer wg.Done()
 			for job := range jobs {
 				attempted.Add(1)
-				if mcs.tryScanIP(ctx, job.ip, job.scheme, bodyBytes) {
+				if mcs.tryScanIP(ctx, job.ip, job.scheme, job.body) {
 					found.Add(1)
 				}
 			}
@@ -620,10 +866,14 @@ func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
 enqueue:
 	for _, target := range targets {
 		for _, scheme := range []string{"https", "http"} {
+			jobBody := bodyBytes
+			if scheme == "https" {
+				jobBody = httpsBodyBytes
+			}
 			select {
 			case <-ctx.Done():
 				break enqueue
-			case jobs <- scanJob{ip: target, scheme: scheme}:
+			case jobs <- scanJob{ip: target, scheme: scheme, body: jobBody}:
 			}
 		}
 	}
@@ -676,6 +926,16 @@ func (mcs *Discoverer) tryScanIP(ctx context.Context, ip, scheme string, bodyByt
 	req.Header.Set("Content-Type", "application/json")
 
 	client := mcs.scanHTTPClient
+	if client == nil && scheme == "https" && len(mcs.cert.Certificate) > 0 {
+		client = &http.Client{
+			Timeout: 500 * time.Millisecond,
+			Transport: &http.Transport{
+				TLSClientConfig:   lsutils.TLSClientConfig(mcs.cert, ""),
+				DisableKeepAlives: true,
+			},
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+		}
+	}
 	if client == nil {
 		client = httpClientForScan
 	}
@@ -692,6 +952,12 @@ func (mcs *Discoverer) tryScanIP(ctx context.Context, ip, scheme string, bodyByt
 	var deviceInfo models.DeviceInfo
 	if err := json.NewDecoder(resp.Body).Decode(&deviceInfo); err != nil {
 		return false
+	}
+	if scheme == "https" {
+		if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+			return false
+		}
+		deviceInfo.Fingerprint = utils.SHA256ofCert(resp.TLS.PeerCertificates[0])
 	}
 
 	deviceInfo.IP = ip

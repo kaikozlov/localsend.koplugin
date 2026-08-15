@@ -1,11 +1,17 @@
 package localsend
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +22,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/valyala/fasthttp"
+	"golang.org/x/net/ipv6"
 	"localsend-cli/internal/models"
 	"localsend-cli/internal/utils"
 )
@@ -27,6 +35,25 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestDiscovererListen_ProcessesDatagramsContinuously(t *testing.T) {
+	aliases := []string{"first", "second"}
+	var registrations atomic.Int32
+	registerServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		index := int(registrations.Add(1)) - 1
+		if index >= len(aliases) {
+			index = len(aliases) - 1
+		}
+		_, _ = fmt.Fprintf(w, `{"alias":%q,"version":"2.2","fingerprint":%q}`, aliases[index], aliases[index])
+	}))
+	defer registerServer.Close()
+	_, registerPortText, err := net.SplitHostPort(strings.TrimPrefix(registerServer.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerPort, err := strconv.Atoi(registerPortText)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
 	if err != nil {
 		t.Fatalf("listen UDP: %v", err)
@@ -67,7 +94,8 @@ func TestDiscovererListen_ProcessesDatagramsContinuously(t *testing.T) {
 				Fingerprint: alias,
 			},
 			Protocol: "http",
-			Port:     53317,
+			Port:     registerPort,
+			Announce: true,
 		})
 		if marshalErr != nil {
 			t.Fatalf("marshal announcement: %v", marshalErr)
@@ -95,6 +123,297 @@ func TestDiscovererListen_ProcessesDatagramsContinuously(t *testing.T) {
 	waitForAlias("first")
 	send("second")
 	waitForAlias("second")
+}
+
+func TestDiscovererReadAndRegisterFrom_DropsIPv6FallbackResponse(t *testing.T) {
+	conn, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	if err != nil {
+		t.Skipf("IPv6 unavailable: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	d := &Discoverer{
+		selfAnno:   &models.Announcement{DeviceInfo: models.DeviceInfo{Fingerprint: "self"}},
+		discovered: make(map[string]discoveryEntry),
+		mu:         &sync.RWMutex{},
+		stop:       make(chan struct{}),
+	}
+	packet, err := json.Marshal(models.Announcement{
+		DeviceInfo: models.DeviceInfo{Alias: "IPv6 Peer", Version: "2.2", Fingerprint: "peer"},
+		Protocol:   "http",
+		Port:       53317,
+		Announce:   false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := net.DialUDP("udp6", nil, conn.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sender.Close() }()
+	if _, err := sender.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.readAndRegisterFrom(conn, make([]byte, 512)); err != nil {
+		t.Fatal(err)
+	}
+	if got := d.GetAllDiscovered(); len(got) != 0 {
+		t.Fatalf("unauthenticated IPv6 fallback response was stored: %#v", got)
+	}
+}
+
+func TestDiscoveryHost_PreservesIPv6Zone(t *testing.T) {
+	addr := &net.UDPAddr{IP: net.ParseIP("fe80::1234"), Port: 53317, Zone: "en7"}
+	if got := discoveryHost(addr); got != "fe80::1234%en7" {
+		t.Fatalf("discoveryHost = %q; want scoped IPv6 host", got)
+	}
+}
+
+func TestDiscovererAdvertiseV6_SendsOnConfiguredInterface(t *testing.T) {
+	listener, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	if err != nil {
+		t.Skipf("IPv6 unavailable: %v", err)
+	}
+	defer func() { _ = listener.Close() }()
+	sender, err := net.ListenUDP("udp6", &net.UDPAddr{IP: net.IPv6loopback, Port: 0})
+	if err != nil {
+		t.Skipf("IPv6 unavailable: %v", err)
+	}
+	defer func() { _ = sender.Close() }()
+	var loopback *net.Interface
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range interfaces {
+		if interfaces[i].Flags&net.FlagLoopback != 0 {
+			loopback = &interfaces[i]
+			break
+		}
+	}
+	if loopback == nil {
+		t.Skip("no loopback interface")
+	}
+
+	originalAddr := multicastDiscoveryAddrV6
+	t.Cleanup(func() { multicastDiscoveryAddrV6 = originalAddr })
+	target := listener.LocalAddr().(*net.UDPAddr)
+	multicastDiscoveryAddrV6 = &net.UDPAddr{IP: target.IP, Port: target.Port}
+	d := &Discoverer{
+		mcastConnV6:       sender,
+		mcastPacketConnV6: ipv6.NewPacketConn(sender),
+		mcastInterfacesV6: []*net.Interface{loopback},
+	}
+	payload := []byte(`{"alias":"IPv6"}`)
+	if err := d.advertiseV6(payload); err != nil {
+		t.Skipf("loopback cannot select IPv6 multicast interface: %v", err)
+	}
+	if err := listener.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 128)
+	n, _, err := listener.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(buf[:n], payload) {
+		t.Fatalf("payload = %q; want %q", buf[:n], payload)
+	}
+}
+
+func TestSendHTTPResponse_RegistersIPv6Peer(t *testing.T) {
+	listener, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 unavailable: %v", err)
+	}
+	target := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"alias":"IPv6 Peer","version":"2.2","deviceType":"desktop","fingerprint":"peer"}`)
+	}))
+	target.Listener = listener
+	target.Start()
+	defer target.Close()
+	_, portText, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d := &Discoverer{selfAnno: &models.Announcement{DeviceInfo: models.DeviceInfo{
+		Alias: "Self", Version: "2.2", Fingerprint: "self",
+	}}}
+	confirmed, ok := d.sendHTTPResponse("::1", models.Announcement{
+		DeviceInfo: models.DeviceInfo{Fingerprint: "peer"},
+		Protocol:   "http",
+		Port:       port,
+	})
+	if !ok || confirmed.Alias != "IPv6 Peer" {
+		t.Fatalf("IPv6 register failed: ok=%v confirmed=%#v", ok, confirmed)
+	}
+}
+
+func TestSendHTTPResponse_PreservesIPv6ScopeForDialer(t *testing.T) {
+	originalClient := discoveryResponseHTTPClient
+	t.Cleanup(func() { discoveryResponseHTTPClient = originalClient })
+	dialed := make(chan string, 1)
+	discoveryResponseHTTPClient = &fasthttp.Client{Dial: func(addr string) (net.Conn, error) {
+		dialed <- addr
+		return nil, errors.New("stop after capturing address")
+	}}
+
+	d := &Discoverer{selfAnno: &models.Announcement{DeviceInfo: models.DeviceInfo{
+		Alias: "Self", Version: "2.2", Fingerprint: "self",
+	}}}
+	_, _ = d.sendHTTPResponse("fe80::1234%en7", models.Announcement{
+		DeviceInfo: models.DeviceInfo{Fingerprint: "peer"},
+		Protocol:   "http",
+		Port:       53317,
+	})
+
+	select {
+	case got := <-dialed:
+		if got != "[fe80::1234%en7]:53317" {
+			t.Fatalf("dial address = %q; want scoped IPv6 address", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("HTTP client did not attempt scoped IPv6 dial")
+	}
+}
+
+func TestDiscovererListen_DoesNotExposeUnconfirmedAnnouncement(t *testing.T) {
+	registerCalled := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		registerCalled <- struct{}{}
+		http.Error(w, "not a LocalSend peer", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	_, portText, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Discoverer{
+		mcastConn:  conn,
+		selfAnno:   &models.Announcement{DeviceInfo: models.DeviceInfo{Fingerprint: "self"}},
+		discovered: make(map[string]discoveryEntry),
+		mu:         &sync.RWMutex{},
+		stop:       make(chan struct{}),
+		readBuf:    make([]byte, 512),
+	}
+	listenDone := make(chan error, 1)
+	go func() { listenDone <- d.Listen() }()
+	t.Cleanup(func() {
+		_ = d.Shutdown()
+		<-listenDone
+	})
+
+	packet, err := json.Marshal(models.Announcement{
+		DeviceInfo: models.DeviceInfo{Alias: "Spoof", Fingerprint: "spoof"},
+		Protocol:   "http",
+		Port:       port,
+		Announce:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := net.DialUDP("udp4", nil, conn.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sender.Close() }()
+	if _, err := sender.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-registerCalled:
+	case <-time.After(time.Second):
+		t.Fatal("announcement was not answered with a register request")
+	}
+	if got := d.GetAllDiscovered(); len(got) != 0 {
+		t.Fatalf("unconfirmed announcement entered discovery store: %#v", got)
+	}
+}
+
+func TestDiscovererListen_StoresRegisterResponseAfterAnnouncement(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"alias":"Confirmed","version":"2.2","deviceType":"desktop","fingerprint":"confirmed"}`)
+	}))
+	defer server.Close()
+	_, portText, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := &Discoverer{
+		mcastConn:  conn,
+		selfAnno:   &models.Announcement{DeviceInfo: models.DeviceInfo{Fingerprint: "self"}},
+		discovered: make(map[string]discoveryEntry),
+		mu:         &sync.RWMutex{},
+		stop:       make(chan struct{}),
+		readBuf:    make([]byte, 512),
+	}
+	listenDone := make(chan error, 1)
+	go func() { listenDone <- d.Listen() }()
+	t.Cleanup(func() {
+		_ = d.Shutdown()
+		<-listenDone
+	})
+
+	packet, err := json.Marshal(models.Announcement{
+		DeviceInfo: models.DeviceInfo{Alias: "Unconfirmed", Fingerprint: "announced"},
+		Protocol:   "http",
+		Port:       port,
+		Announce:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender, err := net.DialUDP("udp4", nil, conn.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sender.Close() }()
+	if _, err := sender.Write(packet); err != nil {
+		t.Fatal(err)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if confirmed, ok := d.GetAllDiscovered()["127.0.0.1"]; ok {
+			if confirmed.Alias != "Confirmed" {
+				t.Fatalf("stored alias = %q; want register response alias", confirmed.Alias)
+			}
+			if confirmed.Fingerprint != "confirmed" {
+				t.Fatalf("stored fingerprint = %q; want register-response identity for HTTP", confirmed.Fingerprint)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("confirmed register response did not enter discovery store")
 }
 
 func TestTryScanIP_RegistersSuccessfulResponse(t *testing.T) {
@@ -177,6 +496,41 @@ func TestInterfaceHasPrivateIPv4_RejectsPublicAndIPv6OnlyInterfaces(t *testing.T
 		t.Run(tt.name, func(t *testing.T) {
 			if got := interfaceHasPrivateIPv4(tt.addresses); got != tt.want {
 				t.Fatalf("interfaceHasPrivateIPv4() = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInterfaceHasUsableIPv6_AcceptsLinkLocalAndGlobalAddresses(t *testing.T) {
+	tests := []struct {
+		name      string
+		addresses []net.Addr
+		want      bool
+	}{
+		{
+			name:      "link local IPv6",
+			addresses: []net.Addr{&net.IPNet{IP: net.ParseIP("fe80::1234"), Mask: net.CIDRMask(64, 128)}},
+			want:      true,
+		},
+		{
+			name:      "global IPv6",
+			addresses: []net.Addr{&net.IPNet{IP: net.ParseIP("2001:db8::1"), Mask: net.CIDRMask(64, 128)}},
+			want:      true,
+		},
+		{
+			name:      "IPv4 only",
+			addresses: []net.Addr{&net.IPNet{IP: net.ParseIP("192.168.1.20"), Mask: net.CIDRMask(24, 32)}},
+		},
+		{
+			name:      "loopback IPv6",
+			addresses: []net.Addr{&net.IPNet{IP: net.IPv6loopback, Mask: net.CIDRMask(128, 128)}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := interfaceHasUsableIPv6(tt.addresses); got != tt.want {
+				t.Fatalf("interfaceHasUsableIPv6() = %v; want %v", got, tt.want)
 			}
 		})
 	}
@@ -747,4 +1101,53 @@ func TestSendHTTPResponse_AcceptsMatchingFingerprint(t *testing.T) {
 	if got := requests.Load(); got != 1 {
 		t.Fatalf("server received %d register requests; want 1 (handshake must succeed)", got)
 	}
+}
+
+func TestVerifyAnnouncedFingerprint_RejectsExpiredCertificate(t *testing.T) {
+	der := makeSelfSignedTestCertificate(t, time.Now().Add(-2*time.Hour), time.Now().Add(-time.Hour))
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = verifyAnnouncedFingerprint(utils.SHA256ofCert(cert))([][]byte{der}, nil)
+	if err == nil || !strings.Contains(err.Error(), "not valid") {
+		t.Fatalf("expired certificate error = %v; want validity rejection", err)
+	}
+}
+
+func TestVerifyAnnouncedFingerprint_AcceptsValidCertificateWithoutPin(t *testing.T) {
+	der := makeSelfSignedTestCertificate(t, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err := verifyAnnouncedFingerprint("")([][]byte{der}, nil); err != nil {
+		t.Fatalf("valid unpinned certificate rejected: %v", err)
+	}
+}
+
+func TestVerifyAnnouncedFingerprint_RejectsInvalidSelfSignature(t *testing.T) {
+	der := makeSelfSignedTestCertificate(t, time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	der[len(der)-1] ^= 0x01
+	err := verifyAnnouncedFingerprint("unused")([][]byte{der}, nil)
+	if err == nil || !strings.Contains(err.Error(), "verify self-signed") {
+		t.Fatalf("invalid signature error = %v; want signature rejection", err)
+	}
+}
+
+func makeSelfSignedTestCertificate(t *testing.T, notBefore, notAfter time.Time) []byte {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "LocalSend User"},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return der
 }

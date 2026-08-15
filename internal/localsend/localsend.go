@@ -1,22 +1,21 @@
 package localsend
 
 import (
-	"crypto/tls"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"time"
 
-	"github.com/gofiber/fiber/v3"
-	"github.com/valyala/fasthttp"
 	"localsend-cli/internal/localsend/constants"
 	"localsend-cli/internal/localsend/send"
+	lsutils "localsend-cli/internal/localsend/utils"
 	"localsend-cli/internal/models"
 	"localsend-cli/internal/utils"
 )
 
-var deviceInfoHTTPClient = &fasthttp.Client{
-	// #nosec G402 -- LocalSend authenticates self-signed certificates by fingerprint.
-	TLSConfig: &tls.Config{InsecureSkipVerify: true},
-}
+const maxDeviceInfoBytes = 1 << 20
 
 // validDeviceTypes are the allowed deviceType values per protocol spec Section 7.1
 var validDeviceTypes = map[string]bool{
@@ -39,29 +38,43 @@ func normalizeDeviceType(deviceType string) string {
 func GetDeviceInfo(ip string, https bool) (models.DeviceInfo, error) {
 	remoteAddr := net.JoinHostPort(ip, constants.DefaultPortStr)
 	scheme := utils.GetProtocolScheme(https)
-
-	req := fasthttp.AcquireRequest()
-	defer fasthttp.ReleaseRequest(req)
-	req.URI().SetScheme(scheme)
-	req.URI().SetHost(remoteAddr)
-	req.URI().SetPath(constants.InfoPath)
-	req.Header.SetMethod(fiber.MethodGet)
-
-	resp := fasthttp.AcquireResponse()
-	defer fasthttp.ReleaseResponse(resp)
-	if err := deviceInfoHTTPClient.Do(req, resp); err != nil {
+	client := &http.Client{Timeout: 30 * time.Second}
+	if https {
+		privateKeyFile, certFile, err := lsutils.GetCertPaths()
+		if err != nil {
+			return models.DeviceInfo{}, err
+		}
+		cert, err := lsutils.LoadOrGenTLScert(privateKeyFile, certFile)
+		if err != nil {
+			return models.DeviceInfo{}, err
+		}
+		client.Transport = &http.Transport{TLSClientConfig: lsutils.TLSClientConfig(cert, "")}
+	}
+	url := fmt.Sprintf("%s://%s%s", scheme, remoteAddr, constants.InfoPath)
+	resp, err := client.Get(url)
+	if err != nil {
 		return models.DeviceInfo{}, err
 	}
+	defer func() { _ = resp.Body.Close() }()
 
-	err := constants.ParseError(resp.StatusCode())
+	err = constants.ParseError(resp.StatusCode)
 	if err != nil {
 		return models.DeviceInfo{}, err
 	}
 
 	var res models.DeviceInfo
-	err = json.Unmarshal(resp.Body(), &res)
-	if err != nil {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDeviceInfoBytes+1))
+	if err != nil || len(body) > maxDeviceInfoBytes {
+		return models.DeviceInfo{}, fmt.Errorf("invalid device info response")
+	}
+	if err := json.Unmarshal(body, &res); err != nil {
 		return models.DeviceInfo{}, err
+	}
+	if https {
+		if resp.TLS == nil || len(resp.TLS.PeerCertificates) == 0 {
+			return models.DeviceInfo{}, fmt.Errorf("HTTPS device info response carried no peer certificate")
+		}
+		res.Fingerprint = utils.SHA256ofCert(resp.TLS.PeerCertificates[0])
 	}
 	res.IP = ip
 	res.DeviceType = normalizeDeviceType(res.DeviceType)

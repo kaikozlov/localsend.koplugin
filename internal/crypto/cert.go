@@ -6,10 +6,12 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"log"
 	"math/big"
+	"strings"
 	"time"
 )
 
@@ -93,18 +95,12 @@ func VerifyingKeyFromCert(cert *x509.Certificate) (VerifyingKey, error) {
 // FingerprintFromCertDER generates a SHA256 fingerprint from a certificate.
 // Returns an empty string if the certificate cannot be parsed or processed.
 func FingerprintFromCertDER(der []byte) string {
-	cert, err := x509.ParseCertificate(der)
+	_, err := x509.ParseCertificate(der)
 	if err != nil {
 		log.Printf("FingerprintFromCertDER: failed to parse certificate: %v", err)
 		return ""
 	}
 
-	pubKeyBytes, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
-	if err != nil {
-		log.Printf("FingerprintFromCertDER: failed to marshal public key: %v", err)
-		return ""
-	}
-
-	digest := createDigestFromDER(pubKeyBytes, nil)
-	return EncodeNonce(digest)
+	digest := createDigestFromDER(der, nil)
+	return strings.ToUpper(hex.EncodeToString(digest))
 }

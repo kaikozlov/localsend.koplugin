@@ -3,6 +3,7 @@ package send
 import (
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -16,22 +17,23 @@ import (
 	"localsend-cli/internal/localsend/constants"
 	lsutils "localsend-cli/internal/localsend/utils"
 	"localsend-cli/internal/models"
-	"localsend-cli/internal/utils"
 )
 
 type ForwardSender struct {
 	baseSender
-	local      *models.DeviceInfo
-	remote     *models.DeviceInfo
-	remotePort string // Custom port (defaults to constants.DefaultPortStr)
-	https      bool
-	abort      atomic.Bool
-	httpClient *fasthttp.Client
+	local        *models.DeviceInfo
+	remote       *models.DeviceInfo
+	remotePort   string // Custom port (defaults to constants.DefaultPortStr)
+	https        bool
+	abort        atomic.Bool
+	httpClient   *fasthttp.Client
+	uploadClient *fasthttp.Client
 }
 
 const (
 	requestTimeout          = 30 * time.Second
 	maxControlResponseBytes = 1 << 20
+	maxUploadAttempts       = 3
 )
 
 func NewForwardSender() *ForwardSender {
@@ -40,12 +42,9 @@ func NewForwardSender() *ForwardSender {
 			files:  make(map[string]models.FileMeta),
 			tokens: make(map[string]string),
 		},
-		remotePort: constants.DefaultPortStr,
-		httpClient: &fasthttp.Client{
-			MaxResponseBodySize: maxControlResponseBytes,
-			// #nosec G402 -- LocalSend authenticates self-signed certificates by fingerprint.
-			TLSConfig: &tls.Config{InsecureSkipVerify: true},
-		},
+		remotePort:   constants.DefaultPortStr,
+		httpClient:   &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes},
+		uploadClient: &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes},
 	}
 }
 
@@ -61,8 +60,27 @@ func (fsp *ForwardSender) Init(target *models.DeviceInfo, https bool) error {
 	if alias == "" {
 		alias = lsutils.GenAlias()
 	}
-	localInfo := models.NewDeviceInfo(alias, lsutils.GenFingerprint())
+	fingerprint := lsutils.GenFingerprint()
+	var clientTLSConfig *tls.Config
+	if https {
+		privateKeyFile, certFile, err := lsutils.GetCertPaths()
+		if err != nil {
+			return fmt.Errorf("failed to get sender certificate paths: %w", err)
+		}
+		cert, err := lsutils.LoadOrGenTLScert(privateKeyFile, certFile)
+		if err != nil {
+			return fmt.Errorf("failed to load or generate sender TLS certificate: %w", err)
+		}
+		fingerprint, err = lsutils.CertificateFingerprint(cert)
+		if err != nil {
+			return err
+		}
+		clientTLSConfig = lsutils.TLSClientConfig(cert, target.Fingerprint)
+	}
+	localInfo := models.NewDeviceInfo(alias, fingerprint)
 	fsp.local = &localInfo
+	fsp.httpClient = &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes, TLSConfig: clientTLSConfig}
+	fsp.uploadClient = &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes, TLSConfig: clientTLSConfig}
 
 	fsp.reset()
 
@@ -76,21 +94,6 @@ func (fsp *ForwardSender) SetRemotePort(port string) {
 }
 
 func (fsp *ForwardSender) preUploadReq() error {
-	if fsp.https {
-		// check fingerprint if https mode (See https://github.com/localsend/protocol section.2)
-		certs, err := utils.FetchX509Cert(net.JoinHostPort(fsp.remote.IP, fsp.remotePort))
-		if err != nil {
-			return fmt.Errorf("failed to fetch certificate: %w", err)
-		}
-		if len(certs) == 0 {
-			return fmt.Errorf("no certificates returned from server")
-		}
-		fingerprint := utils.SHA256ofCert(certs[0]) // only check the first cert
-		if fingerprint != fsp.remote.Fingerprint {
-			return constants.ErrFingerprint
-		}
-	}
-
 	// Build request with SenderInfo per protocol spec Section 4.1
 	protocol := "http"
 	if fsp.https {
@@ -180,13 +183,26 @@ func (fsp *ForwardSender) sendFile(fid string, ftoken string) error {
 		return fmt.Errorf("file too large for transfer on this system: %s (%d bytes exceeds %d limit)", fmeta.Filename, fmeta.Size, math.MaxInt)
 	}
 
-	// send file
+	// send file. No total deadline: a slow receiver or large transfer may
+	// legitimately exceed 30s. Control requests remain bounded; the body
+	// stream itself is governed by the OS connection.
 	req.SetBodyStream(fd, int(fmeta.Size))
-	if err := fsp.httpClient.DoTimeout(req, response, requestTimeout); err != nil {
+	if err := fsp.uploadClient.Do(req, response); err != nil {
 		return fmt.Errorf("failed to upload file: %w", err)
 	}
 
 	return constants.ParseError(response.StatusCode())
+}
+
+func (fsp *ForwardSender) sendFileWithRetry(fid string, ftoken string) error {
+	var err error
+	for attempt := 0; attempt < maxUploadAttempts; attempt++ {
+		err = fsp.sendFile(fid, ftoken)
+		if !errors.Is(err, constants.ErrChecksum) {
+			return err
+		}
+	}
+	return err
 }
 
 func (fsp *ForwardSender) Start() error {
@@ -198,7 +214,7 @@ func (fsp *ForwardSender) Start() error {
 	// Collect and return errors instead of just logging
 	var errs []error
 	for fid, ftoken := range fsp.tokens {
-		err := fsp.sendFile(fid, ftoken)
+		err := fsp.sendFileWithRetry(fid, ftoken)
 		if err != nil {
 			slog.Error("Fail to send file", "error", err, "fileId", fid)
 			errs = append(errs, fmt.Errorf("file %s: %w", fid, err))
@@ -206,6 +222,13 @@ func (fsp *ForwardSender) Start() error {
 	}
 
 	if len(errs) > 0 {
+		// Release the receiver's session so it can accept new transfers
+		// instead of waiting for the session to expire. Best effort: a
+		// cancel failure is logged, not fatal, since we are already
+		// returning an error.
+		if err := fsp.Cancel(); err != nil {
+			slog.Warn("Failed to cancel remote session after send failure", "error", err)
+		}
 		return fmt.Errorf("failed to send %d file(s): %w", len(errs), errs[0])
 	}
 

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // =============================================================================
@@ -186,6 +187,29 @@ func TestGenFileMeta_GeneratesUniqueId(t *testing.T) {
 	}
 	if meta1.Id == meta2.Id {
 		t.Error("Each call should generate a unique ID")
+	}
+}
+
+func TestGenFileMeta_PreservesNanosecondTimestamps(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "timestamps.bin")
+	if err := os.WriteFile(path, []byte("timestamp precision"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Unix(1_700_000_000, 123_456_789)
+	if err := os.Chtimes(path, want, want); err != nil {
+		t.Fatal(err)
+	}
+
+	meta, err := GenFileMeta(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := time.Parse(time.RFC3339Nano, meta.Metadata.Modified)
+	if err != nil {
+		t.Fatalf("parse modified timestamp %q: %v", meta.Metadata.Modified, err)
+	}
+	if !got.Equal(want) {
+		t.Fatalf("modified timestamp = %s; want %s", got.Format(time.RFC3339Nano), want.Format(time.RFC3339Nano))
 	}
 }
 

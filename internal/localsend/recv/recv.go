@@ -354,11 +354,14 @@ func (fr *FileReceiver) Init() error {
 		}
 
 		// See https://github.com/localsend/protocol section. 2
-		fr.identity.Fingerprint = utils.SHA256ofCert(fr.cert.Leaf)
+		fr.identity.Fingerprint, err = lsutils.CertificateFingerprint(fr.cert)
+		if err != nil {
+			return fmt.Errorf("failed to fingerprint TLS certificate: %w", err)
+		}
 	}
 
 	// start advertisement (non-fatal if it fails - server can still work without discovery)
-	fr.discoverier, err = localsend.NewDiscoverer(fr.identity, fr.supportHttps)
+	fr.discoverier, err = localsend.NewDiscovererWithCertificate(fr.identity, fr.supportHttps, fr.cert)
 	if err != nil {
 		slog.Warn("Failed to create discoverer (device won't be discoverable)", "error", err)
 		// Continue without discovery - server can still accept connections by IP
@@ -388,7 +391,7 @@ func (fr *FileReceiver) Start(ctx context.Context) error {
 		_ = fr.Stop()
 	}()
 
-	return lsutils.ListenWithTLS(fr.webServer, fr.listenAddr, fr.cert, fr.supportHttps)
+	return lsutils.ListenWithMutualTLS(fr.webServer, fr.listenAddr, fr.cert, fr.supportHttps)
 }
 
 func (fr *FileReceiver) registerRoutes(server *fiber.App) {
@@ -432,7 +435,7 @@ func (fr *FileReceiver) startDiscoveryWithRetry(ctx context.Context) {
 			return
 		case <-ticker.C:
 			var err error
-			fr.discoverier, err = localsend.NewDiscoverer(fr.identity, fr.supportHttps)
+			fr.discoverier, err = localsend.NewDiscovererWithCertificate(fr.identity, fr.supportHttps, fr.cert)
 			if err != nil {
 				// Still no network, keep trying
 				continue
