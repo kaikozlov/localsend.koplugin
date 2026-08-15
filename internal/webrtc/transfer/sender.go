@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/storage"
+	"localsend-cli/internal/utils"
 	"localsend-cli/internal/webrtc/signaling"
 )
 
@@ -40,10 +41,11 @@ const (
 	bufferBackpressureTimeout = 30 * time.Second
 )
 
-// chunkPool provides reusable buffers for file transfer to reduce GC pressure.
-var chunkPool = sync.Pool{
+// fileReadBufferPool reuses LocalSend 1.18-sized physical read buffers. Data is
+// still split into ChunkSize frames before it reaches the WebRTC data channel.
+var fileReadBufferPool = sync.Pool{
 	New: func() interface{} {
-		buf := make([]byte, ChunkSize)
+		buf := make([]byte, utils.FileIOBufferSize)
 		return &buf
 	},
 }
@@ -800,6 +802,16 @@ type sendable struct {
 // pre-announced "next header" can never be left dangling for a file we skip.
 // See docs/localsend_protocol_v3.md §C.3.
 func (s *RTCSender) prepareSendQueue() []sendable {
+	// Build the index once. The old nested scan made queue construction O(n*m)
+	// for many-file transfers; accepted IDs now resolve in O(1).
+	fileByID := make(map[string]*FileMeta, len(s.files))
+	for i := range s.files {
+		file := &s.files[i]
+		if _, exists := fileByID[file.ID]; !exists {
+			fileByID[file.ID] = file
+		}
+	}
+
 	queue := make([]sendable, 0, len(s.acceptedIDs))
 	for _, id := range s.acceptedIDs {
 		token, ok := s.fileTokens[id]
@@ -807,13 +819,7 @@ func (s *RTCSender) prepareSendQueue() []sendable {
 			slog.Warn("Skipping accepted file with no token", "id", id)
 			continue
 		}
-		var file *FileMeta
-		for i := range s.files {
-			if s.files[i].ID == id {
-				file = &s.files[i]
-				break
-			}
-		}
+		file := fileByID[id]
 		if file == nil {
 			slog.Warn("Skipping accepted file with no local metadata", "id", id)
 			continue
@@ -845,9 +851,11 @@ func (s *RTCSender) SendFiles() error {
 		}
 	}
 
-	// Get buffer from pool (reuse for all files to reduce GC)
-	bufPtr := chunkPool.Get().(*[]byte)
-	defer chunkPool.Put(bufPtr)
+	// Read from disk in 512 KiB blocks, then split each block into the 16 KiB
+	// WebRTC frames required by LocalSend Web. This reduces disk syscalls without
+	// changing the wire protocol.
+	bufPtr := fileReadBufferPool.Get().(*[]byte)
+	defer fileReadBufferPool.Put(bufPtr)
 	buf := *bufPtr
 
 	headerAlreadySent := false
@@ -874,24 +882,32 @@ func (s *RTCSender) SendFiles() error {
 		}
 		headerAlreadySent = false
 
-		// Send file data
+		// Send file data. Physical reads are large, but every data-channel frame
+		// remains at most ChunkSize for LocalSend Web compatibility.
 		for {
-			n, err := f.Read(buf)
-			if err == io.EOF {
+			n, readErr := f.Read(buf)
+			if n > 0 {
+				for start := 0; start < n; start += ChunkSize {
+					end := start + ChunkSize
+					if end > n {
+						end = n
+					}
+					if err := ops.WaitBufferBelowWithTimeout(maxBufferedAmount, bufferBackpressureTimeout); err != nil {
+						_ = f.Close()
+						return fmt.Errorf("timed out waiting for WebRTC send buffer: %w", err)
+					}
+					if err := ops.Send(buf[start:end]); err != nil {
+						_ = f.Close()
+						return fmt.Errorf("failed to send data: %w", err)
+					}
+				}
+			}
+			if readErr == io.EOF {
 				break
 			}
-			if err != nil {
+			if readErr != nil {
 				_ = f.Close()
-				return fmt.Errorf("failed to read file: %w", err)
-			}
-
-			if err := ops.WaitBufferBelowWithTimeout(maxBufferedAmount, bufferBackpressureTimeout); err != nil {
-				_ = f.Close()
-				return fmt.Errorf("timed out waiting for WebRTC send buffer: %w", err)
-			}
-			if err := ops.Send(buf[:n]); err != nil {
-				_ = f.Close()
-				return fmt.Errorf("failed to send data: %w", err)
+				return fmt.Errorf("failed to read file: %w", readErr)
 			}
 		}
 		_ = f.Close()

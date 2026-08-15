@@ -70,6 +70,16 @@ test-official *args='':
 test-web:
     {{ _run }} sh -c 'cd /opt/plugin && tools/webinterop/verify.sh && go test ./internal/webrtc/... -run "^TestWebCompat_" -count=1'
 
+# Run transfer/file-I/O microbenchmarks without executing the ordinary test suite.
+[group('test')]
+bench-transfer:
+    {{ _run }} sh -c 'cd /opt/plugin && go test ./internal/utils ./internal/localsend/session ./internal/webrtc/transfer -run "^$" -bench "Benchmark(SHA256ofFile|SaveFile|RTC)" -benchmem'
+
+# Opt-in receiver stress test modeled after LocalSend 1.18's 1000 x 1 MiB harness.
+[group('test')]
+test-stress:
+    {{ _run }} sh -c 'cd /opt/plugin && go test ./internal/localsend/recv -tags=stress -run "^TestStress_" -count=1 -v -timeout=20m'
+
 # =============================================================================
 # Setup (plugin-local)
 # =============================================================================

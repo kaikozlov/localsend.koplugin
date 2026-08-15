@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -82,12 +83,14 @@ type RTCReceiver struct {
 
 	// Files
 	files       []RTCFileDto
-	fileTokens  map[string]string // fileId -> token
+	fileByID    map[string]RTCFileDto // fileId -> metadata for O(1) hot-path lookup
+	fileTokens  map[string]string     // fileId -> token
 	acceptedIDs []string
 
 	// File writers
 	currentFileID string
 	fileWriters   map[string]*os.File
+	fileBuffers   map[string]*bufio.Writer
 	filePaths     map[string]string // fileId -> actual saved path
 	fileHashers   map[string]hash.Hash
 	currentBytes  int64
@@ -152,8 +155,10 @@ func NewRTCReceiver(sig *signaling.SignalingClient, key *crypto.SigningKey, pin,
 		pin:         pin,
 		saveDir:     saveDir,
 		state:       stateWaitNonce,
+		fileByID:    make(map[string]RTCFileDto),
 		fileTokens:  make(map[string]string),
 		fileWriters: make(map[string]*os.File),
+		fileBuffers: make(map[string]*bufio.Writer),
 		filePaths:   make(map[string]string),
 		fileHashers: make(map[string]hash.Hash),
 	}
@@ -271,6 +276,35 @@ func (r *RTCReceiver) SetSTUNServers(servers []string) {
 	r.stunServers = servers
 }
 
+func (r *RTCReceiver) rebuildFileIndex() {
+	r.fileByID = make(map[string]RTCFileDto, len(r.files))
+	for _, file := range r.files {
+		// Preserve the old linear-scan behavior for duplicate IDs: first wins.
+		if _, exists := r.fileByID[file.ID]; !exists {
+			r.fileByID[file.ID] = file
+		}
+	}
+}
+
+func (r *RTCReceiver) fileMetaByID(id string) (RTCFileDto, bool) {
+	if meta, ok := r.fileByID[id]; ok {
+		return meta, true
+	}
+	// Tests and a few internal setup paths assign r.files directly. Lazily fill
+	// the index once so those callers retain their behavior without putting a
+	// linear scan back into the per-frame hot path.
+	for _, file := range r.files {
+		if file.ID == id {
+			if r.fileByID == nil {
+				r.fileByID = make(map[string]RTCFileDto)
+			}
+			r.fileByID[id] = file
+			return file, true
+		}
+	}
+	return RTCFileDto{}, false
+}
+
 // prepareFolderRemap computes folder remapping for unique folder names.
 // This finds unique names for root folders that already exist in saveDir.
 func (r *RTCReceiver) prepareFolderRemap() {
@@ -317,15 +351,8 @@ func (r *RTCReceiver) prepareFilesForReceive(acceptedIDs []string) map[string]st
 
 	fileTokens := make(map[string]string)
 	for _, id := range acceptedIDs {
-		// Find the file metadata first
-		var targetFile *RTCFileDto
-		for i := range r.files {
-			if r.files[i].ID == id {
-				targetFile = &r.files[i]
-				break
-			}
-		}
-		if targetFile == nil {
+		targetFile, ok := r.fileMetaByID(id)
+		if !ok {
 			slog.Warn("File ID not found in file list", "id", id)
 			continue
 		}
@@ -431,10 +458,12 @@ func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 		_ = f.Close()
 	}
 	r.fileWriters = make(map[string]*os.File)
+	r.fileBuffers = make(map[string]*bufio.Writer)
 	r.fileTokens = make(map[string]string)
 	r.filePaths = make(map[string]string)
 	r.fileHashers = make(map[string]hash.Hash)
 	r.files = nil
+	r.fileByID = make(map[string]RTCFileDto)
 	r.acceptedIDs = nil
 	r.currentFileID = ""
 	r.currentBytes = 0
@@ -797,10 +826,14 @@ func (r *RTCReceiver) handleFileList(_ interface{}, msgType string, data []byte)
 	}
 
 	r.files = fileListMsg.Files
+	r.rebuildFileIndex()
 	slog.Info("Received file list", "count", len(r.files))
 
+	// A large transfer can contain thousands of files. Keep the aggregate at
+	// Info and individual metadata at Debug so logging cannot become the
+	// many-file hot path that upstream LocalSend 1.18 explicitly removed.
 	for _, f := range r.files {
-		slog.Info("File", "name", f.FileName, "size", f.Size)
+		slog.Debug("File offered", "name", f.FileName, "size", f.Size)
 	}
 
 	// Select files to accept
@@ -1007,14 +1040,8 @@ func (r *RTCReceiver) startReceivingFile(header *RTCSendFileHeader) bool {
 		r.rejectFileTransfer(err.Error())
 		return false
 	}
-	var meta *RTCFileDto
-	for i := range r.files {
-		if r.files[i].ID == header.ID {
-			meta = &r.files[i]
-			break
-		}
-	}
-	if meta == nil {
+	meta, ok := r.fileMetaByID(header.ID)
+	if !ok {
 		r.rejectFileTransfer("unknown file ID")
 		return false
 	}
@@ -1038,9 +1065,24 @@ func (r *RTCReceiver) startReceivingFile(header *RTCSendFileHeader) bool {
 		r.rejectFileTransfer("failed to create file")
 		return false
 	}
+	if r.fileWriters == nil {
+		r.fileWriters = make(map[string]*os.File)
+	}
+	if r.fileBuffers == nil {
+		r.fileBuffers = make(map[string]*bufio.Writer)
+	}
+	if r.filePaths == nil {
+		r.filePaths = make(map[string]string)
+	}
+	if r.fileHashers == nil {
+		r.fileHashers = make(map[string]hash.Hash)
+	}
 	r.fileWriters[header.ID] = file
+	r.fileBuffers[header.ID] = bufio.NewWriterSize(file, utils.FileIOBufferSize)
 	r.filePaths[header.ID] = path
-	r.fileHashers[header.ID] = sha256.New()
+	if meta.SHA256 != "" {
+		r.fileHashers[header.ID] = sha256.New()
+	}
 
 	r.currentFileID = header.ID
 	r.currentBytes = 0
@@ -1076,38 +1118,43 @@ func (r *RTCReceiver) rejectFileTransfer(reason string) {
 
 // handleBinaryData writes received file data.
 func (r *RTCReceiver) handleBinaryData(data []byte) {
-	var expectedSize int64 = -1
-	for _, meta := range r.files {
-		if meta.ID == r.currentFileID {
-			expectedSize = meta.Size
-			break
-		}
-	}
-	if expectedSize < 0 || int64(len(data)) > expectedSize-r.currentBytes {
+	meta, ok := r.fileMetaByID(r.currentFileID)
+	if !ok || int64(len(data)) > meta.Size-r.currentBytes {
 		slog.Error("Received more data than declared", "fileId", r.currentFileID)
 		r.cleanupCurrentFile()
 		r.rejectFileTransfer("file exceeds declared size")
 		return
 	}
-	if f, ok := r.fileWriters[r.currentFileID]; ok {
-		n, err := f.Write(data)
-		if err != nil {
-			slog.Error("Failed to write data", "error", err)
-		} else {
-			r.currentBytes += int64(n)
-			slog.Debug("Wrote file data", "fileId", r.currentFileID, "bytes", n)
-			// Also write to hasher for checksum verification
-			if h, ok := r.fileHashers[r.currentFileID]; ok {
-				h.Write(data)
-			}
-		}
+
+	var (
+		n   int
+		err error
+	)
+	if buffered := r.fileBuffers[r.currentFileID]; buffered != nil {
+		n, err = buffered.Write(data)
+	} else if file := r.fileWriters[r.currentFileID]; file != nil {
+		// Compatibility fallback for tests/internal callers that install a raw
+		// writer directly instead of going through startReceivingFile.
+		n, err = file.Write(data)
 	} else {
 		slog.Warn("No file writer for current file", "fileId", r.currentFileID)
+		return
+	}
+	if err != nil {
+		slog.Error("Failed to write data", "error", err)
+		return
+	}
+
+	r.currentBytes += int64(n)
+	slog.Debug("Buffered file data", "fileId", r.currentFileID, "bytes", n)
+	if h := r.fileHashers[r.currentFileID]; h != nil && n > 0 {
+		_, _ = h.Write(data[:n])
 	}
 }
 
 func (r *RTCReceiver) cleanupCurrentFile() {
 	id := r.currentFileID
+	delete(r.fileBuffers, id) // discard buffered partial data; the file is removed below
 	if f := r.fileWriters[id]; f != nil {
 		_ = f.Close()
 	}
@@ -1128,69 +1175,61 @@ func (r *RTCReceiver) finishCurrentFile() {
 	}
 
 	fileID := r.currentFileID
-	success := true
+	meta, metaOK := r.fileMetaByID(fileID)
+	success := metaOK && r.currentBytes == meta.Size
 	var errorMsg *string
-
-	var expectedSize int64
-	for _, meta := range r.files {
-		if meta.ID == fileID {
-			expectedSize = meta.Size
-			break
-		}
-	}
-	if r.currentBytes != expectedSize {
-		success = false
+	if !success {
 		msg := "file size does not match declaration"
 		errorMsg = &msg
 	}
-	// Close and sync the file
-	if f, ok := r.fileWriters[fileID]; ok {
-		_ = f.Sync()
-		_ = f.Close()
-		delete(r.fileWriters, fileID)
 
-		// Verify checksum if provided
-		path, pathOk := r.filePaths[fileID]
-		if h, ok := r.fileHashers[fileID]; ok {
-			checksum := hex.EncodeToString(h.Sum(nil))
-			delete(r.fileHashers, fileID)
-
-			// Find expected checksum from metadata
-			var expectedChecksum string
-			var size int64
-			for _, f := range r.files {
-				if f.ID == fileID {
-					expectedChecksum = f.SHA256
-					size = f.Size
-					break
-				}
-			}
-
-			if !success || (expectedChecksum != "" && checksum != expectedChecksum) {
-				slog.Error("Checksum mismatch", "file", filepath.Base(path), "expected", expectedChecksum, "got", checksum)
-				success = false
-				if errorMsg == nil {
-					msg := "checksum mismatch"
-					errorMsg = &msg
-				}
-				// Delete corrupted file
-				if pathOk {
-					_ = os.Remove(path)
-				}
-			} else if pathOk {
-				savedFilename := filepath.Base(path)
-				slog.Info("File received successfully", "file", savedFilename)
-
-				// Call the onFileReceived callback
-				if r.onFileReceived != nil {
-					r.onFileReceived(savedFilename, size, "WebRTC")
-				}
-			}
+	// Flush the 512 KiB userspace buffer before acknowledging the file. Like
+	// upstream LocalSend, this does not fsync every file: forcing flash durability
+	// per file is disproportionately expensive on slow e-reader storage.
+	if buffered := r.fileBuffers[fileID]; buffered != nil {
+		if err := buffered.Flush(); err != nil {
+			slog.Error("Failed to flush file data", "fileId", fileID, "error", err)
+			success = false
+			msg := "failed to save file"
+			errorMsg = &msg
 		}
-		delete(r.filePaths, fileID)
+		delete(r.fileBuffers, fileID)
+	}
+	if file := r.fileWriters[fileID]; file != nil {
+		if err := file.Close(); err != nil {
+			slog.Error("Failed to close file", "fileId", fileID, "error", err)
+			success = false
+			msg := "failed to save file"
+			errorMsg = &msg
+		}
+		delete(r.fileWriters, fileID)
 	}
 
-	// Send response to sender (required by protocol)
+	path, pathOK := r.filePaths[fileID]
+	if h := r.fileHashers[fileID]; h != nil {
+		checksum := hex.EncodeToString(h.Sum(nil))
+		if metaOK && meta.SHA256 != "" && checksum != meta.SHA256 {
+			slog.Error("Checksum mismatch", "file", filepath.Base(path), "expected", meta.SHA256, "got", checksum)
+			success = false
+			msg := "checksum mismatch"
+			errorMsg = &msg
+		}
+	}
+	delete(r.fileHashers, fileID)
+
+	if !success {
+		if pathOK {
+			_ = os.Remove(path)
+		}
+	} else if pathOK {
+		savedFilename := filepath.Base(path)
+		slog.Info("File received successfully", "file", savedFilename)
+		if r.onFileReceived != nil {
+			r.onFileReceived(savedFilename, meta.Size, "WebRTC")
+		}
+	}
+	delete(r.filePaths, fileID)
+
 	response := RTCSendFileResponse{
 		ID:      fileID,
 		Success: success,
@@ -1212,6 +1251,7 @@ func (r *RTCReceiver) Close() error {
 	fileWriters := r.fileWriters
 	filePaths := r.filePaths
 	peer := r.peer
+	r.fileBuffers = nil
 	r.fileWriters = nil
 	r.peer = nil
 	r.mu.Unlock()

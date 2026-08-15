@@ -37,6 +37,8 @@ just test-go            # Go tests in Docker
 just test-go-race       # Go tests with race detector in Docker
 just test-go-integration # Go integration tests in Docker
 just test-official      # Cross-test Go with pinned official LocalSend Rust core
+just bench-transfer     # Transfer/file-I/O microbenchmarks in Docker
+just test-stress        # Opt-in 1000 x 1 MiB HTTP receive stress test
 just test-web           # Verify pinned LocalSend Web source contract + WebRTC compatibility tests
 just test-armcompat     # QEMU/seccomp audit of packaged legacy ARM binary
 just lint               # luacheck + golangci-lint in Docker

@@ -1,6 +1,8 @@
 package utils
 
 import (
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -467,4 +469,104 @@ func TestSanitizeForLog(t *testing.T) {
 			t.Errorf("expected %q, got %q", input, result)
 		}
 	})
+}
+
+type bufferSizingReader struct {
+	remaining int
+	maxRead   int
+}
+
+func (r *bufferSizingReader) Read(p []byte) (int, error) {
+	if len(p) > r.maxRead {
+		r.maxRead = len(p)
+	}
+	if r.remaining == 0 {
+		return 0, io.EOF
+	}
+	n := len(p)
+	if n > r.remaining {
+		n = r.remaining
+	}
+	for i := 0; i < n; i++ {
+		p[i] = byte(i)
+	}
+	r.remaining -= n
+	return n, nil
+}
+
+type writeOnlySink struct{ n int64 }
+
+func (w *writeOnlySink) Write(p []byte) (int, error) {
+	w.n += int64(len(p))
+	return len(p), nil
+}
+
+func TestCopyWithFileIOBuffer_UsesLocalSend512KiBBuffer(t *testing.T) {
+	if FileIOBufferSize != 512*1024 {
+		t.Fatalf("FileIOBufferSize = %d; want 524288", FileIOBufferSize)
+	}
+	reader := &bufferSizingReader{remaining: FileIOBufferSize + 1}
+	writer := &writeOnlySink{}
+	written, err := CopyWithFileIOBuffer(writer, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written != int64(FileIOBufferSize+1) {
+		t.Fatalf("written = %d; want %d", written, FileIOBufferSize+1)
+	}
+	if reader.maxRead != FileIOBufferSize {
+		t.Fatalf("largest read buffer = %d; want %d", reader.maxRead, FileIOBufferSize)
+	}
+}
+
+func BenchmarkSHA256ofFile_1MiB(b *testing.B) {
+	path := filepath.Join(b.TempDir(), "one-mib.bin")
+	if err := os.WriteFile(path, make([]byte, 1024*1024), 0644); err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(1024 * 1024)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := SHA256ofFile(path); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+type bypassCapableReader struct {
+	bufferSizingReader
+	writeToCalled bool
+}
+
+func (r *bypassCapableReader) WriteTo(io.Writer) (int64, error) {
+	r.writeToCalled = true
+	return 0, fmt.Errorf("WriterTo must not be used")
+}
+
+type bypassCapableWriter struct {
+	writeOnlySink
+	readFromCalled bool
+}
+
+func (w *bypassCapableWriter) ReadFrom(io.Reader) (int64, error) {
+	w.readFromCalled = true
+	return 0, fmt.Errorf("ReaderFrom must not be used")
+}
+
+func TestCopyWithFileIOBuffer_DoesNotBypassBufferViaFastPathInterfaces(t *testing.T) {
+	reader := &bypassCapableReader{bufferSizingReader: bufferSizingReader{remaining: FileIOBufferSize + 1}}
+	writer := &bypassCapableWriter{}
+	written, err := CopyWithFileIOBuffer(writer, reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if written != int64(FileIOBufferSize+1) {
+		t.Fatalf("written = %d; want %d", written, FileIOBufferSize+1)
+	}
+	if reader.writeToCalled || writer.readFromCalled {
+		t.Fatalf("copy bypassed supplied buffer: WriterTo=%v ReaderFrom=%v", reader.writeToCalled, writer.readFromCalled)
+	}
+	if reader.maxRead != FileIOBufferSize {
+		t.Fatalf("largest read buffer = %d; want %d", reader.maxRead, FileIOBufferSize)
+	}
 }

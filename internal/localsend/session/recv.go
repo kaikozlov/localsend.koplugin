@@ -1,9 +1,11 @@
 package session
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
+	"hash"
 	"io"
 	"log/slog"
 	"os"
@@ -299,15 +301,22 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 		}
 	}()
 
-	hasher := sha256.New()
+	// Coalesce small HTTP/TLS body chunks into larger filesystem writes. LocalSend
+	// 1.18 uses 512 KiB here specifically to improve throughput on slow receivers.
+	bufferedWriter := bufio.NewWriterSize(file, utils.FileIOBufferSize)
+	var hasher hash.Hash
+	var writer io.Writer = bufferedWriter
+	if expectedMeta.Checksum != "" {
+		hasher = sha256.New()
+		writer = io.MultiWriter(bufferedWriter, hasher)
+	}
 
-	// Wrap the reader to update lastActivity during transfer, keeping session alive
+	// Wrap the reader to update lastActivity during transfer, keeping session alive.
 	activeReader := &activityReader{r: fileData, lastActivity: &sess.lastActivity}
 
-	writer := io.MultiWriter(file, hasher)
 	expectedSize := expectedMeta.Size
 	transferStarted := time.Now()
-	written, err := io.Copy(writer, io.LimitReader(activeReader, expectedSize+1))
+	written, err := utils.CopyWithFileIOBuffer(writer, io.LimitReader(activeReader, expectedSize+1))
 	if err != nil {
 		slog.Error("Receive body failed",
 			"file", expectedMeta.Filename,
@@ -331,8 +340,17 @@ func (sess *RecvSession) SaveFile(saveToDir string, fileId string, token string,
 		)
 		return "", lserrors.ErrInvalidBody
 	}
+	if err := bufferedWriter.Flush(); err != nil {
+		slog.Error("Receive file flush failed",
+			"file", expectedMeta.Filename,
+			"session", sess.id,
+			"remote", sess.clientIP,
+			"error", err,
+		)
+		return "", lserrors.ErrFileIO
+	}
 
-	// calculate checksum if it's provided
+	// Calculate checksum only when the sender advertised one.
 	if expectedMeta.Checksum != "" {
 		checksum := hex.EncodeToString(hasher.Sum(nil))
 

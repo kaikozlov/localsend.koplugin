@@ -32,6 +32,32 @@ func ForEachAsync[T any](arr []T, wg *sync.WaitGroup, do func(value T)) {
 	}
 }
 
+// FileIOBufferSize matches LocalSend 1.18's physical file/hash I/O buffer.
+// It is intentionally larger than WebRTC's 16 KiB wire frame size.
+const FileIOBufferSize = 512 * 1024
+
+var fileIOBufferPool = sync.Pool{
+	New: func() interface{} {
+		buf := make([]byte, FileIOBufferSize)
+		return &buf
+	},
+}
+
+type readerOnly struct{ io.Reader }
+type writerOnly struct{ io.Writer }
+
+// CopyWithFileIOBuffer copies using the shared 512 KiB file-I/O buffer pool.
+// This amortizes read/write syscalls without forcing callers to allocate a large
+// scratch buffer for every file in a many-file transfer.
+func CopyWithFileIOBuffer(dst io.Writer, src io.Reader) (int64, error) {
+	bufPtr := fileIOBufferPool.Get().(*[]byte)
+	defer fileIOBufferPool.Put(bufPtr)
+	// Hide optional WriterTo/ReaderFrom methods so io.CopyBuffer cannot bypass
+	// the supplied buffer. In particular, *os.File may expose WriterTo on newer
+	// Go versions, which would otherwise make the 512 KiB hash buffer cosmetic.
+	return io.CopyBuffer(writerOnly{dst}, readerOnly{src}, *bufPtr)
+}
+
 func SHA256ofFile(fpath string) (string, error) {
 	fd, err := os.Open(fpath)
 	if err != nil {
@@ -40,7 +66,7 @@ func SHA256ofFile(fpath string) (string, error) {
 	defer func() { _ = fd.Close() }()
 
 	hasher := sha256.New()
-	_, err = io.Copy(hasher, fd)
+	_, err = CopyWithFileIOBuffer(hasher, fd)
 	if err != nil {
 		return "", err
 	}
