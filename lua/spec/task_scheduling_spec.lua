@@ -197,6 +197,44 @@ describe("LocalSend Task Scheduling", function()
             assert.equal(0, #helper.state.scheduled_tasks, "Should not schedule next check when not running")
         end)
 
+        it("holds KOReader awake only while the backend busy marker exists", function()
+            local instance = helper.create_instance()
+            local constants = require("localsend_constants")
+            local power = require("localsend_power")
+            local util = require("util")
+            local original_pathExists = util.pathExists
+            local original_read = util.readFromFile
+            finally(function()
+                util.pathExists = original_pathExists
+                util.readFromFile = original_read
+                power.release("receive")
+            end)
+
+            instance.isRunning = function()
+                return true
+            end
+            util.readFromFile = function()
+                return nil
+            end
+            util.pathExists = function(path)
+                if path == constants.TRANSFER_BUSY_FILE then
+                    return true
+                end
+                return original_pathExists(path)
+            end
+            instance:_checkSentinelFile()
+            assert.is_true(power.isHeld("receive"))
+
+            util.pathExists = function(path)
+                if path == constants.TRANSFER_BUSY_FILE then
+                    return false
+                end
+                return original_pathExists(path)
+            end
+            instance:_checkSentinelFile()
+            assert.is_false(power.isHeld("receive"))
+        end)
+
         it("should reschedule itself when server running", function()
             local instance = helper.create_instance()
 

@@ -375,3 +375,27 @@ func TestWaitDiscoveryRetry_Cancellation(t *testing.T) {
 		t.Fatal("canceled discovery retry reported success")
 	}
 }
+
+func TestLogTransfer_UpdatesNativeNotifyFileWithoutTransferLog(t *testing.T) {
+	fr := NewFileReceiver("test", t.TempDir(), false)
+	notifyPath := filepath.Join(t.TempDir(), "notify")
+	fr.SetTransferNotifyFile(notifyPath)
+
+	fr.LogTransfer("first.epub", 1, "sender")
+	first, err := os.ReadFile(notifyPath)
+	if err != nil {
+		t.Fatalf("read first notify value: %v", err)
+	}
+	if string(first) != "1\n" {
+		t.Fatalf("first notify value = %q; want %q", first, "1\\n")
+	}
+
+	fr.LogTransfer("second.epub", 1, "sender")
+	second, err := os.ReadFile(notifyPath)
+	if err != nil {
+		t.Fatalf("read second notify value: %v", err)
+	}
+	if string(second) != "2\n" {
+		t.Fatalf("second notify value = %q; want %q", second, "2\\n")
+	}
+}

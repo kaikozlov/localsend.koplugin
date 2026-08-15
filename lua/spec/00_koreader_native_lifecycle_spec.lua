@@ -43,6 +43,7 @@ describe("LocalSend native KOReader lifecycle", function()
         current_fm = fm
         assert.is_truthy(instance)
         assert.are.equal(get_test_data_dir(), instance.save_dir)
+        assert.are.equal(helper.runtime_plugin_dir(), instance._plugin_path)
         assert.are.equal("53317", tostring(instance.port))
     end)
 

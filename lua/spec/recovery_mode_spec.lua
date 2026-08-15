@@ -105,6 +105,24 @@ describe("Recovery Mode", function()
             assert.is_truthy(menu_items.localsend.text:match("Recovery"))
         end)
 
+        it("can be disabled safely even when a critical module failed before initialization", function()
+            package.loaded["localsend_state"] = nil
+            package.loaded["main"] = nil
+            _G.require = function(name)
+                if name == "localsend_state" then
+                    error("module 'localsend_state' not found")
+                end
+                return original_require(name)
+            end
+
+            LocalSend = require("main")
+            local instance = LocalSend:new({ ui = { menu = { registerToMainMenu = function() end } } })
+            assert.is_true(instance.recovery_mode)
+            assert.has_no.errors(function()
+                instance:stopPlugin()
+            end)
+        end)
+
         it("should enter recovery mode when localsend_server fails", function()
             package.loaded["localsend_server"] = nil
             package.loaded["main"] = nil

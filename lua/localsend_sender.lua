@@ -5,6 +5,7 @@
 local state = require("localsend_state")
 local constants = require("localsend_constants")
 local discovery = require("localsend_discovery")
+local power = require("localsend_power")
 
 local M = {}
 
@@ -76,22 +77,61 @@ function M.isSendInProgress()
     return state.ServerState.send_in_progress
 end
 
--- Check if a send process is still running
--- @return boolean True if send process is active
-local function isSendProcessRunning()
-    if not deps.util.pathExists(constants.SEND_PID_FILE) then
-        return false
+-- Read a numeric PID from a plugin-owned PID file.
+local function readPID(path)
+    if not deps.util.pathExists(path) then
+        return nil
     end
+    local content = deps.util.readFromFile(path)
+    return content and tonumber(content:match("^(%d+)")) or nil
+end
 
-    local content = deps.util.readFromFile(constants.SEND_PID_FILE)
-    if not content then
+local function isPIDRunning(path)
+    local pid = readPID(path)
+    return pid ~= nil and deps.util.pathExists("/proc/" .. pid)
+end
+
+local function isLocalSendSendProcess(pid)
+    if not pid or not deps.util.pathExists("/proc/" .. pid) then
         return false
     end
-    local pid = tonumber(content:match("^(%d+)"))
-    if not pid then
+    local cmdline = deps.util.readFromFile("/proc/" .. pid .. "/cmdline")
+    if not cmdline or cmdline == "" then
         return false
     end
-    return deps.util.pathExists("/proc/" .. pid)
+    local framed = "\0" .. cmdline .. "\0"
+    return cmdline:find("localsend", 1, true) ~= nil and framed:find("\0send\0", 1, true) ~= nil
+end
+
+local function isSendProcessRunning()
+    return isLocalSendSendProcess(readPID(constants.SEND_PID_FILE))
+end
+
+local function isSendSupervisorRunning()
+    return isPIDRunning(constants.SEND_SUPERVISOR_PID_FILE)
+end
+
+local function signalSendProcess(signal, allow_current_starting_child)
+    local pid = readPID(constants.SEND_PID_FILE)
+    local owned = isLocalSendSendProcess(pid)
+    if not owned and allow_current_starting_child then
+        -- Between fork and exec the PID is ours but its cmdline is still the
+        -- shell wrapper. Only trust that state for this in-memory active send
+        -- while its freshly-created supervisor is also alive.
+        owned = state.ServerState.send_in_progress and pid ~= nil and deps.util.pathExists("/proc/" .. pid) and isSendSupervisorRunning()
+    end
+    if not owned then
+        return false
+    end
+    os.execute(deps.util.shell_escape({ "kill", "-" .. signal, tostring(pid) }) .. " 2>/dev/null")
+    return true
+end
+
+local function cleanupSendFiles()
+    os.remove(constants.SEND_OUTPUT_FILE)
+    os.remove(constants.SEND_OUTPUT_FILE .. ".exit")
+    os.remove(constants.SEND_PID_FILE)
+    os.remove(constants.SEND_SUPERVISOR_PID_FILE)
 end
 
 -- Send a file to a device
@@ -120,8 +160,12 @@ function M.sendFile(device, filepath, pin, callback, options)
         return
     end
 
+    ServerState.send_op_id = (ServerState.send_op_id or 0) + 1
+    local op_id = ServerState.send_op_id
     ServerState.send_in_progress = true
     ServerState.send_cancelled = false -- Reset cancel flag
+    ServerState.send_cancel_started_at = nil
+    power.acquire("send")
     local send_started_at = os.time()
     local send_size = fileSize(filepath)
 
@@ -159,17 +203,35 @@ function M.sendFile(device, filepath, pin, callback, options)
     -- Add file path
     table.insert(args, filepath)
 
-    -- Run send in background, capture output
+    -- Old completed-send artifacts must not be mistaken for this operation's
+    -- child/supervisor/exit status. An actually-running send is already blocked
+    -- by ServerState above.
+    cleanupSendFiles()
+
+    -- A small supervisor records the exit status, but SEND_PID_FILE always
+    -- contains the actual Go process PID. `exec` makes that identity stable
+    -- across BusyBox/vendor shells so cancellation cannot merely kill a wrapper.
+    local exit_file = constants.SEND_OUTPUT_FILE .. ".exit"
     local cmd = string.format(
-        "(%s > %s 2>&1; echo $? > %s.exit) & echo $! > %s",
+        [[((exec %s > %s 2>&1) & child=$!; printf '%%s\n' "$child" > %s; wait "$child"; status=$?; printf '%%s\n' "$status" > %s) & echo $! > %s]],
         deps.util.shell_escape(args),
         deps.util.shell_escape({ constants.SEND_OUTPUT_FILE }),
-        constants.SEND_OUTPUT_FILE,
-        deps.util.shell_escape({ constants.SEND_PID_FILE })
+        deps.util.shell_escape({ constants.SEND_PID_FILE }),
+        deps.util.shell_escape({ exit_file }),
+        deps.util.shell_escape({ constants.SEND_SUPERVISOR_PID_FILE })
     )
 
     deps.logger.dbg("[LocalSend] Starting send:", cmd)
-    os.execute(cmd)
+    local launched = os.execute(cmd)
+    if launched ~= true and launched ~= 0 then
+        ServerState.send_in_progress = false
+        power.release("send")
+        cleanupSendFiles()
+        if callback then
+            callback(false, deps._("Failed to start send process"))
+        end
+        return
+    end
 
     -- Extract filename for display
     local _, filename = deps.util.splitFilePathName(filepath)
@@ -204,13 +266,40 @@ function M.sendFile(device, filepath, pin, callback, options)
 
     -- Poll for completion
     local function checkSendComplete()
-        -- Check if send was cancelled - show "Cancelled" not "Send failed"
+        if ServerState.send_op_id ~= op_id then
+            return
+        end
+        -- Check if send was cancelled - show "Cancelled" not "Send failed".
+        -- Wait until the real Go child is gone before releasing the power hold.
         if ServerState.send_cancelled then
+            local elapsed = os.time() - (ServerState.send_cancel_started_at or os.time())
+            if isSendProcessRunning() then
+                signalSendProcess(elapsed >= constants.SEND_CANCEL_GRACE_SECONDS and "KILL" or "TERM", true)
+                deps.UIManager:scheduleIn(constants.SEND_POLL_INTERVAL, checkSendComplete)
+                return
+            end
+            if isSendSupervisorRunning() and elapsed < constants.SEND_CANCEL_GRACE_SECONDS then
+                -- The supervisor may not have published the child PID yet, or
+                -- the child may still be between fork and exec. Give it a bounded
+                -- chance to reach the validated Go cmdline before cleanup.
+                deps.UIManager:scheduleIn(constants.SEND_POLL_INTERVAL, checkSendComplete)
+                return
+            end
+            if isPIDRunning(constants.SEND_PID_FILE) then
+                -- At the end of the bounded launch/cancel grace this is still a
+                -- child created by the current active supervisor, so stopping the
+                -- pre-exec wrapper is safe even though it never reached Go.
+                signalSendProcess("KILL", true)
+                deps.UIManager:scheduleIn(constants.SEND_POLL_INTERVAL, checkSendComplete)
+                return
+            end
+            -- The child is dead; a cancelled send does not consume exit status.
             local output = deps.util.readFromFile(constants.SEND_OUTPUT_FILE) or ""
             recordOutcome(false, deps._("Cancelled"), output, nil, "cancelled")
-            os.remove(constants.SEND_OUTPUT_FILE)
-            os.remove(constants.SEND_OUTPUT_FILE .. ".exit")
-            os.remove(constants.SEND_PID_FILE)
+            cleanupSendFiles()
+            ServerState.send_in_progress = false
+            ServerState.send_cancel_started_at = nil
+            power.release("send")
             deps.UIManager:show(deps.Notification:new({
                 text = deps._("Send cancelled"),
                 timeout = 2,
@@ -221,18 +310,18 @@ function M.sendFile(device, filepath, pin, callback, options)
             return
         end
 
-        if isSendProcessRunning() then
-            -- Still running, check again later
+        if isSendProcessRunning() or (isSendSupervisorRunning() and not deps.util.pathExists(exit_file)) then
+            -- Still running, or the supervisor is completing the exit-status handoff.
             deps.UIManager:scheduleIn(constants.SEND_POLL_INTERVAL, checkSendComplete)
             return
         end
 
         -- Send complete
         ServerState.send_in_progress = false
+        power.release("send")
 
         -- Check exit code
         local exit_code = nil
-        local exit_file = constants.SEND_OUTPUT_FILE .. ".exit"
         if deps.util.pathExists(exit_file) then
             local exit_content = deps.util.readFromFile(exit_file)
             if exit_content then
@@ -247,6 +336,7 @@ function M.sendFile(device, filepath, pin, callback, options)
         -- Clean up temp files
         os.remove(constants.SEND_OUTPUT_FILE)
         os.remove(constants.SEND_PID_FILE)
+        os.remove(constants.SEND_SUPERVISOR_PID_FILE)
 
         -- Determine success and message
         local success = (exit_code == 0)
@@ -525,26 +615,67 @@ function M.showFileSendFlow(instance, preset_file)
     scanAndSelectDevice(instance, onDeviceSelected)
 end
 
--- Cancel an in-progress send
+-- Cancel an in-progress send. The polling completion path owns final cleanup
+-- and the power hold so it cannot race an orphaned sender.
 function M.cancelSend()
     local ServerState = state.ServerState
-
-    ServerState.send_cancelled = true -- Signal to polling callback
-
-    if deps.util.pathExists(constants.SEND_PID_FILE) then
-        local content = deps.util.readFromFile(constants.SEND_PID_FILE)
-        if content then
-            local pid = tonumber(content:match("^(%d+)"))
-            if pid then
-                os.execute(deps.util.shell_escape({ "kill", "-9", tostring(pid) }) .. " 2>/dev/null")
-            end
-        end
-        os.remove(constants.SEND_PID_FILE)
+    if not ServerState.send_in_progress then
+        power.release("send")
+        return
     end
 
-    os.remove(constants.SEND_OUTPUT_FILE)
-    os.remove(constants.SEND_OUTPUT_FILE .. ".exit")
+    ServerState.send_cancelled = true
+    ServerState.send_cancel_started_at = ServerState.send_cancel_started_at or os.time()
+    signalSendProcess("TERM", true)
+end
+
+-- Synchronous teardown for PluginLoader/KOReader exit. No UIManager callback is
+-- allowed to be required after this returns.
+function M.stopActiveOperationsSync()
+    local ServerState = state.ServerState
+
+    discovery.stopActiveScanSync(deps.usleep)
+    ServerState.send_op_id = (ServerState.send_op_id or 0) + 1 -- invalidate poll callback
+
+    if ServerState.send_in_progress or isSendProcessRunning() or isSendSupervisorRunning() then
+        signalSendProcess("TERM", true)
+        for _ = 1, 20 do
+            if not isSendProcessRunning() then
+                break
+            end
+            if deps.usleep then
+                deps.usleep(50 * 1000)
+            end
+        end
+        if isSendProcessRunning() then
+            signalSendProcess("KILL", true)
+            for _ = 1, 10 do
+                if not isSendProcessRunning() then
+                    break
+                end
+                if deps.usleep then
+                    deps.usleep(50 * 1000)
+                end
+            end
+        end
+        -- Once the child is gone, the waiter should return immediately. Do not
+        -- signal a supervisor PID from /tmp: if it were stale/reused, that could
+        -- target an unrelated process.
+        for _ = 1, 10 do
+            if not isSendSupervisorRunning() then
+                break
+            end
+            if deps.usleep then
+                deps.usleep(50 * 1000)
+            end
+        end
+    end
+
+    cleanupSendFiles()
     ServerState.send_in_progress = false
+    ServerState.send_cancelled = false
+    ServerState.send_cancel_started_at = nil
+    power.release("send")
 end
 
 -- Categorize an error message from send output

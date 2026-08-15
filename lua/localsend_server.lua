@@ -4,6 +4,7 @@
 
 local state = require("localsend_state")
 local constants = require("localsend_constants")
+local power = require("localsend_power")
 
 local M = {}
 
@@ -174,6 +175,8 @@ function M.reconcileServerState(instance)
     if not running then
         ServerState.stop_in_progress = false
         deps.PluginShare.localsend_running = nil
+        power.release("receive")
+        os.remove(constants.TRANSFER_BUSY_FILE)
     else
         deps.PluginShare.localsend_running = true
     end
@@ -350,10 +353,11 @@ function M.start(instance, silent)
         table.insert(args, routing_path)
     end
 
-    -- Add on-transfer callback to write unique value to sentinel file for fast notification
-    -- Using date +%s%N gives nanosecond precision to avoid mtime resolution issues
-    table.insert(args, "--on-transfer")
-    table.insert(args, "date +%s%N > " .. constants.TRANSFER_NOTIFY_FILE)
+    -- Native integration markers avoid assumptions about vendor-shell date(1).
+    table.insert(args, "--notify-file")
+    table.insert(args, constants.TRANSFER_NOTIFY_FILE)
+    table.insert(args, "--busy-file")
+    table.insert(args, constants.TRANSFER_BUSY_FILE)
 
     -- Write signaling ID to file for self-filtering in scan (WebRTC mode only)
     if instance.use_webrtc then
@@ -366,7 +370,7 @@ function M.start(instance, silent)
 
     -- Build final command: capture backend logs, run in background, and save PID
     local cmd = string.format(
-        "(%s > %s 2>&1) & echo $! > %s",
+        "(exec %s > %s 2>&1) & echo $! > %s",
         deps.util.shell_escape(args),
         deps.util.shell_escape({ constants.SERVER_OUTPUT_FILE }),
         deps.util.shell_escape({ constants.PID_FILE })

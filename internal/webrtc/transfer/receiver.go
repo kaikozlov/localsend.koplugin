@@ -104,8 +104,11 @@ type RTCReceiver struct {
 	uniqueFiles   utils.UniqueFileAllocator
 
 	// Callbacks
-	onSelectFiles  func([]RTCFileDto) []string
-	onFileReceived func(filename string, size int64, sender string)
+	onSelectFiles   func([]RTCFileDto) []string
+	onFileReceived  func(filename string, size int64, sender string)
+	onTransferStart func()
+	onTransferDone  func()
+	transferActive  bool
 
 	// TrustedDeviceStore for PAIR flow persistence
 	trustedStore *storage.TrustedDeviceStore
@@ -186,6 +189,34 @@ func (r *RTCReceiver) OnFileReceived(handler func(filename string, size int64, s
 	r.onFileReceived = handler
 }
 
+// OnTransferActivity reports the lifetime of each actively-written WebRTC file.
+func (r *RTCReceiver) OnTransferActivity(start, done func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.onTransferStart = start
+	r.onTransferDone = done
+}
+
+func (r *RTCReceiver) markTransferStartedLocked() {
+	if r.transferActive {
+		return
+	}
+	r.transferActive = true
+	if r.onTransferStart != nil {
+		r.onTransferStart()
+	}
+}
+
+func (r *RTCReceiver) markTransferDoneLocked() {
+	if !r.transferActive {
+		return
+	}
+	r.transferActive = false
+	if r.onTransferDone != nil {
+		r.onTransferDone()
+	}
+}
+
 // SetSenderPublicKey sets the sender's public key for token verification.
 // This is typically obtained through the PAIR flow.
 func (r *RTCReceiver) SetSenderPublicKey(key crypto.VerifyingKey) {
@@ -244,6 +275,7 @@ func (r *RTCReceiver) cleanupPartialFilesLocked() {
 	r.fileBuffers = make(map[string]*bufio.Writer)
 	r.filePaths = make(map[string]string)
 	r.fileHashers = make(map[string]hash.Hash)
+	r.markTransferDoneLocked()
 	r.currentFileID = ""
 	r.currentBytes = 0
 }
@@ -1158,6 +1190,7 @@ func (r *RTCReceiver) startReceivingFile(header *RTCSendFileHeader) bool {
 		r.fileHashers[header.ID] = sha256.New()
 	}
 
+	r.markTransferStartedLocked()
 	r.currentFileID = header.ID
 	r.currentBytes = 0
 	r.state = stateReceivingFiles
@@ -1238,6 +1271,7 @@ func (r *RTCReceiver) cleanupCurrentFile() {
 	delete(r.fileWriters, id)
 	delete(r.filePaths, id)
 	delete(r.fileHashers, id)
+	r.markTransferDoneLocked()
 	r.currentFileID = ""
 	r.currentBytes = 0
 }
@@ -1315,6 +1349,7 @@ func (r *RTCReceiver) finishCurrentFile() {
 		}
 	}
 
+	r.markTransferDoneLocked()
 	r.currentFileID = ""
 	r.currentBytes = 0
 }

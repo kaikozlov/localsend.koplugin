@@ -24,24 +24,28 @@ import (
 )
 
 type FileReceiver struct {
-	cert              tls.Certificate
-	identity          models.DeviceInfo
-	webServer         *fiber.App
-	supportHttps      bool
-	sessman           *sess.RecvSessManager
-	saveToDir         string
-	discoverier       *localsend.Discoverer
-	discoveryMu       sync.Mutex
-	expectedPin       string
-	allowedExtensions []string         // New field for extension filtering
-	transferLogPath   string           // Path to transfer log file
-	transferLogFile   *os.File         // Persistent file handle for transfer log
-	onTransferCmd     string           // Shell command to run after each transfer
-	router            *ExtensionRouter // Routes files to different dirs by extension
-	listenAddr        string           // Custom listen address (defaults to constants.DefaultListenAddr)
+	cert               tls.Certificate
+	identity           models.DeviceInfo
+	webServer          *fiber.App
+	supportHttps       bool
+	sessman            *sess.RecvSessManager
+	saveToDir          string
+	discoverier        *localsend.Discoverer
+	discoveryMu        sync.Mutex
+	expectedPin        string
+	allowedExtensions  []string         // New field for extension filtering
+	transferLogPath    string           // Path to transfer log file
+	transferLogFile    *os.File         // Persistent file handle for transfer log
+	onTransferCmd      string           // Shell command to run after each transfer
+	transferNotifyPath string           // Tiny file rewritten after each completed transfer
+	onTransferStart    func()           // Optional process-integration activity callback
+	onTransferDone     func()           // Optional process-integration activity callback
+	transferNotifySeq  uint64           // Protected by configMu
+	router             *ExtensionRouter // Routes files to different dirs by extension
+	listenAddr         string           // Custom listen address (defaults to constants.DefaultListenAddr)
 
 	// configMu protects configuration fields that can be modified after creation
-	// (expectedPin, allowedExtensions, transferLogPath, transferLogFile, onTransferCmd, router, listenAddr)
+	// (expectedPin, allowedExtensions, transferLogPath, transferLogFile, onTransferCmd, transferNotifyPath, callbacks, router, listenAddr)
 	configMu sync.RWMutex
 
 	// PIN rate limiting (uses shared RateLimiter from utils package)
@@ -150,6 +154,29 @@ func (fr *FileReceiver) SetOnTransferCmd(cmd string) {
 	fr.onTransferCmd = cmd
 }
 
+// SetTransferNotifyFile configures a tiny file whose contents change after each
+// successful transfer. This avoids depending on vendor-shell date(1) features.
+func (fr *FileReceiver) SetTransferNotifyFile(path string) {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
+	fr.transferNotifyPath = path
+}
+
+// SetTransferActivityCallbacks reports the lifetime of an HTTP file write.
+// Callbacks must be lightweight and concurrency-safe: uploads may overlap.
+func (fr *FileReceiver) SetTransferActivityCallbacks(start, done func()) {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
+	fr.onTransferStart = start
+	fr.onTransferDone = done
+}
+
+func (fr *FileReceiver) transferActivityCallbacks() (func(), func()) {
+	fr.configMu.RLock()
+	defer fr.configMu.RUnlock()
+	return fr.onTransferStart, fr.onTransferDone
+}
+
 func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) {
 	fr.configMu.Lock()
 	defer fr.configMu.Unlock()
@@ -178,6 +205,13 @@ func (fr *FileReceiver) LogTransfer(filename string, size int64, sender string) 
 				slog.Warn("on-transfer command failed", "cmd", cmd, "error", err)
 			}
 		}()
+	}
+
+	if fr.transferNotifyPath != "" {
+		fr.transferNotifySeq++
+		if err := os.WriteFile(fr.transferNotifyPath, []byte(fmt.Sprintf("%d\n", fr.transferNotifySeq)), 0644); err != nil {
+			slog.Warn("Failed to update transfer notification file", "path", fr.transferNotifyPath, "error", err)
+		}
 	}
 
 	if fr.transferLogFile == nil {

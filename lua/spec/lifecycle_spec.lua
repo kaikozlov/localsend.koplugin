@@ -95,20 +95,21 @@ describe("LocalSend Lifecycle", function()
             end)
         end)
 
-        it("provides stopPlugin and stops a running receiver when disabled", function()
+        it("provides stopPlugin and synchronously stops a running receiver when disabled", function()
             local instance = helper.create_instance()
-            local stop_called = false
+            local stop_options
             instance.isRunning = function()
                 return true
             end
-            instance.stopServer = function()
-                stop_called = true
+            instance.stopServer = function(_, options)
+                stop_options = options
                 return true
             end
 
             assert.is_function(instance.stopPlugin)
             instance:stopPlugin()
-            assert.is_true(stop_called)
+            assert.is_table(stop_options)
+            assert.is_true(stop_options.sync, "PluginLoader return must mean the receiver is already stopped")
         end)
     end)
 
@@ -693,22 +694,68 @@ describe("LocalSend Lifecycle", function()
             LocalSend._ServerState.was_running_before_disconnect = false
         end)
 
-        it("onNetworkDisconnected should set was_running_before_disconnect=false if not running", function()
+        it("onNetworkDisconnecting stops while WiFi is still up and records restart intent", function()
             LocalSend = require("main")
-            LocalSend._ServerState.was_running_before_disconnect = true -- Previously set
-
+            LocalSend._ServerState.was_running_before_disconnect = false
             local instance = helper.create_instance()
+            local stop_options
+            instance.isRunning = function()
+                return true
+            end
+            instance.stopServer = function(_, options)
+                stop_options = options
+                return true
+            end
 
+            instance:_onNetworkDisconnecting()
+
+            assert.is_table(stop_options)
+            assert.is_true(stop_options.sync, "receiver must be gone before KOReader tears Wi-Fi down")
+            assert.is_true(LocalSend._ServerState.was_running_before_disconnect)
+        end)
+
+        it("onNetworkDisconnected preserves restart intent after pre-disconnect shutdown", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_disconnect = true
+            local instance = helper.create_instance()
             instance.isRunning = function()
                 return false
             end
 
             instance:_onNetworkDisconnected()
 
-            assert.is_false(
+            assert.is_true(
                 LocalSend._ServerState.was_running_before_disconnect,
-                "should clear was_running_before_disconnect when server not running"
+                "final disconnect must not erase the reason to restart on NetworkConnected"
             )
+        end)
+
+        it("defers reconnect restart until an in-progress stop has finished", function()
+            LocalSend = require("main")
+            LocalSend._ServerState.was_running_before_disconnect = true
+            LocalSend._ServerState.user_stopped = false
+            LocalSend._ServerState.stop_in_progress = true
+            local instance = helper.create_instance()
+            -- create_instance/init may reconcile state; restore the exact race.
+            LocalSend._ServerState.was_running_before_disconnect = true
+            LocalSend._ServerState.stop_in_progress = true
+            local start_called = false
+            instance.start = function()
+                start_called = true
+            end
+            helper.state.scheduled_tasks = {}
+
+            instance:_onNetworkConnected()
+
+            assert.is_false(start_called)
+            assert.is_true(LocalSend._ServerState.was_running_before_disconnect)
+            assert.equal(1, #helper.state.scheduled_tasks)
+            assert.equal(instance.resume_start_task, helper.state.scheduled_tasks[1].callback)
+
+            LocalSend._ServerState.stop_in_progress = false
+            helper.state.scheduled_tasks[1].callback()
+            assert.is_true(start_called)
+            assert.is_false(LocalSend._ServerState.was_running_before_disconnect)
         end)
 
         it("onNetworkConnected should restart server if was_running_before_disconnect", function()

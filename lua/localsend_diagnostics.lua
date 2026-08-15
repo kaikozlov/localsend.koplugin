@@ -380,8 +380,10 @@ local function buildDiagnosticRecvArgs(instance)
             table.insert(args, routing_path)
         end
     end
-    table.insert(args, "--on-transfer")
-    table.insert(args, "date +%s%N > " .. constants.TRANSFER_NOTIFY_FILE)
+    table.insert(args, "--notify-file")
+    table.insert(args, constants.TRANSFER_NOTIFY_FILE)
+    table.insert(args, "--busy-file")
+    table.insert(args, constants.TRANSFER_BUSY_FILE)
     if instance.use_webrtc then
         table.insert(args, "--signaling-id-file")
         table.insert(args, constants.SIGNALING_ID_FILE)

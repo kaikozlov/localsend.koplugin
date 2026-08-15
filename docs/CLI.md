@@ -169,6 +169,8 @@ required to send to or receive from the separately shipped LocalSend Web client.
 | `-w, --webrtc` | Enable WebRTC for LocalSend Web compatibility (default: true) |
 | `-l, --log` | Path to transfer log file (JSON lines format) |
 | `--on-transfer` | Shell command to run after each transfer |
+| `--notify-file` | Rewrite a small monotonic marker after each completed transfer (integration hook) |
+| `--busy-file` | Keep a marker present while one or more received files are actively being written (integration hook) |
 | `--config-dir` | Config directory for trusted devices |
 | `--require-pairing` | Require PAIR before accepting WebRTC transfers |
 | `--stun-servers` | Custom STUN servers for WebRTC |

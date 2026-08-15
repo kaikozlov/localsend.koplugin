@@ -243,6 +243,13 @@ describe("localsend_discovery", function()
             assert.is_true(constants.LEGACY_SCAN_TIMEOUT_SECONDS < constants.SCAN_MAX_POLL_DURATION)
         end)
 
+        it("execs the scan process so the PID file owns the actual Go child", function()
+            discovery.scanDevices(nil, { use_webrtc = false })
+            local command = helper.find_execute_call("localsend")
+            assert.is_not_nil(command)
+            assert.truthy(command:find("(exec", 1, true))
+        end)
+
         it("passes a separate legacy deadline and preserves the scan log", function()
             discovery.scanDevices(nil, { use_webrtc = false })
             local command = helper.find_execute_call("localsend")

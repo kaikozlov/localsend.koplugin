@@ -36,6 +36,7 @@ describe("localsend_sender", function()
             PathChooser = PathChooser,
             NetworkMgr = network_mgr or NetworkMgr,
             util = util,
+            usleep = function() end,
             json = json,
             logger = logger,
             T = T,
@@ -116,6 +117,16 @@ describe("localsend_sender", function()
             assert.truthy(cmd:match("%-%-https"))
         end)
 
+        it("records the actual Go child PID separately from the exit-status supervisor", function()
+            sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" }, "/test/file.epub", nil, nil)
+            local cmd = helper.state.os_execute_calls[1]
+            assert.truthy(cmd:find("exec", 1, true))
+            assert.truthy(cmd:find("child=$!", 1, true))
+            assert.truthy(cmd:find("/tmp/localsend_send.pid", 1, true))
+            assert.truthy(cmd:find("/tmp/localsend_send_supervisor.pid", 1, true))
+            assert.truthy(cmd:find('wait "$child"', 1, true))
+        end)
+
         it("builds correct command for WebRTC device", function()
             sender.sendFile({ type = "webrtc", id = "abc-123", alias = "Browser" }, "/test/file.epub", nil, nil)
             assert.is_true(#helper.state.os_execute_calls > 0)
@@ -177,11 +188,13 @@ describe("localsend_sender", function()
             sender = init_sender()
         end)
 
-        it("clears send_in_progress flag", function()
+        it("marks cancellation but keeps send_in_progress until the real child exits", function()
             local state = require("localsend_state")
             state.ServerState.send_in_progress = true
             sender.cancelSend()
-            assert.is_false(state.ServerState.send_in_progress)
+            assert.is_true(state.ServerState.send_cancelled)
+            assert.is_not_nil(state.ServerState.send_cancel_started_at)
+            assert.is_true(state.ServerState.send_in_progress, "cleanup belongs to the completion poll, not the cancel button")
         end)
     end)
 

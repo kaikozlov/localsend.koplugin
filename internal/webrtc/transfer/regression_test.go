@@ -718,3 +718,42 @@ func (n *noAckSendOps) SendDelimiter() error {
 	close(n.delimiterSent)
 	return nil
 }
+
+func TestRTCReceiver_TransferActivityBracketsActiveFileWrite(t *testing.T) {
+	r := NewRTCReceiver(nil, nil, "", t.TempDir())
+	starts, dones := 0, 0
+	r.OnTransferActivity(func() { starts++ }, func() { dones++ })
+	r.files = []RTCFileDto{{ID: "f", FileName: "active.bin", Size: 1}}
+	tokens := r.prepareFilesForReceive([]string{"f"})
+
+	if !r.startReceivingFile(&RTCSendFileHeader{ID: "f", Token: tokens["f"]}) {
+		t.Fatal("failed to start file")
+	}
+	if starts != 1 || dones != 0 {
+		t.Fatalf("activity after start = (%d starts, %d dones); want (1, 0)", starts, dones)
+	}
+
+	r.handleBinaryData([]byte{0xab})
+	r.finishCurrentFile()
+	if starts != 1 || dones != 1 {
+		t.Fatalf("activity after finish = (%d starts, %d dones); want (1, 1)", starts, dones)
+	}
+}
+
+func TestRTCReceiver_TransferActivityEndsWhenPartialFileIsAborted(t *testing.T) {
+	r := NewRTCReceiver(nil, nil, "", t.TempDir())
+	starts, dones := 0, 0
+	r.OnTransferActivity(func() { starts++ }, func() { dones++ })
+	r.files = []RTCFileDto{{ID: "f", FileName: "partial.bin", Size: 1}}
+	tokens := r.prepareFilesForReceive([]string{"f"})
+
+	if !r.startReceivingFile(&RTCSendFileHeader{ID: "f", Token: tokens["f"]}) {
+		t.Fatal("failed to start file")
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if starts != 1 || dones != 1 {
+		t.Fatalf("activity after Close = (%d starts, %d dones); want (1, 1)", starts, dones)
+	}
+}

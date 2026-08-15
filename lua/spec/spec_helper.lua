@@ -229,16 +229,25 @@ local function source_dir()
     return dir
 end
 
---- Materialise the installed plugin layout main.lua expects (binary + metadata).
--- main.lua computes its own install path from DataStorage and refuses to load
--- when the binary is absent, so we drop a harmless shim binary there. Tests
--- never actually run it (os.execute is spied).
+--- Materialise the installed plugin layout exactly where KOReader discovers it.
+-- Copy the Lua modules too: main.lua intentionally derives its runtime root from
+-- its own source path so external extra_plugin_paths work in production.
 function M.prepare_runtime_plugin()
     local plugin_dir = M.runtime_plugin_dir()
     local src = source_dir()
 
     _real_os_execute("rm -rf " .. shell_quote(plugin_dir) .. " && mkdir -p " .. shell_quote(plugin_dir))
-    _real_os_execute("cp " .. shell_quote(src .. "/_meta.lua") .. " " .. shell_quote(plugin_dir .. "/_meta.lua"))
+    _real_os_execute("cp " .. shell_quote(src) .. "/*.lua " .. shell_quote(plugin_dir) .. "/")
+    if file_exists(src .. "/locale/localsend.pot") then
+        _real_os_execute("cp -R " .. shell_quote(src .. "/locale") .. " " .. shell_quote(plugin_dir .. "/locale"))
+    end
+
+    -- Direct require("main") specs should exercise the same copied path that
+    -- PluginLoader does, rather than the source checkout beside spec/.
+    local runtime_pattern = plugin_dir .. "/?.lua"
+    if not package.path:find(runtime_pattern, 1, true) then
+        package.path = runtime_pattern .. ";" .. package.path
+    end
 
     local bin = assert(io.open(plugin_dir .. "/localsend", "w"))
     bin:write("#!/bin/sh\n")
@@ -279,6 +288,10 @@ end
 
 -- Modules whose top-level state must be fresh per instance.
 local function reset_loaded_plugin_modules()
+    local loaded_power = package.loaded["localsend_power"]
+    if loaded_power and loaded_power.releaseAll then
+        pcall(loaded_power.releaseAll)
+    end
     for _, name in ipairs({
         "main",
         "localsend_constants",
@@ -287,6 +300,7 @@ local function reset_loaded_plugin_modules()
         "localsend_transfers",
         "localsend_dialogs",
         "localsend_firewall",
+        "localsend_power",
         "localsend_server",
         "localsend_discovery",
         "localsend_sender",
@@ -321,9 +335,12 @@ function M.reset_localsend_state()
     s.last_sentinel_value = nil
     s.discovered_devices = {}
     s.scan_in_progress = false
+    s.scan_op_id = 0
     s.send_in_progress = false
+    s.send_op_id = 0
     s.scan_cancelled = false
     s.send_cancelled = false
+    s.send_cancel_started_at = nil
     s.server_op_id = 0
     s.stop_in_progress = false
     s.lifecycle_events = {}

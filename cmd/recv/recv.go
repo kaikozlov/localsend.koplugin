@@ -22,19 +22,21 @@ import (
 )
 
 var (
-	devname         string
-	savetodir       string
-	supportHttps    bool
-	pin             string
-	acceptExt       string
-	logFile         string
-	webrtcMode      bool
-	extRouting      string
-	onTransferCmd   string
-	configDir       string
-	requirePairing  bool
-	stunServers     []string
-	signalingIDFile string
+	devname            string
+	savetodir          string
+	supportHttps       bool
+	pin                string
+	acceptExt          string
+	logFile            string
+	webrtcMode         bool
+	extRouting         string
+	onTransferCmd      string
+	transferNotifyFile string
+	transferBusyFile   string
+	configDir          string
+	requirePairing     bool
+	stunServers        []string
+	signalingIDFile    string
 )
 
 const (
@@ -74,11 +76,16 @@ var Cmd = &cobra.Command{
 			}
 		}
 
+		activity := newTransferActivityMarker(transferBusyFile)
+		defer activity.Close()
+
 		// HTTP receiver (always start unless webrtc-only)
 		recver := lsrecv.NewFileReceiver(devname, savetodir, supportHttps)
 		recver.SetPIN(pin)
 		recver.SetTransferLog(logFile)
 		recver.SetOnTransferCmd(onTransferCmd)
+		recver.SetTransferNotifyFile(transferNotifyFile)
+		recver.SetTransferActivityCallbacks(activity.Begin, activity.End)
 
 		// Set extension router if configured
 		if router != nil {
@@ -124,7 +131,7 @@ var Cmd = &cobra.Command{
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				if err := startWebRTCReceiver(ctx, devname, savetodir, pin, allowedExts, extRoutes, recver.LogTransfer, configDir, requirePairing, stunServers); err != nil && ctx.Err() == nil {
+				if err := startWebRTCReceiver(ctx, devname, savetodir, pin, allowedExts, extRoutes, recver.LogTransfer, activity.Begin, activity.End, configDir, requirePairing, stunServers); err != nil && ctx.Err() == nil {
 					select {
 					case componentErr <- fmt.Errorf("WebRTC receiver stopped: %w", err):
 					default:
@@ -197,7 +204,7 @@ func waitReconnect(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
-func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, allowedExts []string, extRoutes map[string]string, logTransfer func(filename string, size int64, sender string), cfgDir string, reqPairing bool, customSTUN []string) error {
+func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, allowedExts []string, extRoutes map[string]string, logTransfer func(filename string, size int64, sender string), transferStart, transferDone func(), cfgDir string, reqPairing bool, customSTUN []string) error {
 	// Keep one cryptographic identity for the process lifetime. Only the
 	// timestamp token and server-assigned signaling ID change on reconnect.
 	key, _, err := crypto.GenerateKeyPairWithToken()
@@ -270,6 +277,7 @@ func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, a
 		if logTransfer != nil {
 			receiver.OnFileReceived(logTransfer)
 		}
+		receiver.OnTransferActivity(transferStart, transferDone)
 		receiver.OnSelectFiles(func(files []transfer.RTCFileDto) []string {
 			ids := make([]string, 0, len(files))
 			for _, f := range files {
@@ -335,6 +343,8 @@ func init() {
 	Cmd.PersistentFlags().BoolVarP(&webrtcMode, "webrtc", "w", true, "Listen for WebRTC offers via signaling server (v3 protocol)")
 	Cmd.PersistentFlags().StringVar(&extRouting, "ext-routing", "", "Path to extension routing config (JSON). Routes files to different directories by extension.")
 	Cmd.PersistentFlags().StringVar(&onTransferCmd, "on-transfer", "", "Shell command to run after each file transfer completes (WARNING: executed with full shell privileges via 'sh -c')")
+	Cmd.PersistentFlags().StringVar(&transferNotifyFile, "notify-file", "", "Rewrite this file after each completed transfer")
+	Cmd.PersistentFlags().StringVar(&transferBusyFile, "busy-file", "", "Create this file while one or more file writes are active")
 	Cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", "Config directory for trusted devices persistence")
 	Cmd.PersistentFlags().BoolVar(&requirePairing, "require-pairing", false, "Require PAIR before accepting WebRTC transfers from unknown devices")
 	Cmd.PersistentFlags().StringSliceVar(&stunServers, "stun-servers", nil, "Custom STUN servers for WebRTC (e.g., stun:stun.example.com:3478). Defaults to Google STUN servers if not set.")

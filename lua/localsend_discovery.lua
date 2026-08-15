@@ -4,6 +4,7 @@
 
 local state = require("localsend_state")
 local constants = require("localsend_constants")
+local power = require("localsend_power")
 
 local M = {}
 
@@ -66,22 +67,30 @@ function M.parseDevices(json_str)
     return devices
 end
 
--- Check if a scan process is still running
--- @return boolean True if scan is in progress
-local function isScanProcessRunning()
-    if not deps.util.pathExists(constants.SCAN_OUTPUT_FILE .. ".pid") then
-        return false
+local function readScanPID()
+    local pid_file = constants.SCAN_OUTPUT_FILE .. ".pid"
+    if not deps.util.pathExists(pid_file) then
+        return nil
     end
+    local content = deps.util.readFromFile(pid_file)
+    return content and tonumber(content:match("^(%d+)")) or nil
+end
 
-    local content = deps.util.readFromFile(constants.SCAN_OUTPUT_FILE .. ".pid")
-    if not content then
+local function isLocalSendScanProcess(pid)
+    if not pid or not deps.util.pathExists("/proc/" .. pid) then
         return false
     end
-    local pid = tonumber(content:match("^(%d+)"))
-    if not pid then
+    local cmdline = deps.util.readFromFile("/proc/" .. pid .. "/cmdline")
+    if not cmdline or cmdline == "" then
         return false
     end
-    return deps.util.pathExists("/proc/" .. pid)
+    local framed = "\0" .. cmdline .. "\0"
+    return cmdline:find("localsend", 1, true) ~= nil and framed:find("\0scan\0", 1, true) ~= nil
+end
+
+-- Check if the PID file still owns the actual LocalSend scan child.
+local function isScanProcessRunning()
+    return isLocalSendScanProcess(readScanPID())
 end
 
 -- Start device discovery scan in background
@@ -97,9 +106,16 @@ function M.scanDevices(callback, options)
         return
     end
 
+    ServerState.scan_op_id = (ServerState.scan_op_id or 0) + 1
+    local op_id = ServerState.scan_op_id
     ServerState.scan_in_progress = true
     ServerState.scan_cancelled = false -- Reset cancel flag
     ServerState.scan_start_time = os.time() -- Track start time for timeout guard
+    power.acquire("scan")
+    -- Ensure the PID/output observed by this op cannot belong to a completed
+    -- prior scan. The diagnostics log is overwritten by the launch redirection.
+    os.remove(constants.SCAN_OUTPUT_FILE)
+    os.remove(constants.SCAN_OUTPUT_FILE .. ".pid")
 
     -- Build scan command
     local args = {
@@ -134,7 +150,7 @@ function M.scanDevices(callback, options)
 
     -- Keep structured JSON on stdout and preserve discovery diagnostics separately.
     local cmd = string.format(
-        "(%s > %s 2> %s) & echo $! > %s",
+        "(exec %s > %s 2> %s) & echo $! > %s",
         deps.util.shell_escape(args),
         deps.util.shell_escape({ constants.SCAN_OUTPUT_FILE }),
         deps.util.shell_escape({ constants.SCAN_LOG_FILE }),
@@ -146,10 +162,14 @@ function M.scanDevices(callback, options)
 
     -- Poll for completion
     local function checkScanComplete()
+        if ServerState.scan_op_id ~= op_id then
+            return
+        end
         -- Check if scan was cancelled - exit without calling callback
         if ServerState.scan_cancelled then
             os.remove(constants.SCAN_OUTPUT_FILE)
             os.remove(pid_file)
+            power.release("scan")
             return
         end
 
@@ -162,16 +182,20 @@ function M.scanDevices(callback, options)
             deps.UIManager:scheduleIn(constants.SCAN_POLL_INTERVAL, checkScanComplete)
             return
         end
+        local launch_pid = readScanPID()
+        if not timed_out and elapsed < 2 and launch_pid and deps.util.pathExists("/proc/" .. launch_pid) then
+            -- The freshly-launched child may still be between fork and exec on
+            -- a slow e-reader; don't mistake that tiny window for completion.
+            deps.UIManager:scheduleIn(constants.SCAN_POLL_INTERVAL, checkScanComplete)
+            return
+        end
 
         if timed_out then
             deps.logger.warn("[LocalSend] Scan timed out after", elapsed, "seconds, killing process")
             -- Kill the hung process
-            local content = deps.util.readFromFile(pid_file)
-            if content then
-                local pid = tonumber(content:match("^(%d+)"))
-                if pid then
-                    os.execute(deps.util.shell_escape({ "kill", "-9", tostring(pid) }) .. " 2>/dev/null")
-                end
+            local pid = readScanPID()
+            if isLocalSendScanProcess(pid) then
+                os.execute(deps.util.shell_escape({ "kill", "-KILL", tostring(pid) }) .. " 2>/dev/null")
             end
         end
 
@@ -188,6 +212,7 @@ function M.scanDevices(callback, options)
         -- Clean up temp files
         os.remove(constants.SCAN_OUTPUT_FILE)
         os.remove(pid_file)
+        power.release("scan")
 
         -- Call completion callback
         if callback then
@@ -205,20 +230,55 @@ function M.cancelScan()
     local pid_file = constants.SCAN_OUTPUT_FILE .. ".pid"
 
     ServerState.scan_cancelled = true -- Signal to polling callback
+    ServerState.scan_op_id = (ServerState.scan_op_id or 0) + 1 -- Invalidate scheduled callbacks
 
-    if deps.util.pathExists(pid_file) then
-        local content = deps.util.readFromFile(pid_file)
-        if content then
-            local pid = tonumber(content:match("^(%d+)"))
-            if pid then
-                os.execute(deps.util.shell_escape({ "kill", "-9", tostring(pid) }) .. " 2>/dev/null")
-            end
-        end
-        os.remove(pid_file)
+    local pid = readScanPID()
+    if isLocalSendScanProcess(pid) then
+        os.execute(deps.util.shell_escape({ "kill", "-KILL", tostring(pid) }) .. " 2>/dev/null")
     end
+    os.remove(pid_file)
 
     os.remove(constants.SCAN_OUTPUT_FILE)
     ServerState.scan_in_progress = false
+    power.release("scan")
+end
+
+-- Synchronously stop an active scan for PluginLoader/KOReader teardown.
+function M.stopActiveScanSync(usleep)
+    local ServerState = state.ServerState
+    local pid_file = constants.SCAN_OUTPUT_FILE .. ".pid"
+    ServerState.scan_cancelled = true
+    ServerState.scan_op_id = (ServerState.scan_op_id or 0) + 1
+
+    local pid = readScanPID()
+    if isLocalSendScanProcess(pid) then
+        os.execute(deps.util.shell_escape({ "kill", "-TERM", tostring(pid) }) .. " 2>/dev/null")
+        for _ = 1, 20 do
+            if not isLocalSendScanProcess(pid) then
+                break
+            end
+            if usleep then
+                usleep(50 * 1000)
+            end
+        end
+        if isLocalSendScanProcess(pid) then
+            os.execute(deps.util.shell_escape({ "kill", "-KILL", tostring(pid) }) .. " 2>/dev/null")
+            for _ = 1, 10 do
+                if not isLocalSendScanProcess(pid) then
+                    break
+                end
+                if usleep then
+                    usleep(50 * 1000)
+                end
+            end
+        end
+    end
+
+    os.remove(constants.SCAN_OUTPUT_FILE)
+    os.remove(pid_file)
+    ServerState.scan_in_progress = false
+    power.release("scan")
+    return not isLocalSendScanProcess(pid)
 end
 
 -- Get cached devices from last scan

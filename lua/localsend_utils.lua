@@ -3,6 +3,47 @@
 
 local M = {}
 
+-- Resolve the directory containing a Lua module from debug.getinfo().source.
+-- KOReader may load external plugins from arbitrary extra_plugin_paths, so the
+-- plugin must not assume it lives below DataStorage:getFullDataDir()/plugins.
+function M.moduleDir(source, fallback)
+    if type(source) == "string" then
+        local path = source:match("^@(.+)/[^/]+$")
+        if path and path ~= "" then
+            return path
+        end
+    end
+    return fallback
+end
+
+-- Select a complete plugin installation. Normally source_dir wins, including
+-- KOReader extra_plugin_paths. The fallback only wins when source_dir is a
+-- partial/symlinked development tree without the shipped binary.
+function M.resolvePluginDir(source_dir, fallback, path_exists)
+    path_exists = path_exists or function()
+        return false
+    end
+    if source_dir and path_exists(source_dir .. "/localsend") then
+        return source_dir
+    end
+    if fallback and path_exists(fallback .. "/localsend") then
+        return fallback
+    end
+    return source_dir or fallback
+end
+
+-- Follow KOReader's own home-folder precedence for an unset receive path.
+function M.defaultSaveDir(device, settings, data_dir)
+    local configured_home = settings and settings:readSetting("home_dir")
+    if type(configured_home) == "string" and configured_home ~= "" then
+        return configured_home
+    end
+    if device and type(device.home_dir) == "string" and device.home_dir ~= "" then
+        return device.home_dir
+    end
+    return data_dir
+end
+
 -- Validate that a path is safe for shell operations
 function M.isValidPath(path)
     if path == nil or path == "" then

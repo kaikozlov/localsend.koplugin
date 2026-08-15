@@ -9,6 +9,48 @@ describe("LocalSend Utils", function()
         lsutils = require("localsend_utils")
     end)
 
+    describe("KOReader path integration", function()
+        it("derives the module directory from the loaded Lua source", function()
+            assert.equal("/custom/plugins/localsend.koplugin", lsutils.moduleDir("@/custom/plugins/localsend.koplugin/main.lua", "/fallback"))
+        end)
+
+        it("prefers a complete extra-plugin-path installation", function()
+            local exists = function(path)
+                return path == "/extra/localsend.koplugin/localsend" or path == "/canonical/localsend.koplugin/localsend"
+            end
+            assert.equal("/extra/localsend.koplugin", lsutils.resolvePluginDir("/extra/localsend.koplugin", "/canonical/localsend.koplugin", exists))
+        end)
+
+        it("falls back only when the source tree is incomplete", function()
+            local exists = function(path)
+                return path == "/canonical/localsend.koplugin/localsend"
+            end
+            assert.equal(
+                "/canonical/localsend.koplugin",
+                lsutils.resolvePluginDir("/source/localsend.koplugin", "/canonical/localsend.koplugin", exists)
+            )
+        end)
+
+        it("uses configured KOReader home before Device.home_dir", function()
+            local settings = {
+                readSetting = function(_, key)
+                    return key == "home_dir" and "/configured/home" or nil
+                end,
+            }
+            assert.equal("/configured/home", lsutils.defaultSaveDir({ home_dir = "/device/home" }, settings, "/data"))
+        end)
+
+        it("uses Device.home_dir then data dir as fallbacks", function()
+            local settings = {
+                readSetting = function()
+                    return nil
+                end,
+            }
+            assert.equal("/device/home", lsutils.defaultSaveDir({ home_dir = "/device/home" }, settings, "/data"))
+            assert.equal("/data", lsutils.defaultSaveDir({}, settings, "/data"))
+        end)
+    end)
+
     describe("isValidPath", function()
         it("rejects nil path", function()
             assert.is_false(lsutils.isValidPath(nil))

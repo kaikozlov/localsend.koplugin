@@ -44,12 +44,13 @@ local lsrouting = tryRequire("localsend_routing")
 local lstransfers = tryRequire("localsend_transfers")
 local lsdialogs = tryRequire("localsend_dialogs")
 local lsfirewall = tryRequire("localsend_firewall")
+local lspower = tryRequire("localsend_power")
 local lsserver = tryRequire("localsend_server")
 local lssender = tryRequire("localsend_sender")
 local lsdiagnostics = tryRequire("localsend_diagnostics")
 
 -- Check if any critical optional modules failed
-if not state or not lsserver then
+if not state or not lsserver or not lspower then
     RECOVERY_MODE = true
     logger.warn("[LocalSend] Entering recovery mode due to missing modules")
     for _, err in ipairs(module_load_errors) do
@@ -65,7 +66,10 @@ local validateDeviceName = lsutils.validateDeviceName
 local data_dir = DataStorage:getFullDataDir()
 local cache_dir = data_dir .. "/cache"
 local ca_bundle_path = data_dir .. "/data/ca-bundle.crt"
-local plugin_path = data_dir .. "/plugins/localsend.koplugin"
+local fallback_plugin_path = data_dir .. "/plugins/localsend.koplugin"
+local source_plugin_path = lsutils.moduleDir(debug.getinfo(1, "S").source, fallback_plugin_path)
+local plugin_path = lsutils.resolvePluginDir(source_plugin_path, fallback_plugin_path, util.pathExists)
+local default_save_dir = lsutils.defaultSaveDir(Device, G_reader_settings, data_dir)
 
 -- ServerState is now in localsend_state.lua module (nil in recovery mode)
 local ServerState = state and state.ServerState or nil
@@ -129,6 +133,8 @@ local LocalSend = WidgetContainer:extend({
     recovery_mode = RECOVERY_MODE,
     reinstall_required = REINSTALL_REQUIRED,
     module_load_errors = module_load_errors,
+    _plugin_path = plugin_path, -- actual PluginLoader source root; useful to diagnostics/tests
+    _default_save_dir = default_save_dir,
 })
 
 -- =============================================================================
@@ -157,7 +163,7 @@ function LocalSend:init()
     -- and diagnostics diverge from the port actually in use. The legacy key is
     -- still cleared by deletePluginSettings.
     self.port = constants.DEFAULT_PORT
-    self.save_dir = G_reader_settings:readSetting("LocalSend_save_dir") or constants.DEFAULT_SAVE_DIR
+    self.save_dir = G_reader_settings:readSetting("LocalSend_save_dir") or default_save_dir
     self.device_name = G_reader_settings:readSetting("LocalSend_device_name") or ""
     self.use_https = G_reader_settings:nilOrTrue("LocalSend_use_https")
     self.autostart = G_reader_settings:isTrue("LocalSend_autostart")
@@ -270,6 +276,7 @@ function LocalSend:init()
             PathChooser = PathChooser,
             NetworkMgr = NetworkMgr,
             util = util,
+            usleep = ffiutil.usleep,
             json = json,
             logger = logger,
             T = T,
@@ -314,7 +321,7 @@ function LocalSend:init()
         self:_checkSentinelFile()
     end
     self.resume_start_task = function()
-        self:start(true) -- silent=true to suppress notification
+        self:_restartWhenReady()
     end
     self.check_update_task = function()
         self:_autoCheckForUpdates()
@@ -338,10 +345,7 @@ function LocalSend:init()
         tostring(ServerState.was_running_before_suspend)
     )
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
-        if NetworkMgr:isConnected() then
-            ServerState.was_running_before_suspend = false
-            self:start(true)
-        end
+        self:_restartWhenReady()
     elseif self.autostart and not ServerState.user_stopped then
         self:_startWhenConnected(true) -- silent - no WiFi prompt (will start silently if connected)
     end
@@ -402,6 +406,9 @@ end
 -- Note: onCloseWidget is called when switching books, so we don't stop the server there.
 -- Instead, we stop on Exit event which is only triggered when KOReader actually closes.
 function LocalSend:onExit()
+    if not self.recovery_mode and lssender and lssender.stopActiveOperationsSync then
+        lssender.stopActiveOperationsSync()
+    end
     if self:isRunning() then
         -- On full KOReader teardown the UIManager-driven (async) stop may never
         -- run its scheduled follow-ups, so stop synchronously to guarantee the
@@ -411,22 +418,27 @@ function LocalSend:onExit()
     else
         self:closeFirewall()
     end
+    if lspower then
+        lspower.releaseAll()
+    end
 end
 
--- Called by PluginLoader when the plugin is disabled or unloaded.
--- @param force boolean Passed by PluginLoader:stopPluginInstance(instance, force).
---   A forced stop kills the receiver synchronously (via onExit) so it is dead
---   before returning. Normal disable keeps the async path since UIManager is
---   still running and we don't want to block the UI.
-function LocalSend:stopPlugin(force)
-    -- Drop context-menu buttons on disable/unload so a stale closure cannot linger.
+-- Called by PluginLoader when the plugin is disabled or unloaded. PluginLoader
+-- has no asynchronous completion protocol: returning means external resources
+-- are considered released. Match KOReader's built-in SSH plugin and finish the
+-- receiver teardown before returning on both normal and forced stops.
+function LocalSend:stopPlugin(_force)
     self:_unregisterFileDialogButton()
-    if force then
-        self:onExit()
-    elseif self:isRunning() then
-        self:stopServer()
+    if not self.recovery_mode and lssender and lssender.stopActiveOperationsSync then
+        lssender.stopActiveOperationsSync()
+    end
+    if self:isRunning() then
+        self:stopServer({ sync = true })
     else
         self:closeFirewall()
+    end
+    if lspower then
+        lspower.releaseAll()
     end
 end
 
@@ -448,6 +460,7 @@ function LocalSend:registerEvents()
         self.onResume = self._onResume
         self.onEnterStandby = self._onEnterStandby
         self.onLeaveStandby = self._onLeaveStandby
+        self.onNetworkDisconnecting = self._onNetworkDisconnecting
         self.onNetworkDisconnected = self._onNetworkDisconnected
         self.onNetworkConnected = self._onNetworkConnected
         logger.dbg("[LocalSend] Event handlers registered")
@@ -457,10 +470,30 @@ function LocalSend:registerEvents()
         self.onResume = nil
         self.onEnterStandby = nil
         self.onLeaveStandby = nil
+        self.onNetworkDisconnecting = nil
         self.onNetworkDisconnected = nil
         self.onNetworkConnected = nil
         logger.dbg("[LocalSend] Event handlers unregistered")
     end
+end
+
+-- Complete a suspend/network restart only when the prior asynchronous stop has
+-- actually finished. Fast Wi-Fi reconnects can otherwise race stop_in_progress
+-- and lose the only restart request.
+function LocalSend:_restartWhenReady()
+    local should_restart = ServerState.was_running_before_suspend or ServerState.was_running_before_disconnect
+    if not should_restart or ServerState.user_stopped or not NetworkMgr:isConnected() then
+        return
+    end
+    if ServerState.stop_in_progress then
+        self:_unscheduleResume()
+        UIManager:scheduleIn(0.1, self.resume_start_task)
+        return
+    end
+
+    ServerState.was_running_before_suspend = false
+    ServerState.was_running_before_disconnect = false
+    self:start(true)
 end
 
 -- Event handler implementations (underscore-prefixed for dynamic registration)
@@ -473,10 +506,14 @@ function LocalSend:_onSuspend()
     self:_unscheduleResume()
     self:_unscheduleUpdateCheck()
 
+    if not self.recovery_mode and lssender and lssender.stopActiveOperationsSync then
+        lssender.stopActiveOperationsSync()
+    end
+
     if self:isRunning() then
         ServerState.was_running_before_suspend = true
-        self:stopServer()
-        logger.dbg("[LocalSend] Server stopped for suspend")
+        self:stopServer({ sync = true })
+        logger.dbg("[LocalSend] Server stopped synchronously for suspend")
     else
         ServerState.was_running_before_suspend = false
     end
@@ -493,12 +530,8 @@ function LocalSend:_onResume()
     end
 
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
-        if NetworkMgr:isConnected() then
-            -- Network already available (fast reconnect or didn't disconnect)
-            ServerState.was_running_before_suspend = false
-            self:start(true) -- silent=true to suppress notification
-        else
-            -- Network not ready yet - keep flag set and let _onNetworkConnected handle it
+        self:_restartWhenReady()
+        if not NetworkMgr:isConnected() then
             logger.dbg("[LocalSend] Waiting for network to restart server")
         end
     end
@@ -511,10 +544,14 @@ function LocalSend:_onEnterStandby()
     -- Unschedule polling before stopping
     self:_unschedulePolling()
 
+    if not self.recovery_mode and lssender and lssender.stopActiveOperationsSync then
+        lssender.stopActiveOperationsSync()
+    end
+
     if self:isRunning() then
         ServerState.was_running_before_suspend = true
-        self:stopServer()
-        logger.dbg("[LocalSend] Server stopped for standby")
+        self:stopServer({ sync = true })
+        logger.dbg("[LocalSend] Server stopped synchronously for standby")
     else
         ServerState.was_running_before_suspend = false
     end
@@ -524,42 +561,51 @@ function LocalSend:_onLeaveStandby()
     logger.dbg("[LocalSend] onLeaveStandby")
     state.recordLifecycle("standby_leave", "network_connected=" .. tostring(NetworkMgr:isConnected()))
     if ServerState.was_running_before_suspend and not ServerState.user_stopped then
-        if NetworkMgr:isConnected() then
-            -- Network already available
-            ServerState.was_running_before_suspend = false
-            self:start(true) -- silent=true to suppress notification
-        else
-            -- Network not ready yet - keep flag set and let _onNetworkConnected handle it
+        self:_restartWhenReady()
+        if not NetworkMgr:isConnected() then
             logger.dbg("[LocalSend] Waiting for network to restart server")
         end
     end
 end
 
--- Handle network disconnect (e.g., user manually turns off WiFi)
+-- KOReader broadcasts NetworkDisconnecting before it tears Wi-Fi down. Stop the
+-- receiver while its sockets still exist; NetworkDisconnected remains a fallback
+-- for platforms that only emit the final event.
+function LocalSend:_onNetworkDisconnecting()
+    logger.dbg("[LocalSend] onNetworkDisconnecting")
+    state.recordLifecycle("network_disconnecting")
+    if not self.recovery_mode and lssender and lssender.stopActiveOperationsSync then
+        lssender.stopActiveOperationsSync()
+    end
+    if self:isRunning() then
+        ServerState.was_running_before_disconnect = true
+        self:stopServer({ sync = true })
+        logger.dbg("[LocalSend] Server stopped before network disconnect")
+    end
+end
+
 function LocalSend:_onNetworkDisconnected()
     logger.dbg("[LocalSend] onNetworkDisconnected")
     state.recordLifecycle("network_disconnected")
     if self:isRunning() then
+        -- Fallback for a platform/event path that skipped NetworkDisconnecting.
         ServerState.was_running_before_disconnect = true
-        self:stopServer()
-        logger.dbg("[LocalSend] Server stopped due to network disconnect")
-    else
-        ServerState.was_running_before_disconnect = false
+        self:stopServer({ sync = true })
+        logger.dbg("[LocalSend] Server stopped after network disconnect fallback")
     end
+    -- Do not clear was_running_before_disconnect here: when the preflight event
+    -- already stopped us, that flag is the only reason NetworkConnected knows
+    -- it should restart the receiver.
 end
 
 -- Handle network reconnect
 function LocalSend:_onNetworkConnected()
     logger.dbg("[LocalSend] onNetworkConnected")
     state.recordLifecycle("network_connected")
-    -- Restart if we were waiting for network after suspend OR after disconnect
     local should_restart = (ServerState.was_running_before_suspend or ServerState.was_running_before_disconnect) and not ServerState.user_stopped
     if should_restart then
-        -- Clear both flags
-        ServerState.was_running_before_suspend = false
-        ServerState.was_running_before_disconnect = false
-        self:start(true) -- silent=true to suppress notification
-        logger.dbg("[LocalSend] Server restarted after network reconnect")
+        self:_restartWhenReady()
+        logger.dbg("[LocalSend] Server restart requested after network reconnect")
     end
 end
 
@@ -620,8 +666,10 @@ function LocalSend:deletePluginSettings()
         constants.PID_FILE,
         constants.TRANSFER_LOG_FILE,
         constants.TRANSFER_NOTIFY_FILE,
+        constants.TRANSFER_BUSY_FILE,
         constants.SIGNALING_ID_FILE,
         constants.SEND_PID_FILE,
+        constants.SEND_SUPERVISOR_PID_FILE,
         constants.SEND_OUTPUT_FILE,
         constants.LAST_SEND_EVIDENCE_FILE,
         constants.SCAN_OUTPUT_FILE,
@@ -648,9 +696,12 @@ function LocalSend:deletePluginSettings()
         ServerState.telemetry_cleaned = false
         ServerState.discovered_devices = {}
         ServerState.scan_in_progress = false
+        ServerState.scan_op_id = 0
         ServerState.send_in_progress = false
+        ServerState.send_op_id = 0
         ServerState.scan_cancelled = false
         ServerState.send_cancelled = false
+        ServerState.send_cancel_started_at = nil
         ServerState.server_op_id = 0
         ServerState.stop_in_progress = false
         ServerState.lifecycle_events = {}

@@ -20,11 +20,14 @@ M.ServerState = {
     -- Send-related state
     discovered_devices = {}, -- Cached devices from last scan
     scan_in_progress = false, -- True while device scan is running
+    scan_op_id = 0, -- Invalidates stale scheduled scan callbacks
     send_in_progress = false, -- True while file send is in progress
+    send_op_id = 0, -- Invalidates stale scheduled send callbacks
 
     -- Cancellation flags (checked by polling callbacks to avoid stale callbacks)
     scan_cancelled = false, -- True when scan was cancelled by user
     send_cancelled = false, -- True when send was cancelled by user
+    send_cancel_started_at = nil, -- Start of graceful sender cancellation window
 
     -- Server lifecycle operation tracking (prevents stale async callbacks)
     server_op_id = 0, -- Monotonic operation counter for start/stop transitions

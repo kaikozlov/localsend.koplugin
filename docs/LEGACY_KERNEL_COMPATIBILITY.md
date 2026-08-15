@@ -381,7 +381,7 @@ fatal without fallbacks. The overlay retries `epoll_create` (250) and `eventfd`
 (351), then applies close-on-exec and nonblocking state with separate `fcntl`
 calls. Descriptors are closed if setup fails.
 
-The KOReader plugin also always configures an on-transfer shell callback.
+The standalone CLI still supports the optional `--on-transfer` shell callback, but the KOReader plugin no longer depends on it: KOReader integration uses the native `--notify-file` and `--busy-file` hooks, avoiding vendor-shell command portability in the normal receive path.
 Go's process path uses `pipe2` (359) for the child status pipe and `dup3` (358)
 for descriptor remapping; Go 1.26 has no pre-2.6.27 fallback. The overlay retries
 legacy `pipe` (42), applies `FD_CLOEXEC` while `ForkLock` is held, and retries

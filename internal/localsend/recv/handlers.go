@@ -210,6 +210,16 @@ func (fr *FileReceiver) uploadHandler(c fiber.Ctx) error {
 		bodyReader = bytes.NewReader(c.Body())
 	}
 
+	// Report activity only after the upload has passed session/file validation.
+	// KOReader uses this to inhibit standby while bytes are actively written.
+	onStart, onDone := fr.transferActivityCallbacks()
+	if onStart != nil {
+		onStart()
+	}
+	if onDone != nil {
+		defer onDone()
+	}
+
 	// Pass client IP for validation per protocol spec Section 4.2
 	savedFilename, err := session.SaveFile(saveDir, fileId, token, c.IP(), bodyReader)
 	if err != nil {

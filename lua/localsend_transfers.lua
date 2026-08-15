@@ -4,6 +4,7 @@
 
 local state = require("localsend_state")
 local constants = require("localsend_constants")
+local power = require("localsend_power")
 
 local M = {}
 
@@ -106,6 +107,8 @@ function M.clearTransferLog()
     local ServerState = state.ServerState
     os.remove(constants.TRANSFER_LOG_FILE)
     os.remove(constants.TRANSFER_NOTIFY_FILE) -- Also remove sentinel file
+    os.remove(constants.TRANSFER_BUSY_FILE)
+    power.release("receive")
     ServerState.last_log_position = 0 -- Reset position tracking when log is cleared
     ServerState.transfer_count = 0 -- Reset cached count
     ServerState.last_sentinel_value = nil -- Reset sentinel tracking
@@ -148,6 +151,7 @@ function M.checkSentinelFile(instance)
 
     if not instance:isRunning() then
         -- Server died unexpectedly - clean up state so UI reflects reality
+        power.release("receive")
         if state.recordLifecycle then
             state.recordLifecycle("server_died_unexpectedly")
         end
@@ -156,7 +160,15 @@ function M.checkSentinelFile(instance)
         return
     end
 
-    -- Read sentinel file content (tiny file with just a timestamp)
+    -- The Go receiver owns this marker while at least one file is actively
+    -- being written. Keep KOReader awake only for that bounded interval.
+    if deps.util.pathExists(constants.TRANSFER_BUSY_FILE) then
+        power.acquire("receive")
+    else
+        power.release("receive")
+    end
+
+    -- Read sentinel file content (tiny monotonically changing value)
     local content = deps.util.readFromFile(constants.TRANSFER_NOTIFY_FILE)
     if content then
         content = content:gsub("%s+", "") -- Trim whitespace
