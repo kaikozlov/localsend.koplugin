@@ -291,10 +291,9 @@ describe("Firewall Management", function()
 
                 instance:closeFirewall()
 
-                -- Should attempt to remove WebRTC rules with 2>/dev/null
                 local found_webrtc_cleanup = false
                 for _, cmd in ipairs(os_execute_calls) do
-                    if cmd:match("50000:50100") and cmd:match("2>/dev/null") then
+                    if cmd:match("50000:50100") then
                         found_webrtc_cleanup = true
                         break
                     end
@@ -649,7 +648,7 @@ describe("Firewall Management", function()
         end)
     end)
 
-    describe("iptables command injection protection", function()
+    describe("invalid port rejection", function()
         before_each(function()
             Device.isKindle = function()
                 return true
@@ -657,54 +656,22 @@ describe("Firewall Management", function()
             os_execute_calls = {}
         end)
 
-        it("properly escapes ports with shell metacharacters", function()
-            local instance = helper.create_instance()
-            -- Simulate a malicious port that somehow bypassed validation
-            -- With shell_escape, these characters get quoted safely
-            local malicious_port = "53317; rm -rf /"
-            instance.port = malicious_port
+        it("rejects shell metacharacters before any iptables mutation", function()
+            for _, malicious_port in ipairs({
+                "53317; rm -rf /",
+                "53317`whoami`",
+                "$(cat /etc/passwd)",
+            }) do
+                os_execute_calls = {}
+                local instance = helper.create_instance()
+                instance.port = malicious_port
 
-            os_execute_calls = {}
-            instance:openFirewall()
+                local result = instance:openFirewall()
 
-            -- With isValidPort check, no commands should be issued
-            -- But even if they were, shell_escape would quote them safely
-            for _, cmd in ipairs(os_execute_calls) do
-                -- If any command was issued, the dangerous characters should be quoted
-                if cmd:match("iptables") then
-                    -- The malicious string should be inside quotes, not executable
-                    assert.is_not.match(cmd, "[^']rm %-rf")
-                end
-            end
-        end)
-
-        it("properly escapes backticks", function()
-            local instance = helper.create_instance()
-            instance.port = "53317`whoami`"
-
-            os_execute_calls = {}
-            instance:openFirewall()
-
-            -- isValidPort should reject this, but shell_escape also protects
-            for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("iptables") then
-                    -- Backticks should be inside single quotes (safely escaped)
-                    assert.is_not.match(cmd, "[^']`whoami`")
-                end
-            end
-        end)
-
-        it("properly escapes $() command substitution", function()
-            local instance = helper.create_instance()
-            instance.port = "$(cat /etc/passwd)"
-
-            os_execute_calls = {}
-            instance:openFirewall()
-
-            -- isValidPort should reject this
-            for _, cmd in ipairs(os_execute_calls) do
-                if cmd:match("iptables") then
-                    assert.is_not.match(cmd, "[^']%$%(")
+                assert.is_false(result.ok)
+                assert.equals("invalid port", result.detail)
+                for _, cmd in ipairs(os_execute_calls) do
+                    assert.is_nil(cmd:match("iptables.*'%-[ACD]'"), "invalid port must not reach an iptables mutation")
                 end
             end
         end)

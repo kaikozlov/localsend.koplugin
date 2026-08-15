@@ -347,8 +347,7 @@ function M.reset_localsend_state()
     -- Fields the reset above missed. telemetry_cleaned gates a once-per-session
     -- init in main.lua; without clearing it the first spec to flip it sticks it
     -- on for the rest of the suite. last_send / scan_start_time are set at
-    -- runtime and also leak across specs. (polling_generation is intentionally
-    -- not touched — it is deprecated and caching_spec asserts it stays nil.)
+    -- runtime and also leak across specs.
     s.telemetry_cleaned = false
     s.last_send = nil
     s.scan_start_time = nil

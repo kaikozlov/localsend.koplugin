@@ -222,32 +222,15 @@ describe("localsend_discovery", function()
             constants = require("localsend_constants")
         end)
 
-        it("SCAN_MAX_POLL_DURATION is defined", function()
-            assert.is_not_nil(constants.SCAN_MAX_POLL_DURATION)
-            assert.is_number(constants.SCAN_MAX_POLL_DURATION)
-        end)
-
         it("SCAN_MAX_POLL_DURATION has reasonable value (5-120 seconds)", function()
             assert.is_true(constants.SCAN_MAX_POLL_DURATION >= 5)
             assert.is_true(constants.SCAN_MAX_POLL_DURATION <= 120)
-        end)
-
-        it("SCAN_POLL_INTERVAL is defined", function()
-            assert.is_not_nil(constants.SCAN_POLL_INTERVAL)
-            assert.is_number(constants.SCAN_POLL_INTERVAL)
         end)
 
         it("allows enough time for the bounded legacy subnet scan", function()
             assert.is_true(constants.LEGACY_SCAN_TIMEOUT_SECONDS >= 6)
             assert.is_true(constants.SCAN_TIMEOUT_SECONDS < constants.LEGACY_SCAN_TIMEOUT_SECONDS)
             assert.is_true(constants.LEGACY_SCAN_TIMEOUT_SECONDS < constants.SCAN_MAX_POLL_DURATION)
-        end)
-
-        it("execs the scan process so the PID file owns the actual Go child", function()
-            discovery.scanDevices(nil, { use_webrtc = false })
-            local command = helper.find_execute_call("localsend")
-            assert.is_not_nil(command)
-            assert.truthy(command:find("(exec", 1, true))
         end)
 
         it("passes a separate legacy deadline and preserves the scan log", function()

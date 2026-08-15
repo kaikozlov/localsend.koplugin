@@ -123,6 +123,31 @@ describe("Recovery Mode", function()
             end)
         end)
 
+        it("keeps the reinstall action usable when a critical module fails", function()
+            package.loaded["localsend_state"] = nil
+            package.loaded["main"] = nil
+
+            _G.require = function(name)
+                if name == "localsend_state" then
+                    error("module 'localsend_state' not found")
+                end
+                return original_require(name)
+            end
+
+            LocalSend = require("main")
+            local instance = LocalSend:new({ ui = { menu = { registerToMainMenu = function() end } } })
+            local update_called = false
+            instance.checkForUpdates = function()
+                update_called = true
+            end
+
+            local menu_items = {}
+            instance:addToMainMenu(menu_items)
+            menu_items.localsend.sub_item_table[4].callback()
+
+            assert.is_true(update_called)
+        end)
+
         it("should enter recovery mode when localsend_server fails", function()
             package.loaded["localsend_server"] = nil
             package.loaded["main"] = nil
@@ -291,27 +316,6 @@ describe("Recovery Mode", function()
             })
 
             assert.is_true(menu_registered, "Menu should be registered in recovery mode")
-        end)
-
-        it("should initialize update module in recovery mode", function()
-            package.loaded["localsend_state"] = nil
-            package.loaded["main"] = nil
-
-            local fail_require = function(name)
-                if name == "localsend_state" then
-                    error("module 'localsend_state' not found")
-                end
-                return original_require(name)
-            end
-            _G.require = fail_require
-
-            LocalSend = require("main")
-
-            -- The fact that we can create an instance means update module was initialized
-            local instance = helper.create_instance()
-
-            -- checkForUpdates should be available
-            assert.is_function(instance.checkForUpdates)
         end)
     end)
 end)
@@ -645,10 +649,6 @@ describe("Reinstall marker file", function()
     end)
 
     describe("REINSTALL_MARKER_FILE constant", function()
-        it("should be defined", function()
-            assert.is_truthy(lsupdate.REINSTALL_MARKER_FILE)
-        end)
-
         it("should be .reinstall_required", function()
             assert.equal(".reinstall_required", lsupdate.REINSTALL_MARKER_FILE)
         end)
@@ -673,13 +673,6 @@ describe("Reinstall required menu warning", function()
     -- which is complex. These tests verify the _buildMainMenu function behavior.
 
     describe("_buildMainMenu", function()
-        it("should be a function", function()
-            LocalSend = require("main")
-            local instance = helper.create_instance()
-
-            assert.is_function(instance._buildMainMenu)
-        end)
-
         it("should return a table of menu items", function()
             LocalSend = require("main")
             local instance = helper.create_instance()
@@ -697,7 +690,6 @@ describe("Reinstall required menu warning", function()
             local menu = instance:_buildMainMenu()
 
             -- First item should be Start/Stop server (text_func based)
-            assert.is_function(menu[1].text_func)
             local text = menu[1].text_func()
             assert.is_truthy(text:match("server") or text:match("Start") or text:match("Stop"))
         end)

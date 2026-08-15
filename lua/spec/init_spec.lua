@@ -285,7 +285,6 @@ describe("onDispatcherRegisterActions", function()
             end
             local action = registered_actions["send_file_localsend"]
             local handler_name = "on" .. action.event
-            assert.is_function(instance[handler_name])
             instance[handler_name](instance)
             assert.is_true(called)
         end)
@@ -298,7 +297,6 @@ describe("onDispatcherRegisterActions", function()
             end
             local action = registered_actions["send_current_book_localsend"]
             local handler_name = "on" .. action.event
-            assert.is_function(instance[handler_name])
             instance[handler_name](instance)
             assert.is_true(called)
         end)

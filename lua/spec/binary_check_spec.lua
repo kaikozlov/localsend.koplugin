@@ -39,13 +39,10 @@ describe("Binary Existence Check", function()
 
             assert.is_table(result)
             assert.is_nil(result.disabled, "Missing binary must not disable the updater needed for recovery")
-            assert.is_function(result.init)
-            assert.is_function(result.checkForUpdates)
         end)
 
         it("marks instances as recovery mode when binary is missing", function()
             local result = require("main")
-            assert.is_function(result.new)
             local instance = result:new({
                 ui = { menu = { registerToMainMenu = function() end } },
             })
@@ -65,13 +62,5 @@ describe("Binary Existence Check", function()
             assert.is_not_nil(result.name, "Module should have name field")
             assert.equal("LocalSend", result.name)
         end)
-
-        local required_methods = { "init", "start", "isRunning" }
-        for _, method in ipairs(required_methods) do
-            it("has " .. method .. " method", function()
-                local result = require("main")
-                assert.is_function(result[method], "Module should have " .. method .. " method")
-            end)
-        end
     end)
 end)

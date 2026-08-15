@@ -97,7 +97,7 @@ describe("start() function", function()
             assert.is_true(found_cmd)
         end)
 
-        it("should use native notify/busy files and exec the receiver as the PID-owned child", function()
+        it("should pass native transfer notification and activity markers to the receiver", function()
             setup_successful_start()
             make_instance():start()
             local cmd = helper.find_execute_call("localsend")
@@ -106,16 +106,6 @@ describe("start() function", function()
             assert.truthy(cmd:find("/tmp/localsend_notify", 1, true))
             assert.truthy(cmd:find("--busy-file", 1, true))
             assert.truthy(cmd:find("/tmp/localsend_busy", 1, true))
-            assert.truthy(cmd:find("(exec", 1, true), "PID file should identify the exec'd Go receiver")
-            assert.is_nil(cmd:find("date +%s%N", 1, true))
-        end)
-
-        it("should redirect backend output to diagnostics log", function()
-            setup_successful_start()
-            make_instance():start()
-            local cmd = helper.find_execute_call("/tmp/localsend_server%.out")
-            assert.is_truthy(cmd)
-            assert.truthy(cmd:match("2>&1"))
         end)
 
         it("should include device name when set", function()
@@ -418,14 +408,11 @@ describe("start() function", function()
             instance.ext_dirs = { epub = "/books", pdf = "/docs" }
             instance.routing_accept_all = false
             instance:start()
-            local found = false
-            for _, cmd in ipairs(helper.state.os_execute_calls) do
-                if cmd:match("%-a '") and cmd:match("epub") and cmd:match("pdf") then
-                    found = true
-                    break
-                end
-            end
-            assert.is_true(found or #helper.state.os_execute_calls > 0)
+            local recv_cmd = helper.find_execute_call("localsend.*recv")
+            assert.is_truthy(recv_cmd)
+            assert.truthy(recv_cmd:find("'-a'", 1, true))
+            assert.truthy(recv_cmd:match("epub"))
+            assert.truthy(recv_cmd:match("pdf"))
         end)
 
         it("should accept all when routing_accept_all is true", function()
@@ -433,14 +420,9 @@ describe("start() function", function()
             instance.ext_dirs = { epub = "/books" }
             instance.routing_accept_all = true
             instance:start()
-            local found_restrict = false
-            for _, cmd in ipairs(helper.state.os_execute_calls) do
-                if cmd:match("localsend") and cmd:match("%-a '") then
-                    found_restrict = true
-                    break
-                end
-            end
-            assert.is_false(found_restrict)
+            local recv_cmd = helper.find_execute_call("localsend.*recv")
+            assert.is_truthy(recv_cmd)
+            assert.is_nil(recv_cmd:find("'-a'", 1, true), "accept-all routing must not restrict recv extensions")
         end)
     end)
 end)

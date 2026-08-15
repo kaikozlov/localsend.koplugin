@@ -208,7 +208,6 @@ msgstr[1] "zi-many"
             I18n.translate("i18n:sentinel:singular")
             local gt = require("gettext")
             assert.is_table(gt)
-            assert.is_function(gt.ngettext)
             -- Core gettext is still a callable table, unaffected by us.
             assert.are.equal("core-unchanged", gt("core-unchanged"))
         end)

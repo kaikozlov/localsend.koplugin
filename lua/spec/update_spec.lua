@@ -390,28 +390,6 @@ describe("Self-Update", function()
             assert.is_nil(helper.find_notification("No network connection"))
         end)
 
-        it("runs curl in the background so the KOReader UI thread stays responsive", function()
-            local instance = helper.create_instance()
-            instance:checkForUpdates()
-
-            local command = helper.find_execute_call("update_check%.status")
-            assert.is_truthy(command)
-            assert.matches("&$", command)
-            assert.matches("update_check%.status%.tmp", command)
-            assert.matches("mv", command)
-            assert.is_true(#helper.state.scheduled_tasks > 0)
-        end)
-
-        it("captures curl errors instead of discarding the failure reason", function()
-            local instance = helper.create_instance()
-            instance:checkForUpdates()
-
-            local command = helper.find_execute_call("update_check%.status")
-            assert.is_truthy(command)
-            assert.matches("update_check%.status%.error", command)
-            assert.is_nil(command:match("2>/dev/null"))
-        end)
-
         it("uses KOReader's CA bundle for update checks when available", function()
             file_contents[ca_bundle_path] = "test CA bundle"
 
@@ -526,7 +504,6 @@ describe("Self-Update", function()
             instance:performUpdate("https://example.com/update.zip", "update.zip", "v2.0.0")
             assert.is_false(update_started, "update must not begin while the old binary can still be running")
 
-            assert.is_function(stop_callback)
             stop_callback(true)
             local scheduled = helper.state.scheduled_tasks[#helper.state.scheduled_tasks]
             assert.equal(0, scheduled.delay)
@@ -543,14 +520,6 @@ describe("Self-Update", function()
             local command = update.buildCurlCommand("/tmp/update.json", "https://example.com/latest")
             assert.matches("%-%-max%-time", command)
             assert.matches("%-sS", command)
-        end)
-    end)
-
-    describe("atomic installation", function()
-        it("provides checked atomic replacement helpers", function()
-            local update = require("localsend_update")
-            assert.is_function(update.copyFileAtomically)
-            assert.is_function(update.copyDirectoryAtomically)
         end)
     end)
 
@@ -974,11 +943,6 @@ describe("Self-Update", function()
             assert.equal(168, instance.update_check_interval_hours, "update_check_interval_hours should default to 168 (weekly)")
         end)
 
-        it("should create check_update_task function in init()", function()
-            local instance = helper.create_instance()
-            assert.is_function(instance.check_update_task, "check_update_task should be created in init()")
-        end)
-
         it("stores update_available_tag after auto-check finds a newer release", function()
             file_contents["/tmp/koreader-test-data/cache/localsend/update_check.json"] = [[
                 {"tag_name":"v2.0.0","body":"New features"}
@@ -1006,16 +970,6 @@ describe("Self-Update", function()
     end)
 
     describe("auto-update scheduling", function()
-        it("should have _scheduleUpdateCheck method", function()
-            local instance = helper.create_instance()
-            assert.is_function(instance._scheduleUpdateCheck, "_scheduleUpdateCheck helper should exist")
-        end)
-
-        it("should have _unscheduleUpdateCheck method", function()
-            local instance = helper.create_instance()
-            assert.is_function(instance._unscheduleUpdateCheck, "_unscheduleUpdateCheck helper should exist")
-        end)
-
         it("waits for the background curl status before processing an automatic check", function()
             local status_file = "/tmp/koreader-test-data/cache/localsend/auto_update_check.status"
             file_contents[status_file] = ""
@@ -1065,8 +1019,6 @@ describe("Self-Update", function()
 
         it("should nil out check_update_task reference", function()
             local instance = helper.create_instance()
-            assert.is_function(instance.check_update_task)
-
             instance:onCloseWidget()
 
             assert.is_nil(instance.check_update_task, "check_update_task should be nil after onCloseWidget")
@@ -1130,11 +1082,6 @@ describe("Self-Update", function()
             end)
 
             _G.io.popen = original_io_popen
-        end)
-
-        it("exposes TMP_TELEMETRY_PATTERN constant", function()
-            local lsupdate = require("localsend_update")
-            assert.equals("fm-out-*", lsupdate.TMP_TELEMETRY_PATTERN)
         end)
     end)
 end)

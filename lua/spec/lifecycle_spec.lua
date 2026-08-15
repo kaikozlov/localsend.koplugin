@@ -37,19 +37,11 @@ describe("LocalSend Lifecycle", function()
     end)
 
     describe("onExit vs onCloseWidget behavior", function()
-        it("should have onExit method defined", function()
-            local instance = helper.create_instance()
-
-            assert.is_function(instance.onExit, "onExit should be defined for cleanup on KOReader exit")
-        end)
-
-        it("should have onCloseWidget method that cleans up tasks but NOT server", function()
+        it("onCloseWidget should not stop the persistent receiver", function()
             local instance = helper.create_instance()
 
             -- onCloseWidget SHOULD exist to clean up scheduled Lua tasks
             -- But it should NOT stop the server (server persists across document switches)
-            assert.is_function(instance.onCloseWidget, "onCloseWidget should be defined for task cleanup")
-
             -- Verify it doesn't stop the server
             local stop_called = false
             instance.stopServer = function()
@@ -106,7 +98,6 @@ describe("LocalSend Lifecycle", function()
                 return true
             end
 
-            assert.is_function(instance.stopPlugin)
             instance:stopPlugin()
             assert.is_table(stop_options)
             assert.is_true(stop_options.sync, "PluginLoader return must mean the receiver is already stopped")
@@ -335,15 +326,6 @@ describe("LocalSend Lifecycle", function()
     end)
 
     describe("suspend/resume behavior", function()
-        -- Parametrized method existence tests
-        local lifecycle_methods = { "_onSuspend", "_onResume", "_onEnterStandby", "_onLeaveStandby" }
-        for _, method in ipairs(lifecycle_methods) do
-            it("should have " .. method .. " implementation defined", function()
-                local instance = helper.create_instance()
-                assert.is_function(instance[method])
-            end)
-        end
-
         it("onSuspend should be registered when autostart is enabled", function()
             helper.state.settings["LocalSend_autostart"] = true
             package.loaded["main"] = nil -- Force reload
@@ -650,26 +632,6 @@ describe("LocalSend Lifecycle", function()
     -- Network disconnect/reconnect handling
     -- =========================================================================
     describe("network disconnect/reconnect behavior", function()
-        it("should have _onNetworkDisconnected implementation defined", function()
-            LocalSend = require("main")
-            local instance = helper.create_instance()
-
-            assert.is_function(instance._onNetworkDisconnected, "_onNetworkDisconnected implementation should be defined to handle WiFi loss")
-        end)
-
-        it("should have _onNetworkConnected implementation defined", function()
-            LocalSend = require("main")
-            local instance = helper.create_instance()
-
-            assert.is_function(instance._onNetworkConnected, "_onNetworkConnected implementation should be defined to handle WiFi reconnection")
-        end)
-
-        it("ServerState should have was_running_before_disconnect field", function()
-            LocalSend = require("main")
-
-            assert.is_not_nil(LocalSend._ServerState.was_running_before_disconnect, "ServerState should track was_running_before_disconnect")
-        end)
-
         it("onNetworkDisconnected should stop server if running", function()
             LocalSend = require("main")
             LocalSend._ServerState.was_running_before_disconnect = false
@@ -824,13 +786,6 @@ describe("LocalSend Lifecycle", function()
     -- onFlushSettings lifecycle handler
     -- =========================================================================
     describe("onFlushSettings lifecycle", function()
-        it("should have onFlushSettings method defined", function()
-            LocalSend = require("main")
-            local instance = helper.create_instance()
-
-            assert.is_function(instance.onFlushSettings, "onFlushSettings should be defined for proper KOReader lifecycle compliance")
-        end)
-
         it("onFlushSettings should not error when called", function()
             LocalSend = require("main")
             local instance = helper.create_instance()

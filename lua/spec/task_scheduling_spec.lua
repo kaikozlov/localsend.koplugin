@@ -22,18 +22,6 @@ describe("LocalSend Task Scheduling", function()
     end)
 
     describe("task reference initialization", function()
-        it("should create check_sentinel_task function in init()", function()
-            local instance = helper.create_instance()
-
-            assert.is_function(instance.check_sentinel_task, "check_sentinel_task should be created in init()")
-        end)
-
-        it("should create resume_start_task function in init()", function()
-            local instance = helper.create_instance()
-
-            assert.is_function(instance.resume_start_task, "resume_start_task should be created in init()")
-        end)
-
         it("task references should be instance-specific (not shared)", function()
             local instance1 = helper.create_instance()
             local instance2 = helper.create_instance()
@@ -44,18 +32,6 @@ describe("LocalSend Task Scheduling", function()
     end)
 
     describe("unschedule helper methods", function()
-        it("should have _unschedulePolling method", function()
-            local instance = helper.create_instance()
-
-            assert.is_function(instance._unschedulePolling, "_unschedulePolling helper should exist")
-        end)
-
-        it("should have _unscheduleResume method", function()
-            local instance = helper.create_instance()
-
-            assert.is_function(instance._unscheduleResume, "_unscheduleResume helper should exist")
-        end)
-
         it("_unschedulePolling should call UIManager:unschedule with sentinel task", function()
             local instance = helper.create_instance()
 
@@ -293,9 +269,6 @@ describe("LocalSend Task Scheduling", function()
 
             helper.state.scheduled_tasks = {}
             instance:_onServerStarted(true, "TestDevice")
-
-            -- check_sentinel_task should have been recreated
-            assert.is_function(instance.check_sentinel_task, "check_sentinel_task should be recreated if nil")
 
             -- Should have scheduled the recreated task
             assert.equal(1, #helper.state.scheduled_tasks, "Should schedule the recreated sentinel task")

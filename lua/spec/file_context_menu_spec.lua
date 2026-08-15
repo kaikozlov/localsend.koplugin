@@ -159,7 +159,6 @@ describe("File Context Menu Integration", function()
                 assert.is_not_nil(row_func)
 
                 local row = row_func("/documents/my_book.epub", true, nil)
-                assert.is_function(row[1].callback)
                 row[1].callback()
 
                 assert.equals("/documents/my_book.epub", seen_preset)

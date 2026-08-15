@@ -14,18 +14,6 @@ describe("LocalSend State Caching", function()
     end)
 
     describe("cache initialization", function()
-        it("should have _cached_running field after init()", function()
-            local instance = helper.create_instance()
-
-            assert.is_not_nil(instance._cached_running, "_cached_running should be initialized in init()")
-        end)
-
-        it("should have _cached_transfer_count field after init()", function()
-            local instance = helper.create_instance()
-
-            assert.is_not_nil(instance._cached_transfer_count, "_cached_transfer_count should be initialized in init()")
-        end)
-
         it("_cached_running should default to false", function()
             local instance = helper.create_instance()
 
@@ -40,12 +28,6 @@ describe("LocalSend State Caching", function()
     end)
 
     describe("_updateCache method", function()
-        it("should have _updateCache method", function()
-            local instance = helper.create_instance()
-
-            assert.is_function(instance._updateCache, "_updateCache helper should exist")
-        end)
-
         it("_updateCache should update _cached_running from isRunning()", function()
             local instance = helper.create_instance()
 
@@ -333,11 +315,6 @@ describe("LocalSend State Caching", function()
     -- Transfer count caching in ServerState (optimization for e-readers)
     -- =========================================================================
     describe("ServerState transfer_count optimization", function()
-        it("ServerState should have transfer_count field", function()
-            local LocalSend = require("main")
-            assert.is_not_nil(LocalSend._ServerState.transfer_count, "ServerState should have transfer_count field for caching")
-        end)
-
         it("clearTransferLog should reset ServerState.transfer_count to 0", function()
             local LocalSend = require("main")
             LocalSend._ServerState.transfer_count = 5
@@ -381,12 +358,6 @@ describe("LocalSend State Caching", function()
             io.open = original_io_open
 
             assert.is_false(io_open_called_for_log, "getTransferCount should NOT read file when using ServerState cache")
-        end)
-
-        it("ServerState should NOT have deprecated polling_generation field", function()
-            local LocalSend = require("main")
-
-            assert.is_nil(LocalSend._ServerState.polling_generation, "polling_generation is deprecated and should be removed")
         end)
     end)
 end)

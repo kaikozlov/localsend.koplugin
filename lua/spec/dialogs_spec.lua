@@ -77,15 +77,6 @@ describe("Dialog Functions", function()
             assert.is_true(picker_start_called)
         end)
 
-        it("should have onConfirm callback that validates directory", function()
-            local instance = helper.create_instance()
-            instance.save_dir = DOCS
-            instance:showSaveDirPicker({ updateItems = function() end })
-            local path_chooser = helper.find_dialog("PathChooser")
-            assert.is_not_nil(path_chooser)
-            assert.is_function(path_chooser.onConfirm)
-        end)
-
         it("onConfirm should save valid directory", function()
             local instance = helper.create_instance()
             instance.save_dir = DOCS

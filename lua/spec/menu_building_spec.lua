@@ -117,7 +117,6 @@ describe("Menu Building", function()
             for _, item in ipairs(menu) do
                 if item.text and item.text:match("Enable file type routing") then
                     found_toggle = true
-                    assert.is_function(item.checked_func)
                     assert.is_true(item.checked_func())
                     break
                 end
@@ -157,7 +156,6 @@ describe("Menu Building", function()
             for _, item in ipairs(menu) do
                 if item.text and item.text:match("Accept other files") then
                     found_accept_all = true
-                    assert.is_function(item.checked_func)
                     assert.is_false(item.checked_func())
                     break
                 end
@@ -194,8 +192,6 @@ describe("Menu Building", function()
 
             local menu_items = {}
             instance:addToMainMenu(menu_items)
-
-            assert.is_function(menu_items.localsend.text_func)
 
             -- When not running (use cached value)
             instance._cached_running = false
@@ -394,8 +390,6 @@ describe("Menu Building", function()
             end
 
             assert.is_not_nil(settings_item)
-            assert.is_function(settings_item.enabled_func)
-
             -- When not running (cached), should be enabled
             instance._cached_running = false
             assert.is_true(settings_item.enabled_func())
@@ -591,8 +585,6 @@ describe("Menu Building", function()
             end
 
             assert.is_not_nil(transfers_item)
-            assert.is_function(transfers_item.enabled_func)
-
             -- When no transfers, should be disabled (use cached value)
             instance._cached_transfer_count = 0
             assert.is_false(transfers_item.enabled_func())
@@ -660,7 +652,6 @@ describe("Menu Building", function()
             end
 
             assert.is_not_nil(toggle_item, "Should find toggle item")
-            assert.is_function(toggle_item.enabled_func)
             assert.is_false(toggle_item.enabled_func(), "Toggle should be disabled while stopping")
         end)
 
@@ -766,8 +757,6 @@ describe("Menu Building", function()
             end
 
             assert.is_not_nil(settings_item, "Settings menu item should exist")
-            assert.is_function(settings_item.enabled_func, "Settings should have enabled_func")
-
             -- Cached says running, but isRunning disagrees.
             instance._cached_running = true
             instance.isRunning = function()

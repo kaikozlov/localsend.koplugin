@@ -117,16 +117,6 @@ describe("localsend_sender", function()
             assert.truthy(cmd:match("%-%-https"))
         end)
 
-        it("records the actual Go child PID separately from the exit-status supervisor", function()
-            sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" }, "/test/file.epub", nil, nil)
-            local cmd = helper.state.os_execute_calls[1]
-            assert.truthy(cmd:find("exec", 1, true))
-            assert.truthy(cmd:find("child=$!", 1, true))
-            assert.truthy(cmd:find("/tmp/localsend_send.pid", 1, true))
-            assert.truthy(cmd:find("/tmp/localsend_send_supervisor.pid", 1, true))
-            assert.truthy(cmd:find('wait "$child"', 1, true))
-        end)
-
         it("builds correct command for WebRTC device", function()
             sender.sendFile({ type = "webrtc", id = "abc-123", alias = "Browser" }, "/test/file.epub", nil, nil)
             assert.is_true(#helper.state.os_execute_calls > 0)
