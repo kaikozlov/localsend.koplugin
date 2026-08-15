@@ -471,7 +471,7 @@ func TestBuildSubnetTargets_InterleavesAndDeduplicatesSubnets(t *testing.T) {
 	}
 }
 
-func TestInterfaceHasPrivateIPv4_RejectsPublicAndIPv6OnlyInterfaces(t *testing.T) {
+func TestInterfaceHasUsableIPv4_AcceptsAnyNonLoopbackIPv4(t *testing.T) {
 	tests := []struct {
 		name      string
 		addresses []net.Addr
@@ -485,6 +485,7 @@ func TestInterfaceHasPrivateIPv4_RejectsPublicAndIPv6OnlyInterfaces(t *testing.T
 		{
 			name:      "public IPv4",
 			addresses: []net.Addr{&net.IPNet{IP: net.ParseIP("203.0.113.10"), Mask: net.CIDRMask(24, 32)}},
+			want:      true,
 		},
 		{
 			name:      "private IPv6 only",
@@ -494,8 +495,8 @@ func TestInterfaceHasPrivateIPv4_RejectsPublicAndIPv6OnlyInterfaces(t *testing.T
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := interfaceHasPrivateIPv4(tt.addresses); got != tt.want {
-				t.Fatalf("interfaceHasPrivateIPv4() = %v; want %v", got, tt.want)
+			if got := interfaceHasUsableIPv4(tt.addresses); got != tt.want {
+				t.Fatalf("interfaceHasUsableIPv4() = %v; want %v", got, tt.want)
 			}
 		})
 	}
@@ -717,64 +718,17 @@ func TestReadAndRegister_IPv6Address_CorruptedKey(t *testing.T) {
 }
 
 // TestReadAndRegister_IPv6_ShouldBeSkipped tests that the discoverer should
-// skip IPv6 addresses since LocalSend only supports IPv4 discovery.
-func TestReadAndRegister_IPv6_ShouldBeSkipped(t *testing.T) {
-	mcs := &Discoverer{
-		discovered: make(map[string]discoveryEntry),
-		mu:         &sync.RWMutex{},
-	}
-
-	anno := models.Announcement{
-		DeviceInfo: models.DeviceInfo{
-			Alias:      "IPv6 Device",
-			DeviceType: "desktop",
-		},
-	}
-
-	testCases := []struct {
-		name        string
-		ip          string
-		shouldStore bool
-		expectedKey string
-	}{
-		{"IPv4", "192.168.1.100", true, "192.168.1.100"},
-		{"IPv6", "2001:db8::1", false, ""},
-		{"IPv6 loopback", "::1", false, ""},
-		{"IPv4-mapped IPv6", "::ffff:192.168.1.1", true, "192.168.1.1"},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Clear the map
-			mcs.discovered = make(map[string]discoveryEntry)
-
-			ip := net.ParseIP(tc.ip)
-			if ip == nil {
-				t.Fatalf("Failed to parse IP: %s", tc.ip)
-			}
-
-			// This is the FIX that should be applied:
-			ip4 := ip.To4()
-			if ip4 == nil {
-				// IPv6 - should be skipped
-				if tc.shouldStore {
-					t.Errorf("Expected %s to be stored but it would be skipped", tc.ip)
-				}
-				return
-			}
-
-			mcs.PutDiscovered(ip4.String(), anno)
-
-			if tc.shouldStore {
-				stored, ok := mcs.discovered[tc.expectedKey]
-				if !ok {
-					t.Errorf("Device should be stored under key %q", tc.expectedKey)
-				}
-				if stored.anno.Alias != "IPv6 Device" {
-					t.Errorf("Alias = %q, want 'IPv6 Device'", stored.anno.Alias)
-				}
-			}
-		})
+// IPv6 is a first-class LocalSend discovery channel; dual-stack addresses are
+// merged by fingerprint rather than discarded.
+func TestPutDiscovered_AcceptsIPv6Channel(t *testing.T) {
+	mcs := &Discoverer{discovered: make(map[string]discoveryEntry), mu: &sync.RWMutex{}}
+	anno := models.Announcement{DeviceInfo: models.DeviceInfo{
+		Alias: "IPv6 Device", Version: "2.2", Fingerprint: "peer",
+	}, Protocol: "https", Port: 53317}
+	mcs.PutDiscovered("2001:db8::1", anno)
+	got := mcs.GetAllDiscovered()
+	if peer, ok := got["2001:db8::1"]; !ok || peer.Alias != "IPv6 Device" {
+		t.Fatalf("IPv6 discovery missing: %#v", got)
 	}
 }
 
@@ -849,6 +803,16 @@ func TestGetCachedIPs_CacheExpiry(t *testing.T) {
 // Discovery TTL Cleanup Tests
 // =============================================================================
 
+func testDiscoveryEntry(host string, lastSeen time.Time, alias string) discoveryEntry {
+	return discoveryEntry{
+		anno: models.Announcement{DeviceInfo: models.DeviceInfo{Alias: alias, Fingerprint: alias}},
+		channels: map[string]discoveryChannel{
+			discoveryChannelKey(host, "https", 53317): {host: host, protocol: "https", port: 53317, lastSeen: lastSeen},
+		},
+		lastSeen: lastSeen,
+	}
+}
+
 // TestDiscoverer_cleanupStaleDiscovered_RemovesExpired verifies that stale
 // discovered device entries are removed during cleanup.
 func TestDiscoverer_cleanupStaleDiscovered_RemovesExpired(t *testing.T) {
@@ -858,21 +822,14 @@ func TestDiscoverer_cleanupStaleDiscovered_RemovesExpired(t *testing.T) {
 	}
 
 	// Add an old entry (past TTL)
-	mcs.discovered["192.168.1.1"] = discoveryEntry{
-		anno: models.Announcement{
-			DeviceInfo: models.DeviceInfo{
-				Alias: "Old Device",
-			},
-		},
-		lastSeen: time.Now().Add(-discoveryTTL - time.Minute),
-	}
+	mcs.discovered["Old Device"] = testDiscoveryEntry("192.168.1.1", time.Now().Add(-discoveryTTL-time.Minute), "Old Device")
 
 	// Run cleanup
 	mcs.cleanupStaleDiscovered()
 
 	// Verify entry was removed
 	mcs.mu.RLock()
-	_, exists := mcs.discovered["192.168.1.1"]
+	_, exists := mcs.discovered["Old Device"]
 	mcs.mu.RUnlock()
 
 	if exists {
@@ -889,21 +846,14 @@ func TestDiscoverer_cleanupStaleDiscovered_KeepsRecent(t *testing.T) {
 	}
 
 	// Add a recent entry
-	mcs.discovered["192.168.1.1"] = discoveryEntry{
-		anno: models.Announcement{
-			DeviceInfo: models.DeviceInfo{
-				Alias: "Recent Device",
-			},
-		},
-		lastSeen: time.Now(),
-	}
+	mcs.discovered["Recent Device"] = testDiscoveryEntry("192.168.1.1", time.Now(), "Recent Device")
 
 	// Run cleanup
 	mcs.cleanupStaleDiscovered()
 
 	// Verify entry is still present
 	mcs.mu.RLock()
-	_, exists := mcs.discovered["192.168.1.1"]
+	_, exists := mcs.discovered["Recent Device"]
 	mcs.mu.RUnlock()
 
 	if !exists {
@@ -920,28 +870,18 @@ func TestDiscoverer_cleanupStaleDiscovered_MixedEntries(t *testing.T) {
 	}
 
 	// Add stale entry
-	mcs.discovered["192.168.1.1"] = discoveryEntry{
-		anno: models.Announcement{
-			DeviceInfo: models.DeviceInfo{Alias: "Stale"},
-		},
-		lastSeen: time.Now().Add(-discoveryTTL - time.Minute),
-	}
+	mcs.discovered["Stale"] = testDiscoveryEntry("192.168.1.1", time.Now().Add(-discoveryTTL-time.Minute), "Stale")
 
 	// Add recent entry
-	mcs.discovered["192.168.1.2"] = discoveryEntry{
-		anno: models.Announcement{
-			DeviceInfo: models.DeviceInfo{Alias: "Recent"},
-		},
-		lastSeen: time.Now(),
-	}
+	mcs.discovered["Recent"] = testDiscoveryEntry("192.168.1.2", time.Now(), "Recent")
 
 	// Run cleanup
 	mcs.cleanupStaleDiscovered()
 
 	// Verify results
 	mcs.mu.RLock()
-	_, staleExists := mcs.discovered["192.168.1.1"]
-	_, recentExists := mcs.discovered["192.168.1.2"]
+	_, staleExists := mcs.discovered["Stale"]
+	_, recentExists := mcs.discovered["Recent"]
 	count := len(mcs.discovered)
 	mcs.mu.RUnlock()
 
@@ -965,22 +905,21 @@ func TestDiscoverer_PutDiscovered_UpdatesLastSeen(t *testing.T) {
 	}
 
 	anno := models.Announcement{
-		DeviceInfo: models.DeviceInfo{
-			Alias: "Test Device",
-		},
+		DeviceInfo: models.DeviceInfo{Alias: "Test Device", Fingerprint: "test-device"},
+		Protocol:   "https", Port: 53317,
 	}
 
 	// First put
 	mcs.PutDiscovered("192.168.1.1", anno)
 	mcs.mu.RLock()
-	firstSeen := mcs.discovered["192.168.1.1"].lastSeen
+	firstSeen := mcs.discovered["test-device"].lastSeen
 	mcs.mu.RUnlock()
 
 	// Wait a bit and put again
 	time.Sleep(10 * time.Millisecond)
 	mcs.PutDiscovered("192.168.1.1", anno)
 	mcs.mu.RLock()
-	secondSeen := mcs.discovered["192.168.1.1"].lastSeen
+	secondSeen := mcs.discovered["test-device"].lastSeen
 	mcs.mu.RUnlock()
 
 	if !secondSeen.After(firstSeen) {
@@ -1150,4 +1089,46 @@ func makeSelfSignedTestCertificate(t *testing.T, notBefore, notAfter time.Time) 
 		t.Fatal(err)
 	}
 	return der
+}
+
+func TestDiscovererPutDiscovered_DedupesChannelsByFingerprint(t *testing.T) {
+	d := &Discoverer{discovered: make(map[string]discoveryEntry), mu: &sync.RWMutex{}}
+	base := models.Announcement{
+		DeviceInfo: models.DeviceInfo{Alias: "Peer", Version: "2.2", Fingerprint: "same-device"},
+		Protocol:   "https",
+		Port:       53317,
+	}
+	d.PutDiscovered("192.168.1.20", base)
+	d.PutDiscovered("fe80::20%wlan0", base)
+
+	got := d.GetAllDiscovered()
+	if len(got) != 1 {
+		t.Fatalf("discovered targets = %d; want one fingerprint-deduped device: %#v", len(got), got)
+	}
+	if _, ok := got["fe80::20%wlan0"]; !ok {
+		t.Fatalf("best channel = %#v; want scoped IPv6 channel", got)
+	}
+}
+
+func TestDiscovererPutDiscovered_RefreshesExistingChannel(t *testing.T) {
+	d := &Discoverer{discovered: make(map[string]discoveryEntry), mu: &sync.RWMutex{}}
+	first := models.Announcement{
+		DeviceInfo: models.DeviceInfo{Alias: "Peer", Version: "2.2", Fingerprint: "same-device"},
+		Protocol:   "http",
+		Port:       53317,
+	}
+	second := first
+	second.Protocol = "https"
+	second.Port = 53318
+	d.PutDiscovered("192.168.1.20", first)
+	d.PutDiscovered("192.168.1.20", second)
+
+	got := d.GetAllDiscovered()
+	peer, ok := got["192.168.1.20"]
+	if !ok {
+		t.Fatalf("refreshed channel missing: %#v", got)
+	}
+	if peer.Protocol != "https" || peer.Port != 53318 {
+		t.Fatalf("refreshed channel = %s:%d; want https:53318", peer.Protocol, peer.Port)
+	}
 }

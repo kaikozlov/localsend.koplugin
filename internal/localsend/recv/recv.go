@@ -31,6 +31,7 @@ type FileReceiver struct {
 	sessman           *sess.RecvSessManager
 	saveToDir         string
 	discoverier       *localsend.Discoverer
+	discoveryMu       sync.Mutex
 	expectedPin       string
 	allowedExtensions []string         // New field for extension filtering
 	transferLogPath   string           // Path to transfer log file
@@ -324,10 +325,8 @@ func (fr *FileReceiver) hasExtensionRouter() bool {
 }
 
 func (fr *FileReceiver) Init() error {
-	var err error
-
 	// ensure save directory exists
-	err = os.MkdirAll(fr.saveToDir, fs.ModePerm)
+	err := os.MkdirAll(fr.saveToDir, fs.ModePerm)
 	if err != nil {
 		return fmt.Errorf("failed to create save directory: %w", err)
 	}
@@ -360,11 +359,15 @@ func (fr *FileReceiver) Init() error {
 		}
 	}
 
-	// start advertisement (non-fatal if it fails - server can still work without discovery)
-	fr.discoverier, err = localsend.NewDiscovererWithCertificate(fr.identity, fr.supportHttps, fr.cert)
-	if err != nil {
-		slog.Warn("Failed to create discoverer (device won't be discoverable)", "error", err)
-		// Continue without discovery - server can still accept connections by IP
+	// Create the initial discovery instance. Failure is non-fatal: the runtime
+	// supervisor below retries when a network interface becomes available.
+	discoverer, discoveryErr := localsend.NewDiscovererWithCertificate(fr.identity, fr.supportHttps, fr.cert)
+	if discoveryErr != nil {
+		slog.Warn("Failed to create discoverer; will retry", "error", discoveryErr)
+	} else {
+		fr.discoveryMu.Lock()
+		fr.discoverier = discoverer
+		fr.discoveryMu.Unlock()
 	}
 
 	// start session cleanup task
@@ -411,43 +414,76 @@ func (fr *FileReceiver) registerRoutes(server *fiber.App) {
 	server.Post(constants.RegisterPathV3, fr.registerV3Handler)
 }
 
-// startDiscoveryWithRetry starts the discovery/advertisement loop.
-// If discoverer wasn't created at Init (no network), it retries every 5 seconds until success or context cancellation.
-func (fr *FileReceiver) startDiscoveryWithRetry(ctx context.Context) {
-	// If discoverer already exists, just start it with context awareness
-	if fr.discoverier != nil {
-		// Watch for context cancellation to shutdown the discoverer
-		go func() {
-			<-ctx.Done()
-			_ = fr.discoverier.Shutdown()
-		}()
-		_ = fr.discoverier.Listen()
-		return
+// currentDiscoverer returns the currently owned discovery instance.
+func (fr *FileReceiver) currentDiscoverer() *localsend.Discoverer {
+	fr.discoveryMu.Lock()
+	defer fr.discoveryMu.Unlock()
+	return fr.discoverier
+}
+
+func (fr *FileReceiver) installDiscoverer(discoverer *localsend.Discoverer) {
+	fr.discoveryMu.Lock()
+	fr.discoverier = discoverer
+	fr.discoveryMu.Unlock()
+}
+
+func (fr *FileReceiver) clearDiscoverer(discoverer *localsend.Discoverer) {
+	fr.discoveryMu.Lock()
+	if fr.discoverier == discoverer {
+		fr.discoverier = nil
 	}
+	fr.discoveryMu.Unlock()
+}
 
-	// Discoverer doesn't exist - retry creating it periodically
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+func waitDiscoveryRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
+// startDiscoveryWithRetry owns the native multicast discovery lifecycle. A
+// socket can become permanently unusable after a Wi-Fi/VPN/interface change;
+// when Listen returns unexpectedly, discard the instance and bind a fresh set
+// of sockets instead of leaving the HTTP receiver alive but undiscoverable.
+func (fr *FileReceiver) startDiscoveryWithRetry(ctx context.Context) {
+	const retryDelay = 2 * time.Second
+
+	for ctx.Err() == nil {
+		discoverer := fr.currentDiscoverer()
+		if discoverer == nil {
 			var err error
-			fr.discoverier, err = localsend.NewDiscovererWithCertificate(fr.identity, fr.supportHttps, fr.cert)
+			discoverer, err = localsend.NewDiscovererWithCertificate(fr.identity, fr.supportHttps, fr.cert)
 			if err != nil {
-				// Still no network, keep trying
+				slog.Debug("Discovery bind unavailable; retrying", "error", err)
+				if !waitDiscoveryRetry(ctx, retryDelay) {
+					return
+				}
 				continue
 			}
-			slog.Info("Discovery started (network became available)")
-			// Watch for context cancellation to shutdown the discoverer
-			go func() {
-				<-ctx.Done()
-				_ = fr.discoverier.Shutdown()
-			}()
-			// Success - start the listen loop (blocks until shutdown)
-			_ = fr.discoverier.Listen()
+			fr.installDiscoverer(discoverer)
+			slog.Info("Discovery bound to current network interfaces")
+		}
+
+		stopShutdown := context.AfterFunc(ctx, func() { _ = discoverer.Shutdown() })
+		err := discoverer.Listen()
+		_ = stopShutdown()
+		fr.clearDiscoverer(discoverer)
+		_ = discoverer.Shutdown()
+
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			slog.Warn("Discovery listener stopped; rebinding", "error", err)
+		} else {
+			slog.Warn("Discovery listener stopped unexpectedly; rebinding")
+		}
+		if !waitDiscoveryRetry(ctx, retryDelay) {
 			return
 		}
 	}
@@ -460,8 +496,11 @@ func (fr *FileReceiver) Stop() error {
 	fr.configMu.Unlock()
 
 	fr.sessman.Stop()
-	if fr.discoverier != nil {
-		_ = fr.discoverier.Shutdown()
+	fr.discoveryMu.Lock()
+	discoverer := fr.discoverier
+	fr.discoveryMu.Unlock()
+	if discoverer != nil {
+		_ = discoverer.Shutdown()
 	}
 	fr.closeTransferLog()
 

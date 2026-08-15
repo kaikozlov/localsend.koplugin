@@ -1,8 +1,10 @@
 package transfer
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -636,4 +638,83 @@ func TestRTCSender_SendFiles_EmptyQueueSendsExactlyOneDelimiter(t *testing.T) {
 	if countExactEvent(rec.events, "delimiter") != 1 {
 		t.Fatalf("expected exactly one final delimiter; trace=%v", rec.events)
 	}
+}
+
+func TestRTCReceiver_AcceptOfferDoesNotPreemptActiveTransfer(t *testing.T) {
+	active := &PeerConnection{closed: make(chan struct{})}
+	r := NewRTCReceiver(nil, nil, "", t.TempDir())
+	r.peer = active
+	r.state = stateReceivingFiles
+	offer := signaling.WsServerMessage{Peer: &signaling.ClientInfo{ID: uuid.New(), Alias: "second"}, SessionID: "second"}
+	if err := r.AcceptOffer(offer); !errors.Is(err, ErrReceiverBusy) {
+		t.Fatalf("AcceptOffer error = %v; want ErrReceiverBusy", err)
+	}
+	if r.peer != active {
+		t.Fatal("active peer was replaced by second offer")
+	}
+}
+
+func TestRTCReceiver_PeerDisconnectDeletesPartialFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "book.epub")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("partial"); err != nil {
+		t.Fatal(err)
+	}
+	peer := &PeerConnection{closed: make(chan struct{})}
+	r := NewRTCReceiver(nil, nil, "", dir)
+	r.peer = peer
+	r.state = stateReceivingFiles
+	r.currentFileID = "file"
+	r.fileWriters["file"] = f
+	r.fileBuffers["file"] = bufio.NewWriter(f)
+	r.filePaths["file"] = path
+
+	r.handlePeerClosed(peer)
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("partial path still exists after disconnect: %v", err)
+	}
+	if r.peer != nil || r.state != stateDone {
+		t.Fatalf("receiver not released after disconnect: peer=%v state=%d", r.peer, r.state)
+	}
+}
+
+func TestRTCSender_SendFilesPeerCloseUnblocksAckWait(t *testing.T) {
+	path := writeSendFile(t, filepath.Join(t.TempDir(), "book.epub"), "payload")
+	s := NewRTCSender(nil, nil, "")
+	s.files = []FileMeta{{ID: "f", FileName: "book.epub", FilePath: path, Size: 7}}
+	s.fileTokens = map[string]string{"f": "token"}
+	s.acceptedIDs = []string{"f"}
+	ops := &recordingSendOps{results: make(chan RTCSendFileResponse, 1)}
+	// Do not auto-ack: override delimiter behavior with a tiny wrapper.
+	blocking := &noAckSendOps{recordingSendOps: ops, delimiterSent: make(chan struct{})}
+	s.sendOpsOverride = blocking
+	s.peer = &PeerConnection{closed: make(chan struct{})}
+
+	done := make(chan error, 1)
+	go func() { done <- s.SendFiles() }()
+	<-blocking.delimiterSent
+	close(s.peer.closed)
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "peer connection closed") {
+			t.Fatalf("SendFiles error = %v; want peer-closed error", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("peer close did not unblock acknowledgement wait")
+	}
+}
+
+type noAckSendOps struct {
+	*recordingSendOps
+	delimiterSent chan struct{}
+}
+
+func (n *noAckSendOps) SendDelimiter() error {
+	n.events = append(n.events, "delimiter")
+	close(n.delimiterSent)
+	return nil
 }

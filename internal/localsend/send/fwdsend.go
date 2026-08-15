@@ -22,13 +22,30 @@ import (
 
 type ForwardSender struct {
 	baseSender
-	local        *models.DeviceInfo
-	remote       *models.DeviceInfo
-	remotePort   string // Custom port (defaults to constants.DefaultPortStr)
-	https        bool
-	abort        atomic.Bool
-	httpClient   *fasthttp.Client
-	uploadClient *fasthttp.Client
+	local             *models.DeviceInfo
+	remote            *models.DeviceInfo
+	remotePort        string // Custom port (defaults to constants.DefaultPortStr)
+	https             bool
+	abort             atomic.Bool
+	httpClient        *fasthttp.Client
+	uploadClient      *fasthttp.Client
+	activeUploadMu    sync.Mutex
+	activeUploadConns map[*trackedUploadConn]struct{}
+}
+
+type trackedUploadConn struct {
+	net.Conn
+	owner *ForwardSender
+	once  sync.Once
+}
+
+func (c *trackedUploadConn) Close() error {
+	c.once.Do(func() {
+		c.owner.activeUploadMu.Lock()
+		delete(c.owner.activeUploadConns, c)
+		c.owner.activeUploadMu.Unlock()
+	})
+	return c.Conn.Close()
 }
 
 const (
@@ -45,9 +62,10 @@ func NewForwardSender() *ForwardSender {
 			files:  make(map[string]models.FileMeta),
 			tokens: make(map[string]string),
 		},
-		remotePort:   constants.DefaultPortStr,
-		httpClient:   &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes},
-		uploadClient: newUploadClient(nil, false),
+		remotePort:        constants.DefaultPortStr,
+		httpClient:        &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes},
+		uploadClient:      newUploadClient(nil, false),
+		activeUploadConns: make(map[*trackedUploadConn]struct{}),
 	}
 }
 
@@ -65,9 +83,53 @@ func newUploadClient(tlsConfig *tls.Config, https bool) *fasthttp.Client {
 	return client
 }
 
+func (fsp *ForwardSender) trackUploadDial(addr string, timeout time.Duration) (net.Conn, error) {
+	var conn net.Conn
+	var err error
+	if timeout > 0 {
+		conn, err = fasthttp.DialTimeout(addr, timeout)
+	} else {
+		conn, err = fasthttp.Dial(addr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	tracked := &trackedUploadConn{Conn: conn, owner: fsp}
+	fsp.activeUploadMu.Lock()
+	if fsp.activeUploadConns == nil {
+		fsp.activeUploadConns = make(map[*trackedUploadConn]struct{})
+	}
+	if fsp.abort.Load() {
+		fsp.activeUploadMu.Unlock()
+		_ = conn.Close()
+		return nil, fmt.Errorf("upload canceled")
+	}
+	fsp.activeUploadConns[tracked] = struct{}{}
+	fsp.activeUploadMu.Unlock()
+	return tracked, nil
+}
+
+func (fsp *ForwardSender) closeActiveUploads() {
+	fsp.activeUploadMu.Lock()
+	conns := make([]*trackedUploadConn, 0, len(fsp.activeUploadConns))
+	for conn := range fsp.activeUploadConns {
+		conns = append(conns, conn)
+	}
+	fsp.activeUploadMu.Unlock()
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+}
+
 func (fsp *ForwardSender) Init(target *models.DeviceInfo, https bool) error {
+	// Reinitializing a sender must not retain idle/active transport sockets from
+	// a previous target or transfer.
+	fsp.closeActiveUploads()
 	fsp.abort.Store(false)
 	fsp.session = ""
+	fsp.activeUploadMu.Lock()
+	fsp.activeUploadConns = make(map[*trackedUploadConn]struct{})
+	fsp.activeUploadMu.Unlock()
 	fsp.remote = target
 	fsp.https = https
 
@@ -98,6 +160,7 @@ func (fsp *ForwardSender) Init(target *models.DeviceInfo, https bool) error {
 	fsp.local = &localInfo
 	fsp.httpClient = &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes, TLSConfig: clientTLSConfig}
 	fsp.uploadClient = newUploadClient(clientTLSConfig, https)
+	fsp.uploadClient.DialTimeout = fsp.trackUploadDial
 
 	fsp.reset()
 
@@ -278,24 +341,27 @@ func (fsp *ForwardSender) Start() error {
 }
 
 func (fsp *ForwardSender) Cancel() error {
+	// Local cancellation is immediate and independent of the protocol-level
+	// cancel request. Closing the tracked transport connections interrupts any
+	// in-flight streaming uploads without imposing a deadline on healthy ones.
+	fsp.abort.Store(true)
+	fsp.closeActiveUploads()
+
+	if fsp.session == "" {
+		return nil
+	}
 	req := fasthttp.AcquireRequest()
 	defer fasthttp.ReleaseRequest(req)
 	response := fasthttp.AcquireResponse()
 	response.SkipBody = true
-	defer func() {
-		fsp.abort.Store(true)
-		fasthttp.ReleaseResponse(response)
-	}()
+	defer fasthttp.ReleaseResponse(response)
 
-	// prepare request
 	fsp.prepareUri(req, constants.CancelPath)
 	req.Header.SetMethod(fiber.MethodPost)
 	req.URI().QueryArgs().Add("sessionId", fsp.session)
-	// make request
 	if err := fsp.httpClient.DoTimeout(req, response, requestTimeout); err != nil {
 		return err
 	}
-
 	return constants.ParseError(response.StatusCode())
 }
 

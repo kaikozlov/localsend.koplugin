@@ -60,19 +60,36 @@ var Cmd = &cobra.Command{
 			slog.Info("Start Scanning")
 		}
 
-		// Use custom device name or generate one
 		alias := devName
 		if alias == "" {
 			alias = utils.GenAlias()
 		}
 
-		scanner, err := localsend.NewDiscoverer(
-			models.NewDeviceInfo(alias, utils.GenFingerprint()),
-			false)
+		// Discovery HTTPS is mutual TLS in native LocalSend 1.18. The scanner
+		// therefore uses the same persistent LocalSend identity as send/recv,
+		// rather than an anonymous HTTP-only identity.
+		privateKeyFile, certFile, err := utils.GetCertPaths()
+		if err != nil {
+			slog.Error("Failed to locate scanner certificate", "error", err)
+			return
+		}
+		cert, err := utils.LoadOrGenTLScert(privateKeyFile, certFile)
+		if err != nil {
+			slog.Error("Failed to load scanner certificate", "error", err)
+			return
+		}
+		fingerprint, err := utils.CertificateFingerprint(cert)
+		if err != nil {
+			slog.Error("Failed to fingerprint scanner certificate", "error", err)
+			return
+		}
+		identity := models.NewDeviceInfo(alias, fingerprint)
+		scanner, err := localsend.NewDiscovererWithCertificate(identity, true, cert)
 		if err != nil {
 			slog.Error("Fail to create advertiser", "error", err)
 			return
 		}
+		defer func() { _ = scanner.Shutdown() }()
 
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(timeout))
 		defer cancel()
@@ -80,29 +97,53 @@ var Cmd = &cobra.Command{
 		if legacyTimeout > 0 {
 			legacyDuration = legacyTimeout
 		}
-		legacyCtx, cancelLegacy := context.WithTimeout(context.Background(), time.Second*time.Duration(legacyDuration))
+		legacyCtx, cancelLegacy := context.WithTimeout(ctx, time.Second*time.Duration(legacyDuration))
 		defer cancelLegacy()
 
-		// If no protocol flags are set, enable all discovery methods
-		if !cmd.Flags().Changed("lan") && !cmd.Flags().Changed("legacy") && !cmd.Flags().Changed("webrtc") {
-			lan = true
-			legacy = true
-			webrtc = true
+		lanRequested := cmd.Flags().Changed("lan")
+		legacyRequested := cmd.Flags().Changed("legacy")
+		webrtcRequested := cmd.Flags().Changed("webrtc")
+		useLAN, useLegacy, useWebRTC := lan, legacy, webrtc
+		fallbackLegacy := false
+		if !lanRequested && !legacyRequested && !webrtcRequested {
+			// Native 1.18 discovers in stages: cheap multicast first, /24 probing
+			// only when multicast produced no confirmation. Web signaling runs in
+			// parallel because it is a separate compatibility surface.
+			useLAN = true
+			useWebRTC = true
+			useLegacy = false
+			fallbackLegacy = true
+		}
+
+		var callbackServer *registerCallbackServer
+		if useLAN {
+			callbackServer, err = startRegisterCallbackServer(ctx, scanner, cert, identity)
+			if err != nil {
+				slog.Warn("Could not start discovery register callback listener", "error", err)
+				// Listening for announcements can still confirm peers directly, but
+				// force the fallback because announcement callbacks are unavailable.
+				fallbackLegacy = true
+			} else {
+				scanner.SetAdvertisedEndpoint(callbackServer.port, "https")
+				defer func() { _ = callbackServer.shutdown() }()
+			}
 		}
 
 		var wg sync.WaitGroup
-		if lan {
+		if useLAN {
 			if !jsonOutput {
 				slog.Info("Performing LAN discovery")
 			}
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				_ = scanner.Listen()
+				if err := scanner.Listen(); err != nil && ctx.Err() == nil {
+					slog.Warn("LAN discovery listener stopped", "error", err)
+				}
 			}()
 		}
 
-		if legacy {
+		if useLegacy {
 			if !jsonOutput {
 				slog.Info("Performing legacy HTTP subnet scan")
 			}
@@ -111,15 +152,34 @@ var Cmd = &cobra.Command{
 				defer wg.Done()
 				scanner.ScanSubnet(legacyCtx)
 			}()
+		} else if fallbackLegacy {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				timer := time.NewTimer(750 * time.Millisecond)
+				defer timer.Stop()
+				select {
+				case <-ctx.Done():
+					return
+				case <-timer.C:
+				}
+				if len(scanner.GetAllDiscovered()) == 0 {
+					if !jsonOutput {
+						slog.Info("Multicast discovery was silent; falling back to subnet scan")
+					}
+					scanner.ScanSubnet(legacyCtx)
+				}
+			}()
 		}
 
-		// WebRTC signaling discovery
 		var signalingPeers []signaling.ClientInfo
-		if webrtc {
+		var signalingDone chan []signaling.ClientInfo
+		if useWebRTC {
 			if !jsonOutput {
 				slog.Info("Connecting to WebRTC signaling server")
 			}
-			signalingPeers = discoverViaSignaling(ctx, jsonOutput, alias)
+			signalingDone = make(chan []signaling.ClientInfo, 1)
+			go func() { signalingDone <- discoverViaSignaling(ctx, jsonOutput, alias) }()
 		}
 
 		<-ctx.Done()
@@ -127,19 +187,22 @@ var Cmd = &cobra.Command{
 			slog.Info("Stop Scanning")
 		}
 		_ = scanner.Shutdown()
+		if callbackServer != nil {
+			_ = callbackServer.shutdown()
+		}
 		wg.Wait()
+		if signalingDone != nil {
+			signalingPeers = <-signalingDone
+		}
 
 		devlist := scanner.GetAllDiscovered()
 
-		// Read exclude ID from file if specified (for self-filtering)
 		var excludeID string
 		if excludeIDFile != "" {
 			if data, err := os.ReadFile(excludeIDFile); err == nil {
 				excludeID = strings.TrimSpace(string(data))
 			}
 		}
-
-		// Filter out excluded WebRTC peer
 		if excludeID != "" {
 			filtered := make([]signaling.ClientInfo, 0, len(signalingPeers))
 			for _, peer := range signalingPeers {
@@ -151,55 +214,29 @@ var Cmd = &cobra.Command{
 		}
 
 		if jsonOutput {
-			// JSON output mode
-			result := ScanResult{
-				LAN:    make([]LANDevice, 0, len(devlist)),
-				WebRTC: make([]WebRTCDevice, 0, len(signalingPeers)),
-			}
-
+			result := ScanResult{LAN: make([]LANDevice, 0, len(devlist)), WebRTC: make([]WebRTCDevice, 0, len(signalingPeers))}
 			for ip, info := range devlist {
-				result.LAN = append(result.LAN, LANDevice{
-					IP:       ip,
-					Port:     info.Port,
-					Alias:    info.Alias,
-					Version:  info.Version,
-					Protocol: info.Protocol,
-				})
+				result.LAN = append(result.LAN, LANDevice{IP: ip, Port: info.Port, Alias: info.Alias, Version: info.Version, Protocol: info.Protocol})
 			}
-
 			for _, peer := range signalingPeers {
-				result.WebRTC = append(result.WebRTC, WebRTCDevice{
-					ID:      peer.ID.String(),
-					Alias:   peer.Alias,
-					Version: peer.Version,
-				})
+				result.WebRTC = append(result.WebRTC, WebRTCDevice{ID: peer.ID.String(), Alias: peer.Alias, Version: peer.Version})
 			}
-
 			output, err := json.Marshal(result)
 			if err != nil {
 				slog.Error("Failed to marshal JSON", "error", err)
 				return
 			}
 			fmt.Println(string(output))
-		} else {
-			// Human-readable output mode
-			if len(devlist) > 0 || len(signalingPeers) > 0 {
-				_, _ = fmt.Fprintf(os.Stdout, "Found Devices: \n")
-
-				// LAN devices
-				for ip, info := range devlist {
-					_, _ = fmt.Fprintf(os.Stdout, "\t[LAN] Name: %s, Version: %s, Address: %s:%d, Protocol: %s\n",
-						info.Alias, info.Version, ip, info.Port, info.Protocol)
-				}
-
-				// WebRTC signaling peers
-				for _, peer := range signalingPeers {
-					_, _ = fmt.Fprintf(os.Stdout, "\t[WebRTC] Name: %s, Version: %s, ID: %s\n",
-						peer.Alias, peer.Version, peer.ID)
-				}
-			} else {
-				fmt.Fprintln(os.Stderr, "No device found")
+		} else if len(devlist) > 0 || len(signalingPeers) > 0 {
+			_, _ = fmt.Fprintln(os.Stdout, "Found Devices:")
+			for ip, info := range devlist {
+				_, _ = fmt.Fprintf(os.Stdout, "\t[LAN] Name: %s, Version: %s, Address: %s:%d, Protocol: %s\n", info.Alias, info.Version, ip, info.Port, info.Protocol)
 			}
+			for _, peer := range signalingPeers {
+				_, _ = fmt.Fprintf(os.Stdout, "\t[WebRTC] Name: %s, Version: %s, ID: %s\n", peer.Alias, peer.Version, peer.ID)
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "No device found")
 		}
 	},
 }

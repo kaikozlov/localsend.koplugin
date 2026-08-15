@@ -40,9 +40,13 @@ const (
 	// discoveryTTL is the time-to-live for discovered device entries
 	discoveryTTL = 5 * time.Minute
 	// discoveryCleanupInterval is how often stale discoveries are cleaned up
-	discoveryCleanupInterval  = 1 * time.Minute
-	maxDiscoveredDevices      = 512
-	maxDiscoveryDatagramBytes = 64 << 10
+	discoveryCleanupInterval    = 1 * time.Minute
+	maxDiscoveredDevices        = 512
+	maxDiscoveryDatagramBytes   = 64 << 10
+	discoveryRequestTimeout     = 500 * time.Millisecond
+	maxConsecutiveReceiveErrors = 10
+	receiveErrorBackoffMin      = 25 * time.Millisecond
+	receiveErrorBackoffMax      = 500 * time.Millisecond
 )
 
 var multicastDiscoveryAddr = &net.UDPAddr{
@@ -92,9 +96,18 @@ func verifyAnnouncedFingerprint(expected string) func([][]byte, [][]*x509.Certif
 	}
 }
 
-// discoveryEntry wraps an Announcement with last-seen timestamp for TTL cleanup.
+type discoveryChannel struct {
+	host     string
+	protocol string
+	port     int
+	lastSeen time.Time
+}
+
+// discoveryEntry is keyed by stable LocalSend fingerprint and retains every
+// currently confirmed network channel for that device.
 type discoveryEntry struct {
 	anno     models.Announcement
+	channels map[string]discoveryChannel
 	lastSeen time.Time
 }
 
@@ -117,6 +130,8 @@ type Discoverer struct {
 	readBuf           []byte       // reusable buffer for UDP reads
 	readBufV6         []byte
 	responseSem       chan struct{}
+	responseMu        sync.Mutex
+	responsesInFlight map[string]struct{}
 
 	// Injectable scan settings keep scheduling and cancellation testable without
 	// depending on the host's real network.
@@ -202,15 +217,28 @@ func newDiscoverer(devInfo models.DeviceInfo, supportHttps bool, cert tls.Certif
 			Protocol:   protocol,
 			Announce:   true,
 		},
-		stop:            make(chan struct{}, 1),
-		discovered:      make(map[string]discoveryEntry),
-		mu:              &sync.RWMutex{},
-		readBuf:         make([]byte, maxDiscoveryDatagramBytes),
-		readBufV6:       make([]byte, maxDiscoveryDatagramBytes),
-		responseSem:     make(chan struct{}, maxConcurrentAnnouncementResponses),
-		scanHTTPClient:  httpClientForScan,
-		scanConcurrency: maxConcurrentScans,
+		stop:              make(chan struct{}, 1),
+		discovered:        make(map[string]discoveryEntry),
+		mu:                &sync.RWMutex{},
+		readBuf:           make([]byte, maxDiscoveryDatagramBytes),
+		readBufV6:         make([]byte, maxDiscoveryDatagramBytes),
+		responseSem:       make(chan struct{}, maxConcurrentAnnouncementResponses),
+		responsesInFlight: make(map[string]struct{}),
+		scanHTTPClient:    nil,
+		scanConcurrency:   maxConcurrentScans,
 	}, nil
+}
+
+// SetAdvertisedEndpoint updates the HTTP endpoint carried in multicast/register
+// discovery messages. Call it before Listen when a short-lived scanner uses an
+// ephemeral callback listener instead of the default receiver port.
+func (mcs *Discoverer) SetAdvertisedEndpoint(port int, protocol string) {
+	if port > 0 {
+		mcs.selfAnno.Port = port
+	}
+	if protocol != "" {
+		mcs.selfAnno.Protocol = protocol
+	}
 }
 
 func newIPv6MulticastListener() (*net.UDPConn, *ipv6.PacketConn, []*net.Interface) {
@@ -277,17 +305,17 @@ func eligibleMulticastInterfaces() ([]*net.Interface, error) {
 		if err != nil {
 			continue
 		}
-		if interfaceHasPrivateIPv4(addresses) {
+		if interfaceHasUsableIPv4(addresses) {
 			eligible = append(eligible, ifi)
 		}
 	}
 	return eligible, nil
 }
 
-func interfaceHasPrivateIPv4(addresses []net.Addr) bool {
+func interfaceHasUsableIPv4(addresses []net.Addr) bool {
 	for _, address := range addresses {
 		ip, _, err := net.ParseCIDR(address.String())
-		if err == nil && ip.To4() != nil && ip.IsPrivate() {
+		if err == nil && ip.To4() != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
 			return true
 		}
 	}
@@ -345,9 +373,13 @@ func (ma *Discoverer) Listen() error {
 }
 
 func (ma *Discoverer) listenOn(conn *net.UDPConn, readBuf []byte) error {
+	consecutiveErrors := 0
+	backoff := receiveErrorBackoffMin
 	for {
 		err := ma.readAndRegisterFrom(conn, readBuf)
 		if err == nil {
+			consecutiveErrors = 0
+			backoff = receiveErrorBackoffMin
 			continue
 		}
 		if isClosedConnError(err) {
@@ -357,7 +389,25 @@ func (ma *Discoverer) listenOn(conn *net.UDPConn, readBuf []byte) error {
 		case <-ma.stop:
 			return nil
 		default:
-			slog.Debug("Failed to read multicast announcement", "error", err)
+		}
+
+		consecutiveErrors++
+		slog.Warn("Failed to read multicast announcement", "error", err, "consecutive", consecutiveErrors)
+		if consecutiveErrors >= maxConsecutiveReceiveErrors {
+			return fmt.Errorf("multicast receive failed %d consecutive times: %w", consecutiveErrors, err)
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ma.stop:
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return nil
+		case <-timer.C:
+		}
+		backoff *= 2
+		if backoff > receiveErrorBackoffMax {
+			backoff = receiveErrorBackoffMax
 		}
 	}
 }
@@ -422,6 +472,10 @@ func (ma *Discoverer) discoveryCleanupTask() {
 
 // cleanupStaleDiscovered removes discovered entries older than discoveryTTL.
 func (ma *Discoverer) cleanupStaleDiscovered() {
+	ma.cleanupStaleDiscoveredAt(time.Now())
+}
+
+func (ma *Discoverer) cleanupStaleDiscoveredAt(now time.Time) {
 	ma.mu.Lock()
 	defer ma.mu.Unlock()
 
@@ -429,13 +483,19 @@ func (ma *Discoverer) cleanupStaleDiscovered() {
 		return
 	}
 
-	now := time.Now()
 	cleaned := 0
-	for ip, entry := range ma.discovered {
-		if now.Sub(entry.lastSeen) > discoveryTTL {
-			delete(ma.discovered, ip)
-			cleaned++
+	for fingerprint, entry := range ma.discovered {
+		for key, channel := range entry.channels {
+			if now.Sub(channel.lastSeen) > discoveryTTL {
+				delete(entry.channels, key)
+			}
 		}
+		if len(entry.channels) == 0 || now.Sub(entry.lastSeen) > discoveryTTL {
+			delete(ma.discovered, fingerprint)
+			cleaned++
+			continue
+		}
+		ma.discovered[fingerprint] = entry
 	}
 	if cleaned > 0 {
 		slog.Debug("Cleaned up stale discovered devices", "count", cleaned)
@@ -556,9 +616,11 @@ func (mcs *Discoverer) readAndRegisterFrom(conn *net.UDPConn, readBuf []byte) er
 	}
 
 	var anno models.Announcement
-	err = json.Unmarshal(readBuf[:n], &anno)
-	if err != nil {
-		return err
+	if err := json.Unmarshal(readBuf[:n], &anno); err != nil {
+		// Bad datagrams say nothing about socket health. Counting parse failures
+		// as receive errors would let network noise force discovery rebinding.
+		slog.Debug("Ignoring malformed multicast announcement", "remote", remoteAddr, "error", err)
+		return nil
 	}
 
 	// Avoid self discovery using fingerprint per protocol spec Section 2 & 3.1
@@ -586,19 +648,41 @@ func discoveryHost(addr *net.UDPAddr) string {
 
 func (mcs *Discoverer) respondToAnnouncement(remoteAddr *net.UDPAddr, anno models.Announcement) {
 	host := discoveryHost(remoteAddr)
+	key := anno.Fingerprint + "|" + host + "|" + anno.Protocol + "|" + strconv.Itoa(anno.Port)
+
+	mcs.responseMu.Lock()
 	if mcs.responseSem == nil {
 		mcs.responseSem = make(chan struct{}, maxConcurrentAnnouncementResponses)
 	}
+	if mcs.responsesInFlight == nil {
+		mcs.responsesInFlight = make(map[string]struct{})
+	}
+	if _, exists := mcs.responsesInFlight[key]; exists {
+		mcs.responseMu.Unlock()
+		slog.Debug("Coalescing repeated multicast announcement", "remote", host)
+		return
+	}
+	mcs.responsesInFlight[key] = struct{}{}
+	mcs.responseMu.Unlock()
+
 	select {
 	case mcs.responseSem <- struct{}{}:
 		go func() {
-			defer func() { <-mcs.responseSem }()
+			defer func() {
+				<-mcs.responseSem
+				mcs.responseMu.Lock()
+				delete(mcs.responsesInFlight, key)
+				mcs.responseMu.Unlock()
+			}()
 			if confirmed, ok := mcs.sendHTTPResponse(host, anno); ok {
 				mcs.PutDiscovered(host, confirmed)
 			}
 			mcs.sendUDPResponse(remoteAddr)
 		}()
 	default:
+		mcs.responseMu.Lock()
+		delete(mcs.responsesInFlight, key)
+		mcs.responseMu.Unlock()
 		slog.Debug("Dropping multicast response while response limit is full", "remote", host)
 	}
 }
@@ -656,7 +740,7 @@ func (mcs *Discoverer) sendHTTPResponse(ip string, anno models.Announcement) (mo
 			TLSConfig:           lsutils.TLSClientConfig(mcs.cert, anno.Fingerprint),
 		}
 	}
-	if err := client.DoTimeout(req, resp, 2*time.Second); err != nil {
+	if err := client.DoTimeout(req, resp, discoveryRequestTimeout); err != nil {
 		slog.Debug("Failed to send HTTP register response", "remote", remoteAddr, "error", err)
 		return models.Announcement{}, false
 	}
@@ -725,13 +809,49 @@ func (mcs *Discoverer) sendUDPResponse(remoteAddr *net.UDPAddr) {
 	}
 }
 
+func discoveryChannelKey(host, protocol string, port int) string {
+	return host + "|" + protocol + "|" + strconv.Itoa(port)
+}
+
+func bestDiscoveryChannel(channels map[string]discoveryChannel) (discoveryChannel, bool) {
+	var best discoveryChannel
+	found := false
+	for _, channel := range channels {
+		if !found {
+			best, found = channel, true
+			continue
+		}
+		ip := net.ParseIP(strings.Split(channel.host, "%")[0])
+		bestIP := net.ParseIP(strings.Split(best.host, "%")[0])
+		isV6 := ip != nil && ip.To4() == nil
+		bestV6 := bestIP != nil && bestIP.To4() == nil
+		if isV6 != bestV6 {
+			if isV6 {
+				best = channel
+			}
+			continue
+		}
+		if channel.lastSeen.After(best.lastSeen) || (channel.lastSeen.Equal(best.lastSeen) && channel.host < best.host) {
+			best = channel
+		}
+	}
+	return best, found
+}
+
 func (mcs *Discoverer) GetAllDiscovered() map[string]models.Announcement {
 	mcs.mu.RLock()
 	defer mcs.mu.RUnlock()
 
 	result := make(map[string]models.Announcement, len(mcs.discovered))
-	for k, entry := range mcs.discovered {
-		result[k] = entry.anno
+	for _, entry := range mcs.discovered {
+		channel, ok := bestDiscoveryChannel(entry.channels)
+		if !ok {
+			continue
+		}
+		anno := entry.anno
+		anno.Protocol = channel.protocol
+		anno.Port = channel.port
+		result[channel.host] = anno
 	}
 	return result
 }
@@ -740,22 +860,40 @@ func (mcs *Discoverer) PutDiscovered(ip string, anno models.Announcement) {
 	mcs.mu.Lock()
 	defer mcs.mu.Unlock()
 
-	// Normalize deviceType per protocol spec Section 7.1
 	anno.DeviceType = normalizeDeviceType(anno.DeviceType)
-	if _, exists := mcs.discovered[ip]; !exists && len(mcs.discovered) >= maxDiscoveredDevices {
-		var oldestIP string
+	now := time.Now()
+	fingerprint := anno.Fingerprint
+	if fingerprint == "" {
+		// Legacy HTTP peers should provide a fingerprint, but keep an address-scoped
+		// fallback rather than merging unrelated malformed peers.
+		fingerprint = "host:" + ip
+	}
+	if _, exists := mcs.discovered[fingerprint]; !exists && len(mcs.discovered) >= maxDiscoveredDevices {
+		var oldestKey string
 		var oldest time.Time
-		for candidateIP, entry := range mcs.discovered {
-			if oldestIP == "" || entry.lastSeen.Before(oldest) {
-				oldestIP, oldest = candidateIP, entry.lastSeen
+		for candidate, entry := range mcs.discovered {
+			if oldestKey == "" || entry.lastSeen.Before(oldest) {
+				oldestKey, oldest = candidate, entry.lastSeen
 			}
 		}
-		delete(mcs.discovered, oldestIP)
+		delete(mcs.discovered, oldestKey)
 	}
-	mcs.discovered[ip] = discoveryEntry{
-		anno:     anno,
-		lastSeen: time.Now(),
+	entry := mcs.discovered[fingerprint]
+	if entry.channels == nil {
+		entry.channels = make(map[string]discoveryChannel)
 	}
+	entry.anno = anno
+	entry.lastSeen = now
+	channel := discoveryChannel{host: ip, protocol: anno.Protocol, port: anno.Port, lastSeen: now}
+	// One endpoint may change protocol or port across rediscovery. Replace any
+	// older channel for the same host before adding the fresh confirmation.
+	for key, existing := range entry.channels {
+		if existing.host == ip {
+			delete(entry.channels, key)
+		}
+	}
+	entry.channels[discoveryChannelKey(ip, anno.Protocol, anno.Port)] = channel
+	mcs.discovered[fingerprint] = entry
 }
 
 func (mcs *Discoverer) RegisterDevice(anno models.Announcement) {
@@ -802,7 +940,7 @@ func buildSubnetTargets(ips []net.IP) []string {
 	return targets
 }
 
-// ScanSubnet performs legacy HTTP discovery by scanning the subnet of all private IPv4 interfaces
+// ScanSubnet performs legacy HTTP discovery by scanning the /24 of all usable IPv4 interfaces
 // per protocol spec Section 3.2.
 func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
 	started := time.Now()

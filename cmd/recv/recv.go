@@ -3,7 +3,10 @@ package recv
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"os"
 	"sync"
 	"time"
@@ -34,8 +37,13 @@ var (
 	signalingIDFile string
 )
 
-// shutdownTimeout is the maximum time to wait for goroutines to exit cleanly during shutdown.
-const shutdownTimeout = 5 * time.Second
+const (
+	// shutdownTimeout is the maximum time to wait for goroutines to exit cleanly during shutdown.
+	shutdownTimeout        = 5 * time.Second
+	webRTCReconnectInitial = time.Second
+	webRTCReconnectMax     = 30 * time.Second
+	webRTCStableSession    = 30 * time.Second
+)
 
 var Cmd = &cobra.Command{
 	Use:   "recv",
@@ -88,17 +96,27 @@ var Cmd = &cobra.Command{
 			return
 		}
 
-		// Create a context that will be cancelled on shutdown signal
+		// All long-running components share one cancellation domain. A fatal HTTP
+		// listener exit cancels the process instead of leaving a live PID whose
+		// receive service has silently disappeared. Discovery and WebRTC handle
+		// their own transient network failures internally.
 		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		componentErr := make(chan error, 2)
 
-		// Start HTTP server (will shut down when context is cancelled)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			err := recver.Start(ctx)
-			if err != nil {
-				slog.Error("Fail to start server", "error", err)
+			if ctx.Err() != nil {
 				return
+			}
+			if err == nil {
+				err = errors.New("HTTP receiver stopped unexpectedly")
+			}
+			select {
+			case componentErr <- fmt.Errorf("HTTP receiver stopped: %w", err):
+			default:
 			}
 		}()
 
@@ -106,12 +124,22 @@ var Cmd = &cobra.Command{
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				startWebRTCReceiver(ctx, devname, savetodir, pin, allowedExts, extRoutes, recver.LogTransfer, configDir, requirePairing, stunServers)
+				if err := startWebRTCReceiver(ctx, devname, savetodir, pin, allowedExts, extRoutes, recver.LogTransfer, configDir, requirePairing, stunServers); err != nil && ctx.Err() == nil {
+					select {
+					case componentErr <- fmt.Errorf("WebRTC receiver stopped: %w", err):
+					default:
+					}
+				}
 			}()
 		}
 
-		<-utils.WaitForSignal()
-		cancel() // Signal both HTTP and WebRTC receivers to stop
+		signals := utils.WaitForSignal()
+		select {
+		case <-signals:
+		case err := <-componentErr:
+			slog.Error("Receiver component failed", "error", err)
+		}
+		cancel()
 
 		// Wait for goroutines with timeout to prevent hanging on shutdown
 		done := make(chan struct{})
@@ -129,112 +157,172 @@ var Cmd = &cobra.Command{
 	},
 }
 
-func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, allowedExts []string, extRoutes map[string]string, logTransfer func(filename string, size int64, sender string), cfgDir string, reqPairing bool, customSTUN []string) {
-	// Generate signing key and token
-	key, token, err := crypto.GenerateKeyPairWithToken()
+func jitterReconnectDelay(base time.Duration) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	spread := base / 5 // ±20% prevents reconnect herds after server/network recovery.
+	if spread <= 0 {
+		return base
+	}
+	return base - spread + time.Duration(rand.Int64N(int64(2*spread)+1))
+}
+
+func nextReconnectBackoff(current time.Duration) time.Duration {
+	if current <= 0 {
+		return webRTCReconnectInitial
+	}
+	next := current * 2
+	if next > webRTCReconnectMax {
+		return webRTCReconnectMax
+	}
+	return next
+}
+
+func reconnectBackoffAfterSession(current, sessionDuration time.Duration) time.Duration {
+	if sessionDuration >= webRTCStableSession {
+		return webRTCReconnectInitial
+	}
+	return current
+}
+
+func waitReconnect(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(jitterReconnectDelay(delay))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func startWebRTCReceiver(ctx context.Context, deviceName, saveDir, pin string, allowedExts []string, extRoutes map[string]string, logTransfer func(filename string, size int64, sender string), cfgDir string, reqPairing bool, customSTUN []string) error {
+	// Keep one cryptographic identity for the process lifetime. Only the
+	// timestamp token and server-assigned signaling ID change on reconnect.
+	key, _, err := crypto.GenerateKeyPairWithToken()
 	if err != nil {
-		slog.Error("Failed to generate key pair with token", "error", err)
-		return
+		return fmt.Errorf("generate WebRTC signing identity: %w", err)
 	}
 
-	// Initialize trusted device store if config dir is provided
 	var trustedStore *storage.TrustedDeviceStore
 	if cfgDir != "" {
 		trustedStore, err = storage.NewTrustedDeviceStore(cfgDir)
 		if err != nil {
 			slog.Error("Failed to initialize trusted device store", "error", err)
-			// Continue without trust - just won't persist
 		} else {
 			slog.Info("Trusted device store initialized", "config", cfgDir)
 		}
 	}
 
-	// Connect to signaling server
-	info := signaling.NewClientInfo(deviceName, token)
-
-	client, err := signaling.Connect(signaling.DefaultSignalingServer, info)
-	if err != nil {
-		slog.Error("Failed to connect to signaling server", "error", err)
-		return
-	}
-	defer func() { _ = client.Close() }()
-
-	// Set up token refresh for long-running sessions (matches web client behavior)
-	// Tokens are valid for 1 hour; refresh every 30 minutes to maintain validity
-	client.SetTokenGenerator(func() (string, error) {
-		return key.GenerateTokenTimestamp()
-	})
-
-	slog.Info("WebRTC receiver listening", "id", client.ClientID())
-
-	// Write signaling ID to file for self-filtering in scan command
 	if signalingIDFile != "" {
-		if err := os.WriteFile(signalingIDFile, []byte(client.ClientID().String()), 0600); err != nil {
-			slog.Warn("Failed to write signaling ID file", "path", signalingIDFile, "error", err)
-		} else {
-			// Clean up the file on exit
-			defer func() { _ = os.Remove(signalingIDFile) }()
+		_ = os.Remove(signalingIDFile)
+		defer func() { _ = os.Remove(signalingIDFile) }()
+	}
+
+	backoff := webRTCReconnectInitial
+	for ctx.Err() == nil {
+		token, tokenErr := key.GenerateTokenTimestamp()
+		if tokenErr != nil {
+			return fmt.Errorf("generate WebRTC signaling token: %w", tokenErr)
 		}
-	}
+		info := signaling.NewClientInfo(deviceName, token)
 
-	// Create receiver
-	receiver := transfer.NewRTCReceiver(client, key, pin, saveDir)
-	defer func() { _ = receiver.Close() }()
-
-	// Set trusted device store if configured
-	if trustedStore != nil {
-		receiver.SetTrustedStore(trustedStore)
-	}
-
-	// Set pairing requirement
-	if reqPairing {
-		receiver.SetRequirePairing(true)
-		slog.Info("Pairing required for WebRTC transfers")
-	}
-
-	// Set custom STUN servers if configured
-	if len(customSTUN) > 0 {
-		receiver.SetSTUNServers(customSTUN)
-		slog.Info("Using custom STUN servers", "servers", customSTUN)
-	}
-
-	// Set extension routing if configured
-	if len(extRoutes) > 0 {
-		receiver.SetExtensionRoutes(extRoutes)
-	}
-
-	// Set up file received handler for transfer logging
-	if logTransfer != nil {
-		receiver.OnFileReceived(logTransfer)
-	}
-
-	// Set up file selection handler with extension filtering
-	receiver.OnSelectFiles(func(files []transfer.RTCFileDto) []string {
-		var ids []string
-		for _, f := range files {
-			// Check extension filter using shared utility
-			if !utils.IsExtensionAllowed(f.FileName, allowedExts) {
-				slog.Info("Rejecting file (extension not allowed)", "name", f.FileName)
-				continue
+		client, connectErr := signaling.ConnectWithContext(ctx, signaling.DefaultSignalingServer, info)
+		if connectErr != nil {
+			if ctx.Err() != nil {
+				return nil
 			}
-			slog.Info("Accepting file via WebRTC", "name", f.FileName, "size", f.Size)
-			ids = append(ids, f.ID)
+			if signalingIDFile != "" {
+				_ = os.Remove(signalingIDFile)
+			}
+			slog.Warn("WebRTC signaling unavailable; retrying", "error", connectErr, "retry_in", backoff)
+			if !waitReconnect(ctx, backoff) {
+				return nil
+			}
+			backoff = nextReconnectBackoff(backoff)
+			continue
 		}
-		return ids
-	})
 
-	// Listen for offers with context for proper cancellation
-	receiver.ListenForOffersWithContext(ctx, func(offer signaling.WsServerMessage) {
-		slog.Info("Received WebRTC offer", "peer", offer.Peer.Alias)
-		// Set sender info for PAIR flow (used for persisting trusted devices)
-		receiver.SetSenderInfo(offer.Peer.Alias)
-		if err := receiver.AcceptOffer(offer); err != nil {
-			slog.Error("Failed to accept offer", "error", err)
+		connectedAt := time.Now()
+		client.SetTokenGenerator(func() (string, error) { return key.GenerateTokenTimestamp() })
+
+		if signalingIDFile != "" {
+			if err := os.WriteFile(signalingIDFile, []byte(client.ClientID().String()), 0600); err != nil {
+				slog.Warn("Failed to write signaling ID file", "path", signalingIDFile, "error", err)
+			}
 		}
-	})
+		slog.Info("WebRTC receiver listening", "id", client.ClientID())
 
-	// Block until context is cancelled (shutdown signal from main)
-	<-ctx.Done()
+		receiver := transfer.NewRTCReceiver(client, key, pin, saveDir)
+		if trustedStore != nil {
+			receiver.SetTrustedStore(trustedStore)
+		}
+		if reqPairing {
+			receiver.SetRequirePairing(true)
+		}
+		if len(customSTUN) > 0 {
+			receiver.SetSTUNServers(customSTUN)
+		}
+		if len(extRoutes) > 0 {
+			receiver.SetExtensionRoutes(extRoutes)
+		}
+		if logTransfer != nil {
+			receiver.OnFileReceived(logTransfer)
+		}
+		receiver.OnSelectFiles(func(files []transfer.RTCFileDto) []string {
+			ids := make([]string, 0, len(files))
+			for _, f := range files {
+				if !utils.IsExtensionAllowed(f.FileName, allowedExts) {
+					slog.Info("Rejecting file (extension not allowed)", "name", f.FileName)
+					continue
+				}
+				slog.Info("Accepting file via WebRTC", "name", f.FileName, "size", f.Size)
+				ids = append(ids, f.ID)
+			}
+			return ids
+		})
+		receiver.ListenForOffersWithContext(ctx, func(offer signaling.WsServerMessage) {
+			peerAlias := "unknown"
+			if offer.Peer != nil {
+				peerAlias = offer.Peer.Alias
+			}
+			slog.Info("Received WebRTC offer", "peer", peerAlias)
+			if err := receiver.AcceptOffer(offer); err != nil {
+				if errors.Is(err, transfer.ErrReceiverBusy) {
+					slog.Debug("Ignoring WebRTC offer while receiver is busy", "peer", peerAlias)
+					return
+				}
+				slog.Error("Failed to accept offer", "peer", peerAlias, "error", err)
+			}
+		})
+
+		select {
+		case <-ctx.Done():
+			_ = receiver.Close()
+			_ = client.Close()
+			if signalingIDFile != "" {
+				_ = os.Remove(signalingIDFile)
+			}
+			return nil
+		case <-client.Done():
+			// Clear the stale server-assigned ID before cleanup/reconnect so a
+			// concurrent scan never excludes a dead signaling identity.
+			if signalingIDFile != "" {
+				_ = os.Remove(signalingIDFile)
+			}
+			_ = receiver.Close()
+			_ = client.Close()
+			slog.Warn("WebRTC signaling disconnected; reconnecting")
+		}
+
+		backoff = reconnectBackoffAfterSession(backoff, time.Since(connectedAt))
+		if !waitReconnect(ctx, backoff) {
+			return nil
+		}
+		backoff = nextReconnectBackoff(backoff)
+	}
+	return nil
 }
 
 func init() {

@@ -46,6 +46,8 @@ type PeerConnection struct {
 	onOpen            func()
 	onClose           func()
 	bufferedAmountLow chan struct{}
+	closed            chan struct{}
+	closedOnce        sync.Once
 }
 
 // PeerConfig configures a new peer connection.
@@ -99,6 +101,7 @@ func NewPeerConnection(config PeerConfig) (*PeerConnection, error) {
 	p := &PeerConnection{
 		pc:                pc,
 		bufferedAmountLow: make(chan struct{}, 1),
+		closed:            make(chan struct{}),
 	}
 
 	// Set up connection state handler
@@ -107,12 +110,7 @@ func NewPeerConnection(config PeerConfig) (*PeerConnection, error) {
 		if state == webrtc.PeerConnectionStateClosed ||
 			state == webrtc.PeerConnectionStateFailed ||
 			state == webrtc.PeerConnectionStateDisconnected {
-			p.mu.Lock()
-			handler := p.onClose
-			p.mu.Unlock()
-			if handler != nil {
-				handler()
-			}
+			p.notifyClose()
 		}
 		if state == webrtc.PeerConnectionStateConnected {
 			slog.Info("WebRTC connection established!")
@@ -214,10 +212,12 @@ func (p *PeerConnection) setupDataChannel(dc *webrtc.DataChannel) {
 
 	dc.OnClose(func() {
 		slog.Info("Data channel closed")
+		p.notifyClose()
 	})
 
 	dc.OnError(func(err error) {
 		slog.Error("Data channel error", "error", err)
+		p.notifyClose()
 	})
 }
 
@@ -315,12 +315,44 @@ func (p *PeerConnection) OnOpen(handler func()) {
 // Thread-safe: can be called concurrently with callback invocations.
 func (p *PeerConnection) OnClose(handler func()) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.onClose = handler
+	closed := p.closed
+	p.mu.Unlock()
+	if handler != nil && closed != nil {
+		select {
+		case <-closed:
+			go handler()
+		default:
+		}
+	}
+}
+
+func (p *PeerConnection) notifyClose() {
+	p.closedOnce.Do(func() {
+		if p.closed != nil {
+			close(p.closed)
+		}
+		p.mu.Lock()
+		handler := p.onClose
+		p.mu.Unlock()
+		if handler != nil {
+			handler()
+		}
+	})
+}
+
+// Done is closed when the peer connection or data channel becomes terminal.
+func (p *PeerConnection) Done() <-chan struct{} {
+	return p.closed
 }
 
 // Send sends data through the data channel.
 func (p *PeerConnection) Send(data []byte) error {
+	select {
+	case <-p.closed:
+		return fmt.Errorf("peer connection closed")
+	default:
+	}
 	p.mu.Lock()
 	dc := p.dataChannel
 	p.mu.Unlock()
@@ -334,6 +366,11 @@ func (p *PeerConnection) Send(data []byte) error {
 
 // SendText sends text through the data channel.
 func (p *PeerConnection) SendText(text string) error {
+	select {
+	case <-p.closed:
+		return fmt.Errorf("peer connection closed")
+	default:
+	}
 	p.mu.Lock()
 	dc := p.dataChannel
 	p.mu.Unlock()
@@ -369,6 +406,8 @@ func (p *PeerConnection) WaitBufferEmpty(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-p.closed:
+			return fmt.Errorf("peer connection closed")
 		case <-ticker.C:
 			if p.BufferedAmount() == 0 {
 				return nil
@@ -437,6 +476,8 @@ func (p *PeerConnection) WaitBufferBelow(ctx context.Context, limit uint64) erro
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-p.closed:
+			return fmt.Errorf("peer connection closed")
 		case <-low:
 			if dc.BufferedAmount() <= limit {
 				return nil
@@ -452,7 +493,27 @@ func (p *PeerConnection) WaitBufferBelowWithTimeout(limit uint64, timeout time.D
 	if dc == nil {
 		return fmt.Errorf("data channel not ready")
 	}
-	return waitForBufferedAmountBelow(dc, low, limit, timeout)
+	if dc.BufferedAmount() <= limit {
+		return nil
+	}
+	dc.SetBufferedAmountLowThreshold(limit)
+	if dc.BufferedAmount() <= limit {
+		return nil
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	for {
+		select {
+		case <-p.closed:
+			return fmt.Errorf("peer connection closed")
+		case <-low:
+			if dc.BufferedAmount() <= limit {
+				return nil
+			}
+		case <-timer.C:
+			return context.DeadlineExceeded
+		}
+	}
 }
 
 // WaitBufferEmptyWithTimeout is WaitBufferEmpty with a timeout.
@@ -465,6 +526,7 @@ func (p *PeerConnection) WaitBufferEmptyWithTimeout(timeout time.Duration) error
 
 // Close closes the peer connection and waits for it to fully close.
 func (p *PeerConnection) Close() error {
+	p.notifyClose()
 	if p.pc == nil {
 		return nil
 	}

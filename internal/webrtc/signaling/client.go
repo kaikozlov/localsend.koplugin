@@ -26,11 +26,14 @@ const (
 	// Tokens are valid for 1 hour, so refreshing at 30 minutes provides margin.
 	tokenRefreshInterval = 30 * time.Minute
 
+	// Connection/handshake timeout for long-running CLI paths.
+	connectTimeout = 10 * time.Second
+
 	// Write timeout for WebSocket messages.
 	writeTimeout = 10 * time.Second
 
-	// readTimeout is the timeout for reading a single WebSocket message.
-	readTimeout = 30 * time.Second
+	// readTimeout bounds the initial HELLO read after the WebSocket upgrade.
+	readTimeout = 10 * time.Second
 
 	// MaxPeers is the maximum number of peers to track.
 	// Protects against memory exhaustion on resource-constrained devices (e.g., e-readers with 256MB RAM).
@@ -53,16 +56,18 @@ type answerCallback struct {
 
 // SignalingClient manages connection to the LocalSend signaling server.
 type SignalingClient struct {
-	conn      *websocket.Conn
-	client    ClientInfo // Our info with server-assigned ID
-	peers     map[uuid.UUID]ClientInfo
-	peersMu   sync.RWMutex
-	msgChan   chan WsServerMessage
-	sendChan  chan WsClientMessage
-	done      chan struct{}
-	closeOnce sync.Once                 // Ensures Close() is only executed once
-	onAnswer  map[string]answerCallback // sessionID -> callback with TTL
-	answerMu  sync.Mutex
+	conn            *websocket.Conn
+	client          ClientInfo // Our info with server-assigned ID
+	peers           map[uuid.UUID]ClientInfo
+	peersMu         sync.RWMutex
+	msgChan         chan WsServerMessage
+	offerChan       chan WsServerMessage
+	offerSubscribed atomic.Bool
+	sendChan        chan WsClientMessage
+	done            chan struct{}
+	closeOnce       sync.Once                 // Ensures Close() is only executed once
+	onAnswer        map[string]answerCallback // sessionID -> callback with TTL
+	answerMu        sync.Mutex
 
 	// Token refresh support
 	baseInfo       ClientInfoWithoutID // Client info without token (for refresh)
@@ -72,7 +77,9 @@ type SignalingClient struct {
 
 // Connect establishes a WebSocket connection to the signaling server.
 func Connect(uri string, info ClientInfoWithoutID) (*SignalingClient, error) {
-	return ConnectWithContext(context.Background(), uri, info)
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+	return ConnectWithContext(ctx, uri, info)
 }
 
 func buildSignalingURL(uri string, info ClientInfoWithoutID) (string, error) {
@@ -92,6 +99,11 @@ func buildSignalingURL(uri string, info ClientInfoWithoutID) (string, error) {
 
 // ConnectWithContext establishes a WebSocket connection with context for cancellation.
 func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutID) (*SignalingClient, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, connectTimeout)
+		defer cancel()
+	}
 	wsURL, err := buildSignalingURL(uri, info)
 	if err != nil {
 		return nil, err
@@ -100,7 +112,7 @@ func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutI
 	slog.Debug("Connecting to signaling server", "url", wsURL)
 
 	// Connect to WebSocket with context
-	dialer := websocket.Dialer{}
+	dialer := websocket.Dialer{HandshakeTimeout: connectTimeout}
 	conn, _, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to signaling server: %w", err)
@@ -108,12 +120,13 @@ func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutI
 	conn.SetReadLimit(maxSignalingMessageBytes)
 
 	client := &SignalingClient{
-		conn:     conn,
-		peers:    make(map[uuid.UUID]ClientInfo),
-		msgChan:  make(chan WsServerMessage, 16),
-		sendChan: make(chan WsClientMessage, 16),
-		done:     make(chan struct{}),
-		onAnswer: make(map[string]answerCallback),
+		conn:      conn,
+		peers:     make(map[uuid.UUID]ClientInfo),
+		msgChan:   make(chan WsServerMessage, 16),
+		offerChan: make(chan WsServerMessage, 32),
+		sendChan:  make(chan WsClientMessage, 16),
+		done:      make(chan struct{}),
+		onAnswer:  make(map[string]answerCallback),
 		baseInfo: ClientInfoWithoutID{
 			Alias:       info.Alias,
 			Version:     info.Version,
@@ -129,13 +142,14 @@ func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutI
 		return nil, err
 	}
 
-	// Start background goroutines
+	// Log the HELLO snapshot before the reader can mutate the peer map.
+	slog.Debug("Connected to signaling server", "id", client.client.ID, "peers", len(client.peers))
+
+	// Start background goroutines only after all direct initialization reads are complete.
 	go client.readLoop()
 	go client.writeLoop()
 	go client.pingLoop()
 	go client.answerCallbackCleanupLoop()
-
-	slog.Debug("Connected to signaling server", "id", client.client.ID, "peers", len(client.peers))
 
 	return client, nil
 }
@@ -143,16 +157,25 @@ func ConnectWithContext(ctx context.Context, uri string, info ClientInfoWithoutI
 // waitForHello waits for the initial HELLO message from the server.
 func (c *SignalingClient) waitForHello(ctx context.Context) error {
 	_ = c.conn.SetReadDeadline(time.Now().Add(readTimeout))
-	defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }()
 	readDone := make(chan struct{})
+	watchDone := make(chan struct{})
 	go func() {
+		defer close(watchDone)
 		select {
 		case <-ctx.Done():
 			_ = c.conn.SetReadDeadline(time.Now())
 		case <-readDone:
 		}
 	}()
-	defer close(readDone)
+	defer func() {
+		close(readDone)
+		// The watcher must finish before clearing the deadline. Otherwise the
+		// caller can cancel its connect context immediately after HELLO and the
+		// watcher can race in afterward, poisoning the established connection
+		// with a deadline in the past.
+		<-watchDone
+		_ = c.conn.SetReadDeadline(time.Time{})
+	}()
 
 	_, msgBytes, err := c.conn.ReadMessage()
 	if err != nil {
@@ -193,6 +216,7 @@ func (c *SignalingClient) waitForHello(ctx context.Context) error {
 // readLoop reads messages from the WebSocket.
 func (c *SignalingClient) readLoop() {
 	defer close(c.msgChan)
+	defer close(c.offerChan)
 
 	for {
 		_, msgBytes, err := c.conn.ReadMessage()
@@ -200,6 +224,7 @@ func (c *SignalingClient) readLoop() {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				slog.Warn("WebSocket read error", "error", err)
 			}
+			_ = c.Close()
 			return
 		}
 
@@ -209,10 +234,8 @@ func (c *SignalingClient) readLoop() {
 			continue
 		}
 
-		// Handle peer updates
 		c.handlePeerUpdate(msg)
 
-		// Handle answer callbacks
 		if msg.Type == "ANSWER" && msg.SessionID != "" {
 			c.answerMu.Lock()
 			if cb, ok := c.onAnswer[msg.SessionID]; ok {
@@ -224,11 +247,33 @@ func (c *SignalingClient) readLoop() {
 			c.answerMu.Unlock()
 		}
 
-		// Forward to message channel
+		if msg.Type == "OFFER" {
+			// Preserve offers reliably once a receiver has subscribed, while still
+			// allowing sender/scan clients that never consume offers to make
+			// forward progress under unsolicited traffic. The buffer also covers
+			// the small interval between Connect returning and subscription.
+			if c.offerSubscribed.Load() {
+				select {
+				case c.offerChan <- msg:
+				case <-c.done:
+					return
+				}
+			} else {
+				select {
+				case c.offerChan <- msg:
+				default:
+					slog.Debug("Dropping unsolicited signaling offer before subscription")
+				}
+			}
+			continue
+		}
+
+		// JOIN/UPDATE/LEFT/ERROR are informational because peer state was
+		// already applied above. A slow observer must never block socket reads.
 		select {
 		case c.msgChan <- msg:
-		case <-c.done:
-			return
+		default:
+			slog.Debug("Dropping saturated informational signaling event", "type", msg.Type)
 		}
 	}
 }
@@ -443,20 +488,42 @@ func (c *SignalingClient) GetPeer(id uuid.UUID) (ClientInfo, bool) {
 	return peer, ok
 }
 
-// Messages returns a channel for receiving server messages.
+// Messages returns best-effort informational signaling events. Peer state is
+// updated before delivery, so callers may safely ignore or stop draining it.
 func (c *SignalingClient) Messages() <-chan WsServerMessage {
 	return c.msgChan
 }
 
-// SendUpdate sends an UPDATE message to the server.
-func (c *SignalingClient) SendUpdate(info ClientInfoWithoutID) error {
-	msg := NewUpdateMessage(info)
+// Offers subscribes to incoming OFFER messages. Once subscribed, offer delivery
+// is reliable until the signaling connection closes.
+func (c *SignalingClient) Offers() <-chan WsServerMessage {
+	c.offerSubscribed.Store(true)
+	return c.offerChan
+}
+
+// Done is closed whenever either side of the signaling connection fails or
+// Close is called. Long-running owners use it to trigger reconnection.
+func (c *SignalingClient) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *SignalingClient) enqueue(msg WsClientMessage) error {
 	select {
-	case c.sendChan <- msg:
-		return nil
 	case <-c.done:
 		return fmt.Errorf("connection closed")
+	default:
 	}
+	select {
+	case <-c.done:
+		return fmt.Errorf("connection closed")
+	case c.sendChan <- msg:
+		return nil
+	}
+}
+
+// SendUpdate sends an UPDATE message to the server.
+func (c *SignalingClient) SendUpdate(info ClientInfoWithoutID) error {
+	return c.enqueue(NewUpdateMessage(info))
 }
 
 // SendOffer sends an OFFER message to a target peer.
@@ -466,13 +533,7 @@ func (c *SignalingClient) SendOffer(sessionID string, target uuid.UUID, sdp stri
 		return fmt.Errorf("failed to compress SDP: %w", err)
 	}
 
-	msg := NewOfferMessage(sessionID, target, compressedSDP)
-	select {
-	case c.sendChan <- msg:
-		return nil
-	case <-c.done:
-		return fmt.Errorf("connection closed")
-	}
+	return c.enqueue(NewOfferMessage(sessionID, target, compressedSDP))
 }
 
 // SendAnswer sends an ANSWER message to a target peer.
@@ -482,13 +543,7 @@ func (c *SignalingClient) SendAnswer(sessionID string, target uuid.UUID, sdp str
 		return fmt.Errorf("failed to compress SDP: %w", err)
 	}
 
-	msg := NewAnswerMessage(sessionID, target, compressedSDP)
-	select {
-	case c.sendChan <- msg:
-		return nil
-	case <-c.done:
-		return fmt.Errorf("connection closed")
-	}
+	return c.enqueue(NewAnswerMessage(sessionID, target, compressedSDP))
 }
 
 // OnAnswer registers a callback for when an ANSWER is received for a session.

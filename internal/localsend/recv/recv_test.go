@@ -1,6 +1,7 @@
 package recv
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -364,5 +365,13 @@ func TestLogTransfer_DoesNotStartCallbackAfterStop(t *testing.T) {
 		t.Fatal("on-transfer callback started after receiver was stopped")
 	} else if !os.IsNotExist(err) {
 		t.Fatalf("stat marker: %v", err)
+	}
+}
+
+func TestWaitDiscoveryRetry_Cancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if waitDiscoveryRetry(ctx, time.Minute) {
+		t.Fatal("canceled discovery retry reported success")
 	}
 }

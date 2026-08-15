@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"log/slog"
@@ -48,8 +49,9 @@ const (
 // This ensures attackers can't bypass rate limiting by reconnecting.
 // Cleanup is done lazily in isPeerBlocked() to avoid background CPU usage on e-readers.
 var (
-	blockedPeers   = make(map[string]time.Time) // signaling ID -> blocked until
-	blockedPeersMu sync.RWMutex
+	ErrReceiverBusy = errors.New("WebRTC receiver is busy")
+	blockedPeers    = make(map[string]time.Time) // signaling ID -> blocked until
+	blockedPeersMu  sync.RWMutex
 )
 
 // RTCReceiver handles receiving files over WebRTC.
@@ -57,6 +59,7 @@ type RTCReceiver struct {
 	signaling           *signaling.SignalingClient
 	signingKey          *crypto.SigningKey
 	peer                *PeerConnection
+	accepting           bool
 	pin                 string
 	pinAttempts         int
 	providedPINAttempts int
@@ -230,7 +233,23 @@ func (r *RTCReceiver) sendDelimiter() error {
 	return fmt.Errorf("data channel not initialized")
 }
 
+func (r *RTCReceiver) cleanupPartialFilesLocked() {
+	for _, file := range r.fileWriters {
+		_ = file.Close()
+	}
+	for _, path := range r.filePaths {
+		_ = os.Remove(path)
+	}
+	r.fileWriters = make(map[string]*os.File)
+	r.fileBuffers = make(map[string]*bufio.Writer)
+	r.filePaths = make(map[string]string)
+	r.fileHashers = make(map[string]hash.Hash)
+	r.currentFileID = ""
+	r.currentBytes = 0
+}
+
 func (r *RTCReceiver) terminateLocked() {
+	r.cleanupPartialFilesLocked()
 	r.state = stateDone
 	if r.peer == nil {
 		return
@@ -238,6 +257,18 @@ func (r *RTCReceiver) terminateLocked() {
 	peer := r.peer
 	r.peer = nil
 	go func() { _ = peer.Close() }()
+}
+
+func (r *RTCReceiver) handlePeerClosed(peer *PeerConnection) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.peer != peer {
+		return
+	}
+	r.cleanupPartialFilesLocked()
+	r.peer = nil
+	r.accepting = false
+	r.state = stateDone
 }
 
 // SetRequirePairing enables pairing requirement.
@@ -465,29 +496,24 @@ func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 		return fmt.Errorf("offer missing peer info")
 	}
 
-	// Check if this peer is blocked due to too many PIN attempts
 	peerID := offer.Peer.ID.String()
 	if isPeerBlocked(peerID) {
 		slog.Warn("Rejecting offer from blocked peer", "peer", offer.Peer.Alias, "id", peerID)
 		return fmt.Errorf("too many failed PIN attempts, please try again later")
 	}
 
-	// Clean up any previous connection
+	// Reserve the singleton receive session before doing ICE work. A duplicate or
+	// second sender must never tear down an in-progress transfer.
 	r.mu.Lock()
-	hadPreviousPeer := r.peer != nil
-	if r.peer != nil {
-		_ = r.peer.Close()
-		r.peer = nil
+	if r.accepting || (r.peer != nil && r.state != stateDone) {
+		r.mu.Unlock()
+		return ErrReceiverBusy
 	}
-	// Close any open file writers
-	for _, f := range r.fileWriters {
-		_ = f.Close()
-	}
-	r.fileWriters = make(map[string]*os.File)
-	r.fileBuffers = make(map[string]*bufio.Writer)
+	oldPeer := r.peer
+	r.peer = nil
+	r.accepting = true
+	r.cleanupPartialFilesLocked()
 	r.fileTokens = make(map[string]string)
-	r.filePaths = make(map[string]string)
-	r.fileHashers = make(map[string]hash.Hash)
 	r.files = nil
 	r.fileByID = make(map[string]RTCFileDto)
 	r.acceptedIDs = nil
@@ -495,8 +521,6 @@ func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 	r.folderTransfer = false
 	r.ensuredDirs = make(map[string]struct{})
 	r.uniqueFiles.Reset()
-	r.currentFileID = ""
-	r.currentBytes = 0
 	r.controlBuffer = nil
 	r.remoteNonce = nil
 	r.localNonce = nil
@@ -507,35 +531,53 @@ func (r *RTCReceiver) AcceptOffer(offer signaling.WsServerMessage) error {
 	r.senderPublicPEM = ""
 	r.senderToken = ""
 	r.pendingFiles = nil
-	r.senderSignalingID = peerID // Store for rate limiting
+	r.senderAlias = offer.Peer.Alias
+	r.senderSignalingID = peerID
+	r.state = stateWaitNonce
 	r.mu.Unlock()
 
-	if hadPreviousPeer {
-		slog.Info("Cleaned up previous connection")
+	if oldPeer != nil {
+		oldPeer.OnClose(nil)
+		_ = oldPeer.Close()
+	}
+
+	failAccept := func() {
+		r.mu.Lock()
+		r.accepting = false
+		r.state = stateDone
+		r.mu.Unlock()
 	}
 
 	sdp, err := signaling.DecompressSDP(offer.SDP)
 	if err != nil {
+		failAccept()
 		return fmt.Errorf("failed to decompress SDP: %w", err)
 	}
 
-	// Use custom STUN servers if set, otherwise use defaults
-	stunServers := r.stunServers
+	r.mu.Lock()
+	stunServers := append([]string(nil), r.stunServers...)
+	r.mu.Unlock()
 	if len(stunServers) == 0 {
 		stunServers = DefaultSTUNServers
 	}
 
-	peer, err := NewPeerConnection(PeerConfig{
-		STUNServers: stunServers,
-		IsInitiator: false,
-	})
+	peer, err := NewPeerConnection(PeerConfig{STUNServers: stunServers, IsInitiator: false})
 	if err != nil {
+		failAccept()
 		return fmt.Errorf("failed to create peer connection: %w", err)
 	}
-	r.peer = peer
-	r.state = stateWaitNonce
-
 	peer.OnDataMessage(r.handleDataMessage)
+	peer.OnClose(func() { r.handlePeerClosed(peer) })
+
+	r.mu.Lock()
+	if !r.accepting {
+		r.mu.Unlock()
+		_ = peer.Close()
+		return ErrReceiverBusy
+	}
+	r.peer = peer
+	r.accepting = false
+	r.mu.Unlock()
 
 	answer, err := peer.AcceptOffer(sdp)
 	if err != nil {
@@ -1280,21 +1322,15 @@ func (r *RTCReceiver) finishCurrentFile() {
 // Close closes the receiver.
 func (r *RTCReceiver) Close() error {
 	r.mu.Lock()
-	fileWriters := r.fileWriters
-	filePaths := r.filePaths
+	r.cleanupPartialFilesLocked()
 	peer := r.peer
-	r.fileBuffers = nil
-	r.fileWriters = nil
 	r.peer = nil
+	r.accepting = false
+	r.state = stateDone
 	r.mu.Unlock()
 
-	for _, f := range fileWriters {
-		_ = f.Close()
-	}
-	for _, path := range filePaths {
-		_ = os.Remove(path)
-	}
 	if peer != nil {
+		peer.OnClose(nil)
 		return peer.Close()
 	}
 	return nil
@@ -1308,7 +1344,7 @@ func (r *RTCReceiver) ListenForOffersWithContext(ctx context.Context, onOffer fu
 			select {
 			case <-ctx.Done():
 				return
-			case msg, ok := <-r.signaling.Messages():
+			case msg, ok := <-r.signaling.Offers():
 				if !ok {
 					return
 				}

@@ -130,7 +130,7 @@ func TestGetMyIPv4Addr(t *testing.T) {
 			t.Fatalf("GetMyIPv4Addr failed: %v", err)
 		}
 
-		// Result might be empty if no private IPv4 interfaces are running
+		// Result might be empty if no non-loopback IPv4 interfaces are running
 		// but it shouldn't error
 		for _, ip := range ips {
 			if ip.To4() == nil {
@@ -138,9 +138,6 @@ func TestGetMyIPv4Addr(t *testing.T) {
 			}
 			if ip.IsLoopback() {
 				t.Errorf("loopback addresses should be filtered out: %v", ip)
-			}
-			if !ip.IsPrivate() {
-				t.Errorf("non-private addresses should be filtered out: %v", ip)
 			}
 		}
 	})

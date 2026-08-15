@@ -267,6 +267,13 @@ func (s *RTCSender) Send(target uuid.UUID, files []FileMeta) error {
 		slog.Info("Data channel opened, starting nonce exchange")
 		s.startNonceExchange()
 	})
+	peer.OnClose(func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !s.closed && s.state != senderStateDone {
+			s.failLocked(fmt.Errorf("peer connection closed"))
+		}
+	})
 
 	// Create offer
 	sdp, err := peer.CreateOffer()
@@ -302,6 +309,8 @@ func (s *RTCSender) Send(target uuid.UUID, files []FileMeta) error {
 			return fmt.Errorf("failed to set answer: %w", err)
 		}
 		slog.Info("Received answer, waiting for connection")
+	case <-peer.Done():
+		return fmt.Errorf("peer connection closed while waiting for answer")
 	case <-time.After(answerTimeout):
 		_ = peer.Close()
 		return fmt.Errorf("timeout waiting for answer")
@@ -331,6 +340,8 @@ func (s *RTCSender) Send(target uuid.UUID, files []FileMeta) error {
 			return fmt.Errorf("sender closed")
 		}
 		return err
+	case <-peer.Done():
+		return fmt.Errorf("peer connection closed while waiting for file acceptance")
 	case <-time.After(fileAcceptTimeout):
 		_ = peer.Close()
 		return fmt.Errorf("timeout waiting for file acceptance")
@@ -829,6 +840,13 @@ func (s *RTCSender) prepareSendQueue() []sendable {
 	return queue
 }
 
+func (s *RTCSender) peerDone() <-chan struct{} {
+	if s.peer == nil {
+		return nil
+	}
+	return s.peer.Done()
+}
+
 // SendFiles sends all accepted files using the pipelined LocalSend Web protocol:
 // each file's header precedes its data, and the next file's header is
 // pre-announced before waiting for the current file's acknowledgement (matching
@@ -935,6 +953,8 @@ func (s *RTCSender) SendFiles() error {
 				}
 				return fmt.Errorf("file %s: %s", id, message)
 			}
+		case <-s.peerDone():
+			return fmt.Errorf("peer connection closed while waiting for acknowledgement for file %s", id)
 		case <-time.After(fileAcceptTimeout):
 			return fmt.Errorf("timeout waiting for acknowledgement for file %s", id)
 		}
@@ -946,8 +966,12 @@ func (s *RTCSender) SendFiles() error {
 	// This is critical per protocol spec to ensure all data is delivered
 	slog.Info("Waiting for buffer to flush...")
 	if err := ops.WaitBufferEmptyWithTimeout(bufferFlushTimeout); err != nil {
-		slog.Warn("Timeout waiting for buffer flush, continuing anyway", "error", err)
-		// Don't return error - allow graceful degradation
+		select {
+		case <-s.peerDone():
+			return fmt.Errorf("peer connection closed while flushing send buffer: %w", err)
+		default:
+			slog.Warn("Timeout waiting for buffer flush, continuing anyway", "error", err)
+		}
 	}
 
 	s.state = senderStateDone

@@ -74,8 +74,9 @@ func SHA256ofFile(fpath string) (string, error) {
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-// getMyIPv4Addr get ipv4 address of every RUNNING interfaces on the host
-// Note: ipv6, loopback and non-private addressess are ignored
+// GetMyIPv4Addr returns IPv4 addresses of running non-loopback interfaces.
+// LocalSend discovery is link-local by transport, so globally-routable, CGNAT,
+// and link-local IPv4 addresses are valid LAN interfaces too.
 func GetMyIPv4Addr() ([]net.IP, error) {
 	intfs, err := net.Interfaces()
 	if err != nil {
@@ -88,7 +89,7 @@ func GetMyIPv4Addr() ([]net.IP, error) {
 		addrs, _ := intf.Addrs()
 		for idx := range addrs {
 			ip, _, _ := net.ParseCIDR(addrs[idx].String())
-			if ip.To4() != nil && !ip.IsLoopback() && ip.IsPrivate() && (intf.Flags&net.FlagRunning != 0) {
+			if ip.To4() != nil && !ip.IsLoopback() && !ip.IsUnspecified() && (intf.Flags&net.FlagRunning != 0) {
 				res = append(res, ip)
 			}
 		}

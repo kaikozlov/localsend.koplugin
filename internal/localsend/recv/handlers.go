@@ -261,8 +261,8 @@ func (fr *FileReceiver) registerHandler(c fiber.Ctx) error {
 
 	// Register the discovered device
 	announcement.IP = c.IP()
-	if fr.discoverier != nil {
-		fr.discoverier.RegisterDevice(announcement)
+	if discoverer := fr.currentDiscoverer(); discoverer != nil {
+		discoverer.RegisterDevice(announcement)
 	}
 
 	// Respond with our device info

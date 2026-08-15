@@ -1195,3 +1195,93 @@ func TestConnectWithInvalidURL(t *testing.T) {
 		})
 	}
 }
+
+func TestSignalingClient_InformationalSaturationDoesNotBlockOffer(t *testing.T) {
+	release := make(chan struct{})
+	writeErr := make(chan error, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}).Upgrade(w, r, nil)
+		if err != nil {
+			writeErr <- err
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		write := func(msg WsServerMessage) bool {
+			if err := conn.WriteJSON(msg); err != nil {
+				select {
+				case writeErr <- err:
+				default:
+				}
+				return false
+			}
+			return true
+		}
+		self := ClientInfo{ID: uuid.New(), Alias: "self", Version: "2.3"}
+		peers := []ClientInfo{}
+		if !write(WsServerMessage{Type: "HELLO", Client: &self, Peers: &peers}) {
+			return
+		}
+		for i := 0; i < 64; i++ {
+			peer := ClientInfo{ID: uuid.New(), Alias: "peer", Version: "2.3"}
+			if !write(WsServerMessage{Type: "JOIN", Peer: &peer}) {
+				return
+			}
+		}
+		offerPeer := ClientInfo{ID: uuid.New(), Alias: "sender", Version: "2.3"}
+		if !write(WsServerMessage{Type: "OFFER", Peer: &offerPeer, SessionID: "s", SDP: "x"}) {
+			return
+		}
+		<-release
+	}))
+	defer server.Close()
+
+	client, err := Connect("ws"+strings.TrimPrefix(server.URL, "http"), ClientInfoWithoutID{Alias: "test", Version: "2.3"})
+	if err != nil {
+		close(release)
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	offers := client.Offers()
+	select {
+	case msg, ok := <-offers:
+		close(release)
+		if !ok {
+			t.Fatal("offer channel closed before OFFER delivery")
+		}
+		if msg.Type != "OFFER" || msg.SessionID != "s" {
+			t.Fatalf("offer=%#v", msg)
+		}
+	case err := <-writeErr:
+		close(release)
+		t.Fatalf("test signaling server write failed: %v", err)
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("informational event saturation blocked OFFER delivery")
+	}
+}
+
+func TestSignalingClient_ReadFailureClosesDone(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		self := ClientInfo{ID: uuid.New(), Alias: "self", Version: "2.3"}
+		peers := []ClientInfo{}
+		_ = conn.WriteJSON(WsServerMessage{Type: "HELLO", Client: &self, Peers: &peers})
+		_ = conn.Close()
+	}))
+	defer server.Close()
+	client, err := Connect("ws"+strings.TrimPrefix(server.URL, "http"), ClientInfoWithoutID{Alias: "test", Version: "2.3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-client.Done():
+	case <-time.After(time.Second):
+		t.Fatal("read-side disconnect did not close Done")
+	}
+	if err := client.SendUpdate(ClientInfoWithoutID{Alias: "x"}); err == nil {
+		t.Fatal("send after read failure unexpectedly succeeded")
+	}
+}
