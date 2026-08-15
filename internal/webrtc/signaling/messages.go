@@ -45,8 +45,9 @@ type ClientInfoWithoutID struct {
 	Token       string `json:"token"`
 }
 
-// NewClientInfo creates a ClientInfoWithoutID with standard CLI defaults.
-// This is the common pattern used by recv, scan, and send commands.
+// NewClientInfo creates the signaling identity used by recv, scan, and send.
+// Version 2.3 and SCREAMING_SNAKE_CASE device type intentionally match the
+// pinned LocalSend Web client, which is a WebRTC interoperability target.
 func NewClientInfo(alias, token string) ClientInfoWithoutID {
 	return ClientInfoWithoutID{
 		Alias:       alias,

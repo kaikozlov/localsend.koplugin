@@ -23,36 +23,15 @@ const (
 	DownloadPath    = "/api/localsend/v2/download"
 	PreDownloadPath = "/api/localsend/v2/prepare-download"
 
-	// v3 paths
-	NoncePathV3       = "/api/localsend/v3/nonce"
-	RegisterPathV3    = "/api/localsend/v3/register"
-	PreuploadPathV3   = "/api/localsend/v3/prepare-upload"
-	UploadPathV3      = "/api/localsend/v3/upload"
-	CancelPathV3      = "/api/localsend/v3/cancel"
-	InfoPathV3        = "/api/localsend/v3/info"
-	DownloadPathV3    = "/api/localsend/v3/download"
-	PreDownloadPathV3 = "/api/localsend/v3/prepare-download"
+	// Dormant official v3 HTTP scaffolding. At the pinned LocalSend 1.18.x
+	// source, these are the only v3 routes registered by the server. LocalSend
+	// Web does not use this HTTP surface; its transfers run over WebRTC.
+	NoncePathV3    = "/api/localsend/v3/nonce"
+	RegisterPathV3 = "/api/localsend/v3/register"
 )
 
-// DeviceTypeToV3 converts lowercase device type to SCREAMING_SNAKE_CASE for v3 HTTP API.
-// v2.1 uses lowercase ("mobile"), v3 HTTP uses uppercase ("MOBILE").
-// Note: v3 WebRTC signaling still uses lowercase.
+// DeviceTypeToV3 converts the lowercase v2 device type to the
+// SCREAMING_SNAKE_CASE representation used by v3 HTTP and WebRTC signaling.
 func DeviceTypeToV3(dt string) string {
 	return strings.ToUpper(dt)
-}
-
-// DeviceTypeFromV3 converts SCREAMING_SNAKE_CASE device type to lowercase.
-func DeviceTypeFromV3(dt string) string {
-	return strings.ToLower(dt)
-}
-
-// ProtocolToV3 converts lowercase protocol to uppercase for v3 HTTP API.
-// v2.1 uses lowercase ("https"), v3 HTTP uses uppercase ("HTTPS").
-func ProtocolToV3(p string) string {
-	return strings.ToUpper(p)
-}
-
-// ProtocolFromV3 converts uppercase protocol to lowercase.
-func ProtocolFromV3(p string) string {
-	return strings.ToLower(p)
 }

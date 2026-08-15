@@ -64,6 +64,12 @@ test-official *args='':
     KOPLUGIN_DEV_IMAGE="{{ _image }}" \
     tools/officialinterop/run.sh {{ args }}
 
+# Verify assumptions against the pinned LocalSend Web checkout, then run the
+# WebRTC tests that encode its signaling and transfer contract.
+[group('test')]
+test-web:
+    {{ _run }} sh -c 'cd /opt/plugin && tools/webinterop/verify.sh && go test ./internal/webrtc/... -run "^TestWebCompat_" -count=1'
+
 # =============================================================================
 # Setup (plugin-local)
 # =============================================================================

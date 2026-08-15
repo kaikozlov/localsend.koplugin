@@ -8,8 +8,10 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,5 +79,60 @@ func TestTryScanIP_HTTPSUsesCertificateFingerprint(t *testing.T) {
 	want := utils.SHA256ofCert(cert)
 	if got != want {
 		t.Fatalf("stored fingerprint = %q; want TLS certificate fingerprint %q", got, want)
+	}
+}
+
+func TestDeviceInfoHTTPClient_DoesNotFollowPeerRedirects(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.URL.Path == "/first" {
+			http.Redirect(w, r, "/second", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	resp, err := newDeviceInfoHTTPClient(nil).Get(server.URL + "/first")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d; want 302 without following peer redirect", resp.StatusCode)
+	}
+	if got := requests.Load(); got != 1 {
+		t.Fatalf("requests = %d; want exactly 1", got)
+	}
+}
+
+func TestDeviceInfoHTTPClient_IgnoresEnvironmentProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://proxy.invalid:3128")
+	t.Setenv("http_proxy", "http://proxy.invalid:3128")
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	serverAddr := strings.TrimPrefix(server.URL, "http://")
+
+	client := newDeviceInfoHTTPClient(nil)
+	transport := client.Transport.(*http.Transport)
+	var dialed string
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialed = addr
+		return (&net.Dialer{}).DialContext(ctx, network, serverAddr)
+	}
+
+	resp, err := client.Get("http://peer.localsend.invalid/info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if dialed != "peer.localsend.invalid:80" {
+		t.Fatalf("dialed %q; environment proxy must be ignored", dialed)
 	}
 }

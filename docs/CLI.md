@@ -125,6 +125,16 @@ JSON result fields:
 ./localsend recv -d ~/Downloads --ext-routing routing.json
 ```
 
+## Protocol compatibility
+
+The CLI has two deliberately different LocalSend interoperability paths:
+
+- **Native LocalSend 1.18.x:** protocol v2.2 over HTTP(S) and LAN discovery.
+- **LocalSend Web (`localsend/web@ea5d55d`):** protocol 2.3 signaling plus WebRTC.
+
+The WebRTC path remains experimental in the native LocalSend app, but it is
+required to send to or receive from the separately shipped LocalSend Web client.
+
 ## Sending Files
 
 ```bash
@@ -156,7 +166,7 @@ JSON result fields:
 | `-a, --accept-ext` | Comma-separated list of allowed extensions |
 | `--ext-routing` | Path to extension routing config (JSON) |
 | `--https` | Enable HTTPS (default: true) |
-| `-w, --webrtc` | Enable WebRTC/v3 protocol (default: true) |
+| `-w, --webrtc` | Enable WebRTC for LocalSend Web compatibility (default: true) |
 | `-l, --log` | Path to transfer log file (JSON lines format) |
 | `--on-transfer` | Shell command to run after each transfer |
 | `--config-dir` | Config directory for trusted devices |
@@ -173,7 +183,7 @@ JSON result fields:
 | `-p, --pin` | PIN code for authentication |
 | `-n, --devname` | Device name shown to receiver |
 | `--https` | Use HTTPS (default: true) |
-| `-w, --webrtc` | Send via WebRTC signaling server |
+| `-w, --webrtc` | Send via WebRTC signaling server (LocalSend Web compatible) |
 | `-t, --target` | Target peer ID (required for WebRTC) |
 | `--preserve-structure` | Keep subdirectory structure (default: true) |
 | `--config-dir` | Config directory for trusted devices |
@@ -187,7 +197,7 @@ JSON result fields:
 | `-t, --timeout` | Scan duration in seconds (default: 4) |
 | `-n, --lan` | Enable LAN discovery (mDNS/UDP) |
 | `-l, --legacy` | Enable legacy HTTP subnet scan |
-| `-w, --webrtc` | Enable WebRTC signaling discovery |
+| `-w, --webrtc` | Enable LocalSend Web/WebRTC signaling discovery |
 | `-j, --json` | Output results as JSON |
 | `-e, --exclude-id-file` | File with signaling ID to exclude |
 | `--devname` | Device name shown to other peers |

@@ -1,6 +1,7 @@
 package localsend
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,10 +36,28 @@ func normalizeDeviceType(deviceType string) string {
 	return "desktop"
 }
 
+func newDeviceInfoHTTPClient(tlsConfig *tls.Config) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	// LocalSend peers are local-network endpoints. Never route discovery/info
+	// traffic through HTTP_PROXY/HTTPS_PROXY, matching LocalSend 1.18.2.
+	transport.Proxy = nil
+	transport.TLSClientConfig = tlsConfig
+
+	return &http.Client{
+		Timeout:   30 * time.Second,
+		Transport: transport,
+		// A peer must not be able to redirect LocalSend control traffic to an
+		// arbitrary destination. Return the 3xx response to the caller instead.
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+}
+
 func GetDeviceInfo(ip string, https bool) (models.DeviceInfo, error) {
 	remoteAddr := net.JoinHostPort(ip, constants.DefaultPortStr)
 	scheme := utils.GetProtocolScheme(https)
-	client := &http.Client{Timeout: 30 * time.Second}
+	var tlsConfig *tls.Config
 	if https {
 		privateKeyFile, certFile, err := lsutils.GetCertPaths()
 		if err != nil {
@@ -48,8 +67,9 @@ func GetDeviceInfo(ip string, https bool) (models.DeviceInfo, error) {
 		if err != nil {
 			return models.DeviceInfo{}, err
 		}
-		client.Transport = &http.Transport{TLSClientConfig: lsutils.TLSClientConfig(cert, "")}
+		tlsConfig = lsutils.TLSClientConfig(cert, "")
 	}
+	client := newDeviceInfoHTTPClient(tlsConfig)
 	url := fmt.Sprintf("%s://%s%s", scheme, remoteAddr, constants.InfoPath)
 	resp, err := client.Get(url)
 	if err != nil {

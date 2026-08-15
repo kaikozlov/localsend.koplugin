@@ -1,19 +1,19 @@
 package models
 
 // NonceRequest represents a request to obtain a nonce for token generation.
-// Used in v3 protocol nonce exchange endpoint.
+// Used by the dormant official v3 HTTP nonce endpoint.
 type NonceRequest struct {
 	Nonce string `json:"nonce"`
 }
 
 // NonceResponse represents the server's response containing a nonce.
-// Used in v3 protocol nonce exchange endpoint.
+// Used by the dormant official v3 HTTP nonce endpoint.
 type NonceResponse struct {
 	Nonce string `json:"nonce"`
 }
 
-// RegisterRequestV3 represents a device registration request in the v3 protocol.
-// This is sent to /api/localsend/v3/register to establish a session.
+// RegisterRequestV3 represents the dormant official v3 HTTP registration DTO.
+// LocalSend Web does not use this endpoint; it registers through signaling.
 type RegisterRequestV3 struct {
 	Alias           string `json:"alias"`
 	Version         string `json:"version"`
@@ -25,8 +25,7 @@ type RegisterRequestV3 struct {
 	HasWebInterface bool   `json:"hasWebInterface,omitempty"`
 }
 
-// RegisterResponseV3 represents a device registration response in the v3 protocol.
-// Returned from /api/localsend/v3/register endpoint.
+// RegisterResponseV3 is returned by the dormant official v3 HTTP register endpoint.
 type RegisterResponseV3 struct {
 	Alias           string `json:"alias"`
 	Version         string `json:"version"`

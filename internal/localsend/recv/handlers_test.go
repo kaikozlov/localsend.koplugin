@@ -39,27 +39,6 @@ func newTestReceiver() *FileReceiver {
 	}
 }
 
-func performNonceExchange(t *testing.T, app *fiber.App) {
-	t.Helper()
-
-	nonce, err := crypto.GenerateNonce()
-	if err != nil {
-		t.Fatalf("Failed to generate nonce: %v", err)
-	}
-
-	body, _ := json.Marshal(models.NonceRequest{Nonce: crypto.EncodeNonce(nonce)})
-	req := httptest.NewRequest("POST", constants.NoncePathV3, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to call nonce endpoint: %v", err)
-	}
-	if resp.StatusCode != 200 {
-		t.Fatalf("Nonce exchange status = %d; want 200", resp.StatusCode)
-	}
-}
-
 // =============================================================================
 // Nonce Exchange Handler Tests (POST /api/localsend/v3/nonce)
 // =============================================================================
@@ -298,192 +277,6 @@ func TestRegisterV3Handler_InvalidJSON(t *testing.T) {
 
 	if resp.StatusCode != 400 {
 		t.Errorf("Status = %d; want 400 for invalid JSON", resp.StatusCode)
-	}
-}
-
-// =============================================================================
-// Info V3 Handler Tests (GET /api/localsend/v3/info)
-// =============================================================================
-
-func TestInfoV3Handler(t *testing.T) {
-	fr := newTestReceiver()
-	app := fiber.New()
-	app.Get(constants.InfoPathV3, fr.infoV3Handler)
-
-	req := httptest.NewRequest("GET", constants.InfoPathV3, nil)
-
-	resp, err := app.Test(req)
-	if err != nil {
-		t.Fatalf("Failed to make request: %v", err)
-	}
-
-	if resp.StatusCode != 200 {
-		t.Errorf("Status = %d; want 200", resp.StatusCode)
-	}
-
-	respBody, _ := io.ReadAll(resp.Body)
-	var infoResp models.RegisterResponseV3
-	if err := json.Unmarshal(respBody, &infoResp); err != nil {
-		t.Fatalf("Failed to parse response: %v", err)
-	}
-
-	if infoResp.Alias != "Test Device" {
-		t.Errorf("Alias = %q; want 'Test Device'", infoResp.Alias)
-	}
-}
-
-// =============================================================================
-// Prepare Upload V3 Handler Tests (POST /api/localsend/v3/prepare-upload)
-// =============================================================================
-
-func TestPreUploadV3Handler_BlockedBySession(t *testing.T) {
-	fr := newTestReceiver()
-
-	// Create an active session to block new requests
-	testFiles := models.FileMetas{
-		"test-file": models.FileMeta{
-			Id:       "test-file",
-			Filename: "test.txt",
-			Size:     100,
-		},
-	}
-	_, _ = fr.sessman.NewSession(testFiles, "127.0.0.1")
-
-	app := fiber.New()
-	app.Post(constants.NoncePathV3, fr.nonceExchangeHandler)
-	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
-	performNonceExchange(t, app)
-
-	body := []byte(`{"info":{"alias":"Sender"},"files":{"new":{"id":"new","fileName":"new.txt","size":1,"fileType":"text/plain"}}}`)
-	req := httptest.NewRequest("POST", constants.PreuploadPathV3, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, _ := app.Test(req)
-
-	// Should return 409 Conflict when blocked by another session
-	if resp.StatusCode != 409 {
-		t.Errorf("Status = %d; want 409 when blocked by existing session", resp.StatusCode)
-	}
-}
-
-func TestPreUploadV3Handler_PINRequired(t *testing.T) {
-	fr := newTestReceiver()
-	fr.SetPIN("123456")
-
-	app := fiber.New()
-	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
-
-	body := []byte(`{"info":{"alias":"Sender"},"files":{}}`)
-	req := httptest.NewRequest("POST", constants.PreuploadPathV3, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, _ := app.Test(req)
-
-	// Should return 401 when PIN is required but not provided
-	if resp.StatusCode != 401 {
-		t.Errorf("Status = %d; want 401 when PIN required", resp.StatusCode)
-	}
-}
-
-func TestPreUploadV3Handler_WrongPIN(t *testing.T) {
-	fr := newTestReceiver()
-	fr.SetPIN("123456")
-
-	app := fiber.New()
-	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
-
-	body := []byte(`{"info":{"alias":"Sender"},"files":{}}`)
-	req := httptest.NewRequest("POST", constants.PreuploadPathV3+"?pin=wrongpin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, _ := app.Test(req)
-
-	// Should return 401 when PIN is incorrect
-	if resp.StatusCode != 401 {
-		t.Errorf("Status = %d; want 401 when PIN is wrong", resp.StatusCode)
-	}
-}
-
-func TestPreUploadV3Handler_CorrectPIN(t *testing.T) {
-	fr := newTestReceiver()
-	fr.SetPIN("123456")
-
-	app := fiber.New()
-	app.Post(constants.NoncePathV3, fr.nonceExchangeHandler)
-	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
-	performNonceExchange(t, app)
-
-	body := []byte(`{"info":{"alias":"Sender","version":"2.3","deviceType":"MOBILE"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100,"fileType":"text/plain"}}}`)
-	req := httptest.NewRequest("POST", constants.PreuploadPathV3+"?pin=123456", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, _ := app.Test(req)
-
-	// Should succeed with correct PIN and valid nonce exchange
-	if resp.StatusCode != 200 {
-		t.Errorf("Status = %d; want 200 with correct PIN and nonce", resp.StatusCode)
-	}
-}
-
-func TestPreUploadV3Handler_RequiresNonceExchange(t *testing.T) {
-	fr := newTestReceiver()
-
-	app := fiber.New()
-	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
-
-	body := []byte(`{"info":{"alias":"Sender","version":"2.3","deviceType":"MOBILE"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100,"fileType":"text/plain"}}}`)
-	req := httptest.NewRequest("POST", constants.PreuploadPathV3, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, _ := app.Test(req)
-	if resp.StatusCode != 400 {
-		t.Errorf("Status = %d; want 400 when nonce exchange is missing", resp.StatusCode)
-	}
-}
-
-func TestPreUploadV3Handler_RejectsPartialNonceState(t *testing.T) {
-	fr := newTestReceiver()
-
-	nonce, _ := crypto.GenerateNonce()
-	fr.receivedNonceCache.Put("0.0.0.0", nonce)
-
-	app := fiber.New()
-	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
-
-	body := []byte(`{"info":{"alias":"Sender","version":"2.3","deviceType":"MOBILE"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100,"fileType":"text/plain"}}}`)
-	req := httptest.NewRequest("POST", constants.PreuploadPathV3, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, _ := app.Test(req)
-	if resp.StatusCode != 400 {
-		t.Errorf("Status = %d; want 400 when only one nonce cache entry exists", resp.StatusCode)
-	}
-}
-
-func TestPreUploadV3Handler_NonceReplayRejected(t *testing.T) {
-	fr := newTestReceiver()
-
-	app := fiber.New()
-	app.Post(constants.NoncePathV3, fr.nonceExchangeHandler)
-	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
-
-	body := []byte(`{"info":{"alias":"Sender","version":"2.3","deviceType":"MOBILE"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100,"fileType":"text/plain"}}}`)
-
-	// First request after nonce exchange should succeed.
-	performNonceExchange(t, app)
-	firstReq := httptest.NewRequest("POST", constants.PreuploadPathV3, bytes.NewReader(body))
-	firstReq.Header.Set("Content-Type", "application/json")
-	firstResp, _ := app.Test(firstReq)
-	if firstResp.StatusCode != 200 {
-		t.Fatalf("First prepare-upload status = %d; want 200", firstResp.StatusCode)
-	}
-
-	// Reusing without a fresh nonce exchange should fail.
-	secondReq := httptest.NewRequest("POST", constants.PreuploadPathV3, bytes.NewReader(body))
-	secondReq.Header.Set("Content-Type", "application/json")
-	secondResp, _ := app.Test(secondReq)
-	if secondResp.StatusCode != 400 {
-		t.Errorf("Second prepare-upload status = %d; want 400 (replay blocked)", secondResp.StatusCode)
 	}
 }
 
@@ -785,38 +578,6 @@ func TestPreUploadHandler_PINRateLimiting_ClearsOnSuccess(t *testing.T) {
 	// Should succeed (200)
 	if resp.StatusCode != 200 {
 		t.Errorf("Correct PIN: Status = %d; want 200", resp.StatusCode)
-	}
-}
-
-func TestPreUploadV3Handler_PINRateLimiting(t *testing.T) {
-	fr := newTestReceiver()
-	fr.SetPIN("123456")
-
-	app := fiber.New()
-	app.Post(constants.PreuploadPathV3, fr.preUploadV3Handler)
-
-	body := []byte(`{"info":{"alias":"Sender"},"files":{"file1":{"id":"file1","fileName":"test.txt","size":100}}}`)
-
-	// First 3 attempts with wrong PIN should return 401
-	for i := 0; i < 3; i++ {
-		req := httptest.NewRequest("POST", constants.PreuploadPathV3+"?pin=wrongpin", bytes.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, _ := app.Test(req)
-
-		if resp.StatusCode != 401 {
-			t.Errorf("Attempt %d: Status = %d; want 401", i+1, resp.StatusCode)
-		}
-	}
-
-	// 4th attempt should be rate limited (429)
-	req := httptest.NewRequest("POST", constants.PreuploadPathV3+"?pin=wrongpin", bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, _ := app.Test(req)
-
-	if resp.StatusCode != 429 {
-		t.Errorf("4th attempt: Status = %d; want 429 (rate limited)", resp.StatusCode)
 	}
 }
 
@@ -1122,14 +883,25 @@ func TestRegisterRoutes_DoesNotExposeUnsupportedV3TransferEndpoints(t *testing.T
 	app := fiber.New()
 	fr.registerRoutes(app)
 
-	for _, path := range []string{constants.PreuploadPathV3, constants.UploadPathV3, constants.CancelPathV3} {
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+	unsupported := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/localsend/v3/prepare-upload"},
+		{http.MethodPost, "/api/localsend/v3/upload"},
+		{http.MethodPost, "/api/localsend/v3/cancel"},
+		{http.MethodGet, "/api/localsend/v3/info"},
+		{http.MethodGet, "/api/localsend/v3/download"},
+		{http.MethodPost, "/api/localsend/v3/prepare-download"},
+	}
+	for _, tc := range unsupported {
+		req := httptest.NewRequest(tc.method, tc.path, strings.NewReader(`{}`))
 		resp, err := app.Test(req)
 		if err != nil {
-			t.Fatalf("POST %s: %v", path, err)
+			t.Fatalf("%s %s: %v", tc.method, tc.path, err)
 		}
 		if resp.StatusCode != fiber.StatusNotFound {
-			t.Errorf("POST %s status = %d; want 404", path, resp.StatusCode)
+			t.Errorf("%s %s status = %d; want 404", tc.method, tc.path, resp.StatusCode)
 		}
 	}
 }

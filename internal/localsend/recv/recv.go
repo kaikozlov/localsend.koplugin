@@ -405,10 +405,10 @@ func (fr *FileReceiver) registerRoutes(server *fiber.App) {
 	server.Post(constants.RegisterPath, fr.registerHandler)
 	server.Post(constants.RegisterPathV1, fr.registerHandler)
 
-	// V3 routes
+	// Dormant official v3 HTTP scaffolding. The pinned 1.18.x server exposes
+	// only nonce and register; LocalSend Web uses signaling + WebRTC instead.
 	server.Post(constants.NoncePathV3, fr.nonceExchangeHandler)
 	server.Post(constants.RegisterPathV3, fr.registerV3Handler)
-	server.Get(constants.InfoPathV3, fr.infoV3Handler)
 }
 
 // startDiscoveryWithRetry starts the discovery/advertisement loop.

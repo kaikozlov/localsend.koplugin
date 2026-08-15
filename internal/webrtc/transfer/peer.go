@@ -24,7 +24,6 @@ const (
 // Default STUN servers for ICE.
 var DefaultSTUNServers = []string{
 	"stun:stun.l.google.com:19302",
-	"stun:stun1.l.google.com:19302",
 }
 
 // controlChannelOps is the WebRTC control-plane surface used by both state
@@ -360,6 +359,32 @@ func (p *PeerConnection) WaitBufferEmpty(ctx context.Context) error {
 			}
 		}
 	}
+}
+
+// WaitBufferBelow waits until the data-channel send queue is at or below limit.
+// LocalSend Web throttles file streaming above 1 MiB; keeping the same bound
+// avoids unbounded buffering on constrained KOReader devices.
+func (p *PeerConnection) WaitBufferBelow(ctx context.Context, limit uint64) error {
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if p.BufferedAmount() <= limit {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+// WaitBufferBelowWithTimeout is WaitBufferBelow with a timeout.
+func (p *PeerConnection) WaitBufferBelowWithTimeout(limit uint64, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return p.WaitBufferBelow(ctx, limit)
 }
 
 // WaitBufferEmptyWithTimeout is WaitBufferEmpty with a timeout.

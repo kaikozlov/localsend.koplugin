@@ -298,6 +298,11 @@ func (r *recordingSendOps) SendDelimiter() error {
 	return nil
 }
 
+func (r *recordingSendOps) WaitBufferBelowWithTimeout(limit uint64, _ time.Duration) error {
+	r.events = append(r.events, fmt.Sprintf("backpressure:%d", limit))
+	return nil
+}
+
 func (r *recordingSendOps) WaitBufferEmptyWithTimeout(time.Duration) error { return nil }
 
 func (r *recordingSendOps) ackCurrent() {
@@ -408,6 +413,67 @@ func TestRTCSender_SendFiles_PreFiltersAcceptedIDsWithNoLocalFile(t *testing.T) 
 
 	if countExactEvent(rec.events, "delimiter") != 1 {
 		t.Fatalf("expected exactly one final delimiter; trace=%v", rec.events)
+	}
+}
+
+func TestWebCompat_SendFilesUsesNextHeaderBoundaryAndPerFileAck(t *testing.T) {
+	dir := t.TempDir()
+	pathA := writeSendFile(t, filepath.Join(dir, "a.bin"), "A")
+	pathB := writeSendFile(t, filepath.Join(dir, "b.bin"), "BB")
+
+	s := NewRTCSender(nil, nil, "")
+	s.files = []FileMeta{
+		{ID: "A", FileName: "a.bin", FilePath: pathA, Size: 1},
+		{ID: "B", FileName: "b.bin", FilePath: pathB, Size: 2},
+	}
+	s.fileTokens = map[string]string{"A": "ta", "B": "tb"}
+	s.acceptedIDs = []string{"A", "B"}
+	rec := &recordingSendOps{results: s.fileResults}
+	s.sendOpsOverride = rec
+
+	if err := s.SendFiles(); err != nil {
+		t.Fatalf("SendFiles returned error: %v", err)
+	}
+
+	want := []string{
+		"header:A", "backpressure:1048576", "data:A:1",
+		"header:B", "backpressure:1048576", "data:B:2", "delimiter",
+	}
+	if fmt.Sprint(rec.events) != fmt.Sprint(want) {
+		t.Fatalf("wire trace = %v; want %v", rec.events, want)
+	}
+}
+
+func TestWebCompat_SendFilesAppliesOneMiBBackpressureBeforeEachChunk(t *testing.T) {
+	dir := t.TempDir()
+	content := strings.Repeat("x", ChunkSize*2+1)
+	path := writeSendFile(t, filepath.Join(dir, "large.bin"), content)
+
+	s := NewRTCSender(nil, nil, "")
+	s.files = []FileMeta{{ID: "A", FileName: "large.bin", FilePath: path, Size: int64(len(content))}}
+	s.fileTokens = map[string]string{"A": "ta"}
+	s.acceptedIDs = []string{"A"}
+	rec := &recordingSendOps{results: s.fileResults}
+	s.sendOpsOverride = rec
+
+	if err := s.SendFiles(); err != nil {
+		t.Fatalf("SendFiles returned error: %v", err)
+	}
+
+	waits, chunks := 0, 0
+	for _, event := range rec.events {
+		if event == "backpressure:1048576" {
+			waits++
+		}
+		if strings.HasPrefix(event, "data:A:") {
+			chunks++
+		}
+	}
+	if chunks != 3 {
+		t.Fatalf("data chunks = %d; want 3; trace=%v", chunks, rec.events)
+	}
+	if waits != chunks {
+		t.Fatalf("backpressure waits = %d; want one before each of %d chunks; trace=%v", waits, chunks, rec.events)
 	}
 }
 

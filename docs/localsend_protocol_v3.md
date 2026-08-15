@@ -54,7 +54,7 @@ protocol.
 | Official LocalSend implementation | [`af3aad33c965defc39ecff8d9a4396a851ce3cc1`](https://github.com/localsend/localsend/tree/af3aad33c965defc39ecff8d9a4396a851ce3cc1) | Shipping app version constant, enabled routes, Rust DTOs, signaling server, and dormant WebRTC code | **Protocol 2.2 ships; WebRTC is disabled** |
 | Official protocol repository | [`62bd3406ec80d62f2ed46269cdc06c4dcc391083`](https://github.com/localsend/protocol/tree/62bd3406ec80d62f2ed46269cdc06c4dcc391083) | Normative prose for protocol v2.2 | **Current stable protocol text** |
 | Official v3 Mermaid addition | [`bf371abbc24e90fefa42f43e1fd02f007f11611e`](https://github.com/localsend/protocol/commit/bf371abbc24e90fefa42f43e1fd02f007f11611e) | Design diagrams using version `3.0` | **Draft; conflicts with implementation** |
-| Separate LocalSend web repository | [`ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8`](https://github.com/localsend/web/tree/ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8) | A historical Nuxt/TypeScript WebRTC implementation | **Historical only; not part of `af3aad33`** |
+| Separate LocalSend web repository | [`ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8`](https://github.com/localsend/web/tree/ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8) | Nuxt/TypeScript WebRTC client | **Separate from `af3aad33`; normative WebRTC compatibility target for this plugin** |
 
 At the official implementation pin, the Flutter app declares:
 
@@ -69,9 +69,11 @@ not an enabled, complete official-app transfer path.
 
 The `af3aad33` monorepo contains the Flutter app, Rust core, Rust signaling
 server, CLI, and static browser upload/download assets. It does **not** contain a
-current `packages/web` Nuxt WebRTC client. Claims about the separate web
-repository are isolated in [§8](#8-separately-pinned-historical-web-implementation)
-and pinned independently.
+current `packages/web` Nuxt WebRTC client. The separate web repository is pinned
+independently in [§8](#8-separately-pinned-historical-web-implementation). It is
+not evidence of shipping native-app behavior, but it **is** an interoperability
+authority for `localsend.koplugin` because LocalSend Web requires this WebRTC
+path.
 
 ---
 
@@ -672,8 +674,10 @@ The draft's Pair flow is also not exposed end to end by the pinned official app.
 A real Nuxt/TypeScript WebRTC implementation exists in the separate
 [`localsend/web`](https://github.com/localsend/web) repository. The local
 reference is pinned at `ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8`.
-It is **not** a current authority for the `af3aad33` monorepo or shipping
-LocalSend 1.18.x.
+It is **not** an authority for the `af3aad33` monorepo or shipping native
+LocalSend 1.18.x behavior. It **is**, however, a normative compatibility target
+for this plugin: interoperating with LocalSend Web requires the signaling and
+WebRTC behavior documented in this section.
 
 Pin-specific historical behavior:
 
@@ -710,35 +714,42 @@ switches to Ed25519 when available. This is a historical browser implementation
 difference; it does not change the pinned Rust core's Ed25519-only generation
 and Ed25519/RSA-PSS verification behavior.
 
-Do not copy these historical constants into current implementation guidance
-without deliberately choosing compatibility with this exact commit.
+`localsend.koplugin` deliberately chooses compatibility with this exact web pin.
+Accordingly, its WebRTC path advertises `2.3`, uses the web client's Google STUN
+default, preserves its implicit next-header file boundaries and per-file
+acknowledgements, and applies its 1 MiB streaming back-pressure threshold. These
+choices must not be "normalized" to the disabled native-app WebRTC defaults
+without first changing the project's compatibility target.
 
 ---
 
 ## 9. Interoperability guidance
 
-1. **For official-app interoperability, implement v2.2 first.** Use v2 multicast
-   and HTTP routes, including v2.2 checksum mismatch `422` and the v2 Download
-   API.
-2. **Do not advertise complete official v3 support.** The app disables WebRTC,
-   the Rust HTTP-v3 surface is incomplete, and the official v3 draft conflicts
-   with the implementation.
+1. **Treat native and web interoperability as two separate targets.** Native
+   LocalSend 1.18.x uses v2.2 multicast + HTTP(S), including checksum mismatch
+   `422` and the v2 Download API. LocalSend Web uses `2.3` signaling + WebRTC.
+2. **Do not advertise complete native-app v3 support.** The native app disables
+   WebRTC, the Rust HTTP-v3 surface is incomplete, and the official v3 draft
+   conflicts with the implementation. This does not make WebRTC optional for
+   this plugin because the separate web client requires it.
 3. **Keep the three nonce/token contexts separate:** timestamp signaling token,
    dormant HTTP `/nonce` caches, and the in-band WebRTC combined nonce.
 4. **Use the correct DTO family:** v2 is lowercase with
-   `fingerprint`/`download`; Rust v3/signaling is uppercase for enums with
-   `token`/`hasWebInterface` where applicable; the official Mermaid draft has
-   its own inconsistent shape.
-5. **If experimenting with Rust WebRTC wire compatibility, reproduce actual
-   boundaries:** next text header closes the previous file; one final `"0"`
-   ends the batch.
+   `fingerprint`/`download`; Rust v3/signaling and LocalSend Web signaling use
+   uppercase enum strings; the official Mermaid draft has its own inconsistent
+   shape.
+5. **For LocalSend Web compatibility, preserve the browser wire behavior:** the
+   next text header closes the previous file, one final `"0"` ends the batch,
+   and the sender reads one `RTCSendFileResponse` per file.
 6. **Treat token authentication as conditional** unless a verified expected
    public key or a completed pairing design supplies trust.
-7. **Do not invent ICE settings.** At the pin, Rust sets only caller-provided ICE
-   server URLs and otherwise uses defaults.
-8. **Pin historical web compatibility explicitly.** Its version, STUN,
-   keep-alive, token-verification gap, random identifiers, and buffering policy
-   are not current monorepo facts.
+7. **Keep platform ICE policy separate from protocol semantics.** The KOReader
+   fixed UDP range is an intentional firewall integration detail; the WebRTC
+   compatibility defaults come from the pinned web client.
+8. **Pin web compatibility explicitly.** `2.3`, Google STUN, 120-second
+   keep-alive, 30-minute token refresh, 16 KiB chunks, and 1 MiB back-pressure
+   are source-backed choices from `localsend/web@ea5d55d`, not native 1.18.x
+   facts.
 
 ---
 
@@ -913,8 +924,9 @@ Paths are relative to the named checkout.
 - `app/services/store.ts` — signaling token refresh and default STUN use.
 - `app/utils/{base64,nonce}.ts` — base64 and nonce behavior.
 
-The separate web pin is historical evidence only. No unpinned integration
-pseudocode or nonexistent monorepo web package is used as current official
+The separate web pin remains historical with respect to the native monorepo, but
+it is a first-class interoperability target for this plugin. No unpinned
+integration pseudocode or nonexistent monorepo web package is used as native
 implementation authority.
 
 ---
@@ -923,4 +935,5 @@ implementation authority.
 
 | Date | Change |
 |---|---|
+| 2026-08-14 | Clarified that `localsend/web@ea5d55d` is separate/historical relative to native 1.18.x but remains a normative interoperability target for `localsend.koplugin`; documented the deliberate `2.3` signaling, Google STUN, per-file ACK, and 1 MiB back-pressure choices. |
 | 2026-08-14 | Rewrote the document around pinned authority layers; restored shipping v2.2/WebRTC-disabled status; separated dormant Rust wire behavior, the `bf371ab` official `3.0` Mermaid draft, and historical web pin `ea5d55d`; corrected nonce, STUN, token verification, DTO/routes/errors, signaling, pairing, file acknowledgements, optional error fields, buffers, ICE, appendices, and provenance while retaining valid v2.2 download/checksum material. |

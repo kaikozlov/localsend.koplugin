@@ -34,9 +34,9 @@ type SenderInfo struct {
 
 // NewDeviceInfo creates a DeviceInfo for HTTP/multicast discovery (V2 protocol).
 // Note: Version is "2.2" for V2 HTTP endpoints (LocalSend 1.18+, protocol
-// revision of Aug 2026; wire format unchanged from 2.1). WebRTC signaling uses
-// "2.3" (see internal/webrtc/signaling/messages.go) to indicate V3 WebRTC
-// capability.
+// revision of Aug 2026; wire format unchanged from 2.1). The separate pinned
+// LocalSend Web client uses "2.3" for its WebRTC signaling identity, so the
+// WebRTC path intentionally advertises a different version string.
 func NewDeviceInfo(alias string, fingerprint string) DeviceInfo {
 	return DeviceInfo{
 		Alias:       alias,

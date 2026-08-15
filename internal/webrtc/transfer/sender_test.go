@@ -3,6 +3,7 @@ package transfer
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,16 @@ import (
 	"localsend-cli/internal/crypto"
 	"localsend-cli/internal/storage"
 )
+
+func TestWebCompat_DefaultTransportConstantsMatchPinnedWeb(t *testing.T) {
+	if ChunkSize != 16*1024 {
+		t.Fatalf("ChunkSize = %d; want 16384", ChunkSize)
+	}
+	wantSTUN := []string{"stun:stun.l.google.com:19302"}
+	if !reflect.DeepEqual(DefaultSTUNServers, wantSTUN) {
+		t.Fatalf("DefaultSTUNServers = %v; want %v from LocalSend Web", DefaultSTUNServers, wantSTUN)
+	}
+}
 
 func TestComputeFingerprint(t *testing.T) {
 	tests := []struct {

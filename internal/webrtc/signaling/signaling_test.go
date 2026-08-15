@@ -652,6 +652,16 @@ func TestWsServerHelloWithMultiplePeers(t *testing.T) {
 // =============================================================================
 
 // TestNewUpdateMessageFormat verifies UPDATE message format for token refresh.
+func TestWebCompat_NewClientInfoMatchesPinnedWebIdentity(t *testing.T) {
+	info := NewClientInfo("KOReader", "token")
+	if info.Version != "2.3" {
+		t.Fatalf("Version = %q; want 2.3 for LocalSend Web compatibility", info.Version)
+	}
+	if info.DeviceType != "HEADLESS" {
+		t.Fatalf("DeviceType = %q; want HEADLESS for LocalSend Web signaling", info.DeviceType)
+	}
+}
+
 func TestNewUpdateMessageFormat(t *testing.T) {
 	info := ClientInfoWithoutID{
 		Alias:       "Refreshed Device",

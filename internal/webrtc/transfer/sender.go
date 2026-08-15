@@ -32,6 +32,12 @@ const (
 
 	// bufferFlushTimeout is the maximum time to wait for the send buffer to flush before closing.
 	bufferFlushTimeout = 10 * time.Second
+
+	// maxBufferedAmount matches LocalSend Web's streaming back-pressure threshold.
+	maxBufferedAmount = 1024 * 1024 // 1 MiB
+
+	// bufferBackpressureTimeout bounds a stalled WebRTC send queue.
+	bufferBackpressureTimeout = 30 * time.Second
 )
 
 // chunkPool provides reusable buffers for file transfer to reduce GC pressure.
@@ -66,7 +72,7 @@ type FileMeta struct {
 	Accessed time.Time
 }
 
-// RTCSender handles sending files over WebRTC using official protocol.
+// RTCSender handles the LocalSend Web-compatible WebRTC transfer protocol.
 type RTCSender struct {
 	signaling           *signaling.SignalingClient
 	signingKey          *crypto.SigningKey
@@ -775,6 +781,7 @@ type sendOps interface {
 	SendJSON(v interface{}) error
 	Send(data []byte) error
 	SendDelimiter() error
+	WaitBufferBelowWithTimeout(limit uint64, timeout time.Duration) error
 	WaitBufferEmptyWithTimeout(timeout time.Duration) error
 }
 
@@ -816,7 +823,7 @@ func (s *RTCSender) prepareSendQueue() []sendable {
 	return queue
 }
 
-// SendFiles sends all accepted files using the pipelined official protocol:
+// SendFiles sends all accepted files using the pipelined LocalSend Web protocol:
 // each file's header precedes its data, and the next file's header is
 // pre-announced before waiting for the current file's acknowledgement (matching
 // the official web client). The send queue is pre-filtered by prepareSendQueue
@@ -878,6 +885,10 @@ func (s *RTCSender) SendFiles() error {
 				return fmt.Errorf("failed to read file: %w", err)
 			}
 
+			if err := ops.WaitBufferBelowWithTimeout(maxBufferedAmount, bufferBackpressureTimeout); err != nil {
+				_ = f.Close()
+				return fmt.Errorf("timed out waiting for WebRTC send buffer: %w", err)
+			}
 			if err := ops.Send(buf[:n]); err != nil {
 				_ = f.Close()
 				return fmt.Errorf("failed to send data: %w", err)

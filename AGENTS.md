@@ -37,6 +37,7 @@ just test-go            # Go tests in Docker
 just test-go-race       # Go tests with race detector in Docker
 just test-go-integration # Go integration tests in Docker
 just test-official      # Cross-test Go with pinned official LocalSend Rust core
+just test-web           # Verify pinned LocalSend Web source contract + WebRTC compatibility tests
 just test-armcompat     # QEMU/seccomp audit of packaged legacy ARM binary
 just lint               # luacheck + golangci-lint in Docker
 just fmt                # stylua + go fmt in Docker
@@ -81,8 +82,9 @@ lua/
 
 ## Protocol
 
-- **V2**: HTTP(S) + UDP multicast discovery (224.0.0.167:53317)
-- **V3**: WebRTC via signaling server for NAT traversal
+- **V2 / native LocalSend 1.18.x**: protocol 2.2 over HTTP(S) + UDP multicast discovery (224.0.0.167:53317)
+- **WebRTC / LocalSend Web**: protocol 2.3 signaling + WebRTC, pinned to `REFERENCE/OFFICIAL_LOCALSEND/web` at `ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8`
+- Native 1.18.x currently disables its WebRTC path; that does **not** make WebRTC optional for this project because LocalSend Web requires it
 - **PAIR**: Ed25519 key exchange, skips PIN for trusted devices
 - **Security**: TLS, PIN with rate limiting, nonce replay protection, constant-time compare
 

@@ -47,7 +47,7 @@ Or long-press a file or folder in File Manager (also History, Collections, or Fi
 | File type routing | Route files to different directories by type |
 | PIN code | Required PIN for incoming transfers (optional) |
 | Use HTTPS | Enable TLS encryption (recommended, on by default) |
-| Use WebRTC | Enable v3 protocol for latest LocalSend apps |
+| Use WebRTC | Enable LocalSend Web compatibility over WebRTC (experimental) |
 | Start with KOReader | Auto-start server on launch |
 
 ### Updates
