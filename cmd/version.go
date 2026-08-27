@@ -5,7 +5,7 @@ import (
 	"runtime"
 )
 
-var version = "v1.4.4"
+var version = "v1.4.5"
 
 // buildArchTag is injected at build time via -ldflags "-X localsend-cli/cmd.buildArchTag=<arch>"
 // by the release builds (justfile `release` recipe, .github/workflows/koplugin.yaml) using the same vocabulary
