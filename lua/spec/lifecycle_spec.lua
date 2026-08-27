@@ -367,6 +367,7 @@ describe("LocalSend Lifecycle", function()
             instance.isRunning = function()
                 return false
             end
+            LocalSend._ServerState.server_intended_running = false
 
             instance:_onSuspend()
 

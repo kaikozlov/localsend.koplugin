@@ -94,6 +94,99 @@ function M.init(d, paths)
     usleep_fn = d.usleep
 end
 
+local function recoveryAllowed(instance)
+    return instance._canRecoverServer and instance:_canRecoverServer() and not state.ServerState.server_restart_exhausted
+end
+
+function M.cancelUnexpectedRestart(instance, clear_intent)
+    local ServerState = state.ServerState
+    if instance and instance.server_restart_task then
+        deps.UIManager:unschedule(instance.server_restart_task)
+    end
+    ServerState.server_restart_pending = false
+    ServerState.server_restart_due_at = nil
+    ServerState.server_recovery_start = false
+    if clear_intent then
+        ServerState.server_intended_running = false
+        ServerState.server_restart_attempts = 0
+        ServerState.server_restart_exhausted = false
+        ServerState.server_started_at = nil
+    end
+end
+
+local function restartDelay(attempt)
+    local delay = constants.SERVER_RESTART_INITIAL_DELAY * (2 ^ math.max(0, attempt - 1))
+    return math.min(delay, constants.SERVER_RESTART_MAX_DELAY)
+end
+
+function M.scheduleUnexpectedRestart(instance, reason)
+    local ServerState = state.ServerState
+    if not recoveryAllowed(instance) then
+        return false
+    end
+    if ServerState.server_restart_pending then
+        return true
+    end
+
+    local now = os.time()
+    if ServerState.server_started_at and os.difftime(now, ServerState.server_started_at) >= constants.SERVER_RESTART_STABLE_SECONDS then
+        ServerState.server_restart_attempts = 0
+        ServerState.server_restart_exhausted = false
+    end
+    ServerState.server_started_at = nil
+
+    if ServerState.server_restart_attempts >= constants.SERVER_RESTART_MAX_ATTEMPTS then
+        ServerState.server_restart_exhausted = true
+        state.recordLifecycle("server_restart_exhausted", tostring(reason or "unexpected exit"))
+        deps.logger.err("[LocalSend] Receiver recovery retry limit reached")
+        return false
+    end
+
+    ServerState.server_restart_attempts = ServerState.server_restart_attempts + 1
+    local delay = restartDelay(ServerState.server_restart_attempts)
+    ServerState.server_restart_pending = true
+    ServerState.server_restart_due_at = now + delay
+    state.recordLifecycle(
+        "server_restart_scheduled",
+        "attempt=" .. tostring(ServerState.server_restart_attempts) .. " delay=" .. tostring(delay) .. " reason=" .. tostring(reason)
+    )
+    deps.logger.warn("[LocalSend] Receiver stopped unexpectedly; scheduling restart", "delay", delay)
+    deps.UIManager:scheduleIn(delay, instance.server_restart_task)
+    return true
+end
+
+function M.resumeUnexpectedRestart(instance)
+    local ServerState = state.ServerState
+    if not recoveryAllowed(instance) then
+        return false
+    end
+    if not ServerState.server_restart_pending then
+        return M.scheduleUnexpectedRestart(instance, "receiver missing after widget recreation")
+    end
+
+    local delay = math.max(0, (ServerState.server_restart_due_at or os.time()) - os.time())
+    deps.UIManager:unschedule(instance.server_restart_task)
+    deps.UIManager:scheduleIn(delay, instance.server_restart_task)
+    return true
+end
+
+function M.runUnexpectedRestart(instance)
+    local ServerState = state.ServerState
+    if not ServerState.server_restart_pending then
+        return
+    end
+    ServerState.server_restart_pending = false
+    ServerState.server_restart_due_at = nil
+    if not recoveryAllowed(instance) then
+        state.recordLifecycle("server_restart_suppressed")
+        return
+    end
+
+    ServerState.server_recovery_start = true
+    state.recordLifecycle("server_restart_attempt", "attempt=" .. tostring(ServerState.server_restart_attempts))
+    instance:start(true, { recovery = true })
+end
+
 -- Check if the server process is running
 -- @return boolean True if server is running
 function M.isRunning()
@@ -194,6 +287,11 @@ function M.onServerStarted(instance, silent, effective_name)
     local ServerState = state.ServerState
 
     ServerState.stop_in_progress = false
+    ServerState.server_intended_running = true
+    ServerState.server_restart_pending = false
+    ServerState.server_restart_due_at = nil
+    ServerState.server_recovery_start = false
+    ServerState.server_started_at = os.time()
     state.recordLifecycle("server_ready", "name=" .. tostring(effective_name) .. " port=" .. tostring(instance.port))
     M.reconcileServerState(instance)
 
@@ -240,6 +338,10 @@ end
 -- @param instance table LocalSend instance
 -- @param silent boolean Suppress notifications
 function M.onServerStartFailed(instance, silent)
+    local ServerState = state.ServerState
+    local should_retry = ServerState.server_recovery_start or (silent and ServerState.server_intended_running)
+    ServerState.server_recovery_start = false
+    ServerState.server_started_at = nil
     state.recordLifecycle("server_start_failed", "readiness timeout")
     instance:closeFirewall()
     state.ServerState.stop_in_progress = false
@@ -253,13 +355,17 @@ function M.onServerStartFailed(instance, silent)
     else
         deps.logger.warn("[LocalSend] Failed to restart server after resume")
     end
+    if should_retry then
+        M.scheduleUnexpectedRestart(instance, "receiver startup failed")
+    end
 end
 
 -- Start the LocalSend server
 -- @param instance table LocalSend instance
 -- @param silent boolean If true, suppress the startup notification
-function M.start(instance, silent)
+function M.start(instance, silent, options)
     local ServerState = state.ServerState
+    options = options or {}
 
     if ServerState.stop_in_progress then
         if not silent then
@@ -269,6 +375,17 @@ function M.start(instance, silent)
             }))
         end
         return
+    end
+
+    if options.recovery then
+        ServerState.server_recovery_start = true
+    else
+        M.cancelUnexpectedRestart(instance, false)
+        ServerState.server_intended_running = true
+        ServerState.server_restart_attempts = 0
+        ServerState.server_restart_exhausted = false
+        ServerState.server_started_at = nil
+        ServerState.shutdown_in_progress = false
     end
 
     local op_id = nextServerOpID()
@@ -283,6 +400,9 @@ function M.start(instance, silent)
         -- Start sentinel polling for fast notifications
         instance:_unschedulePolling()
         ServerState.last_sentinel_value = nil
+        ServerState.server_intended_running = true
+        ServerState.server_recovery_start = false
+        ServerState.server_started_at = ServerState.server_started_at or os.time()
         deps.UIManager:scheduleIn(constants.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
         return
     end
@@ -296,6 +416,10 @@ function M.start(instance, silent)
                 icon = "notice-warning",
                 text = deps.T(deps._("Invalid save directory: %1"), err),
             }))
+        end
+        if options.recovery then
+            ServerState.server_recovery_start = false
+            M.scheduleUnexpectedRestart(instance, "invalid save directory during recovery")
         end
         return
     end
@@ -413,6 +537,11 @@ function M.start(instance, silent)
             deps.UIManager:show(info)
         else
             deps.logger.warn("[LocalSend] Failed to start server after resume")
+        end
+        local should_retry = ServerState.server_recovery_start or (silent and ServerState.server_intended_running)
+        ServerState.server_recovery_start = false
+        if should_retry then
+            M.scheduleUnexpectedRestart(instance, "receiver launcher failed")
         end
     end
 end
@@ -562,6 +691,7 @@ function M.stop(instance)
     -- Mark that user explicitly stopped the server this session
     -- This prevents autostart from restarting it when opening a new document
     ServerState.user_stopped = true
+    M.cancelUnexpectedRestart(instance, true)
     instance:stopServer({
         callback = function(success, message)
             if success then
@@ -585,6 +715,9 @@ end
 function M.restart(instance)
     local ServerState = state.ServerState
     ServerState.user_stopped = false
+    M.cancelUnexpectedRestart(instance, true)
+    ServerState.server_intended_running = true
+    ServerState.shutdown_in_progress = false
 
     if instance:isRunning() or ServerState.stop_in_progress then
         instance:stopServer({

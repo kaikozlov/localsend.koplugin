@@ -343,6 +343,14 @@ function M.reset_localsend_state()
     s.send_cancel_started_at = nil
     s.server_op_id = 0
     s.stop_in_progress = false
+    s.server_intended_running = false
+    s.server_restart_pending = false
+    s.server_restart_due_at = nil
+    s.server_restart_attempts = 0
+    s.server_restart_exhausted = false
+    s.server_started_at = nil
+    s.server_recovery_start = false
+    s.shutdown_in_progress = false
     s.lifecycle_events = {}
     -- Fields the reset above missed. telemetry_cleaned gates a once-per-session
     -- init in main.lua; without clearing it the first spec to flip it sticks it

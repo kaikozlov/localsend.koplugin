@@ -56,16 +56,16 @@ verify:
 [private]
 _verify: _verify_static test
 
-# Uses REFERENCE/OFFICIAL_LOCALSEND/localsend when available; otherwise the
-# runner sparse-fetches the pinned upstream commit.
+# Sparse-fetches the pinned upstream LocalSend commit by default.
+# Set OFFICIAL_LOCALSEND_DIR only for an explicit local-checkout override.
 # Cross-test the Go executable with LocalSend's official Rust V2 client/server.
 [group('test')]
 test-official *args='':
     KOPLUGIN_DEV_IMAGE="{{ _image }}" \
     tools/officialinterop/run.sh {{ args }}
 
-# Verify assumptions against the pinned LocalSend Web checkout, then run the
-# WebRTC tests that encode its signaling and transfer contract.
+# Sparse-fetch the pinned LocalSend Web commit, verify its source contract,
+# then run the WebRTC tests that encode its signaling and transfer behavior.
 [group('test')]
 test-web:
     {{ _run }} sh -c 'cd /opt/plugin && tools/webinterop/verify.sh && go test ./internal/webrtc/... -run "^TestWebCompat_" -count=1'

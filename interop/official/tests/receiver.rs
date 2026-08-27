@@ -29,6 +29,42 @@ async fn official_client_registers_and_reads_go_receiver_info() {
     process.stop().await;
 }
 
+// Mirrors official 1.18.2's test_info_on_legacy_v1_route: LocalSend <=1.17
+// probes unknown peers on v1 before it knows which protocol they speak.
+#[tokio::test]
+async fn official_stack_reads_go_receiver_info_on_legacy_v1_route() {
+    let receive_dir = tempfile::tempdir().unwrap();
+    let process = start_receiver(receive_dir.path(), None).await;
+    let _client = official_client();
+
+    let legacy: localsend::serde_json::Value =
+        localsend::reqwest::get(format!("http://{HOST}:{PORT}/api/localsend/v1/info"))
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let current: localsend::serde_json::Value =
+        localsend::reqwest::get(format!("http://{HOST}:{PORT}/api/localsend/v2/info"))
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+    assert_eq!(legacy, current);
+    assert_eq!(legacy["alias"], "OfficialInteropReceiver");
+    assert!(legacy["fingerprint"]
+        .as_str()
+        .is_some_and(|value| !value.is_empty()));
+
+    process.stop().await;
+}
+
 #[tokio::test]
 async fn official_client_registers_with_go_receiver_over_ipv6() {
     let receive_dir = tempfile::tempdir().unwrap();

@@ -73,6 +73,39 @@ async fn go_reverse_sender_exposes_official_info_endpoint() {
 }
 
 #[tokio::test]
+async fn go_reverse_sender_exposes_same_download_identity_on_legacy_v1_info() {
+    let directory = tempfile::tempdir().unwrap();
+    let (source, _) = create_source_file(&directory).await;
+    let process = start_reverse_sender(&source, None).await;
+    let _client = official_client();
+
+    let legacy: localsend::serde_json::Value =
+        localsend::reqwest::get(format!("http://{HOST}:{PORT}/api/localsend/v1/info"))
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+    let current: localsend::serde_json::Value =
+        localsend::reqwest::get(format!("http://{HOST}:{PORT}/api/localsend/v2/info"))
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+
+    assert_eq!(legacy, current);
+    assert_eq!(legacy["alias"], "GoReverseSender");
+    assert_eq!(legacy["download"], true);
+
+    process.stop().await;
+}
+
+#[tokio::test]
 async fn go_reverse_sender_rejects_unknown_session_and_file_as_forbidden() {
     let directory = tempfile::tempdir().unwrap();
     let (source, _) = create_source_file(&directory).await;

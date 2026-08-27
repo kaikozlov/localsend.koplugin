@@ -2,7 +2,7 @@
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-official_ref="${OFFICIAL_LOCALSEND_REF:-af3aad33c965defc39ecff8d9a4396a851ce3cc1}"
+official_ref="${OFFICIAL_LOCALSEND_REF:-af0416be50770a97760f7070684bc667b759a15c}"
 rust_image="${OFFICIAL_RUST_IMAGE:-rust:1.97.0-bookworm}"
 dev_image="${KOPLUGIN_DEV_IMAGE:-ghcr.io/kaikozlov/koplugin-dev:v2026.07.1_1}"
 temporary_checkout=""

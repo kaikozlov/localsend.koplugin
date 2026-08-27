@@ -950,6 +950,39 @@ func TestInfoHandler_ReturnsDeviceIdentity(t *testing.T) {
 	}
 }
 
+func TestRegisterRoutes_LegacyV1InfoReturnsSameUsefulIdentityAsV2(t *testing.T) {
+	fr := newTestReceiver()
+	fr.identity.Fingerprint = "test-fingerprint"
+	app := fiber.New()
+	fr.registerRoutes(app)
+
+	readInfo := func(path string) models.DeviceInfo {
+		t.Helper()
+		resp, err := app.Test(httptest.NewRequest(http.MethodGet, path, nil))
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		if resp.StatusCode != fiber.StatusOK {
+			t.Fatalf("GET %s status = %d; want 200", path, resp.StatusCode)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var info models.DeviceInfo
+		if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+			t.Fatalf("decode GET %s: %v", path, err)
+		}
+		return info
+	}
+
+	v2 := readInfo(constants.InfoPath)
+	v1 := readInfo(constants.InfoPathV1)
+	if v1 != v2 {
+		t.Fatalf("legacy identity = %#v; want v2 identity %#v", v1, v2)
+	}
+	if v1.Alias == "" || v1.Fingerprint == "" || v1.Version == "" {
+		t.Fatalf("legacy identity is not useful: %#v", v1)
+	}
+}
+
 // =============================================================================
 // V2 Register Handler Tests (POST /api/localsend/v2/register)
 // =============================================================================

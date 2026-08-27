@@ -150,13 +150,18 @@ function M.checkSentinelFile(instance)
     local ServerState = state.ServerState
 
     if not instance:isRunning() then
-        -- Server died unexpectedly - clean up state so UI reflects reality
+        local should_recover = instance._canRecoverServer and instance:_canRecoverServer()
+        -- The process is gone. Reconcile the UI first, then recover only when
+        -- session intent and lifecycle state still say the receiver should run.
         power.release("receive")
         if state.recordLifecycle then
-            state.recordLifecycle("server_died_unexpectedly")
+            state.recordLifecycle(should_recover and "server_died_unexpectedly" or "server_stopped_observed")
         end
         instance:_cleanupServerState()
-        deps.logger.dbg("[LocalSend] Server died, cleaned up state")
+        if should_recover and instance._scheduleServerRecovery then
+            instance:_scheduleServerRecovery("receiver process exited")
+        end
+        deps.logger.dbg("[LocalSend] Server stopped, reconciled state")
         return
     end
 

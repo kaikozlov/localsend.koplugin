@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-web_root="${1:-REFERENCE/OFFICIAL_LOCALSEND/web}"
-expected_ref="ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8"
+expected_ref="${OFFICIAL_LOCALSEND_WEB_REF:-ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8}"
 tmp_root=""
 
 cleanup() {
@@ -12,15 +11,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
-if [[ ! -d "$web_root/.git" && ! -f "$web_root/.git" ]]; then
+if [[ -n "${OFFICIAL_LOCALSEND_WEB_DIR:-}" ]]; then
+  web_root="$OFFICIAL_LOCALSEND_WEB_DIR"
+else
   tmp_root="$(mktemp -d)"
   web_root="$tmp_root/web"
+  echo "Fetching LocalSend Web at $expected_ref"
   git init -q "$web_root"
   git -C "$web_root" remote add origin https://github.com/localsend/web.git
   git -C "$web_root" fetch -q --depth=1 origin "$expected_ref"
   git -C "$web_root" checkout -q --detach FETCH_HEAD
 fi
 
+web_root="$(cd "$web_root" && pwd)"
 actual_ref="$(git -C "$web_root" rev-parse HEAD)"
 if [[ "$actual_ref" != "$expected_ref" ]]; then
   echo "LocalSend Web ref mismatch: got $actual_ref, want $expected_ref" >&2

@@ -225,13 +225,17 @@ func (rs *ReverseSender) pinCleanupTask(stop <-chan struct{}) {
 	}
 }
 
-func (rs *ReverseSender) Start() error {
-	server := rs.webServer
+func (rs *ReverseSender) registerRoutes(server *fiber.App) {
 	server.Post(constants.PreDownloadPath, rs.predownloadHandler)
 	server.Get(constants.DownloadPath, rs.downloadHandler)
 	server.Get(constants.InfoPath, rs.infoHandler)
 	server.Get(constants.InfoPathV1, rs.infoHandler)
 	server.Get("/", rs.downloadListHandler)
+}
+
+func (rs *ReverseSender) Start() error {
+	server := rs.webServer
+	rs.registerRoutes(server)
 	stopPINCleanup := make(chan struct{})
 	go rs.pinCleanupTask(stopPINCleanup)
 	defer close(stopPINCleanup)

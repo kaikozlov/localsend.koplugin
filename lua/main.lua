@@ -323,6 +323,9 @@ function LocalSend:init()
     self.resume_start_task = function()
         self:_restartWhenReady()
     end
+    self.server_restart_task = function()
+        self:_runServerRecovery()
+    end
     self.check_update_task = function()
         self:_autoCheckForUpdates()
     end
@@ -344,9 +347,19 @@ function LocalSend:init()
         "was_running_before_suspend=",
         tostring(ServerState.was_running_before_suspend)
     )
-    if ServerState.was_running_before_suspend and not ServerState.user_stopped then
+    local running = self:isRunning()
+    if running then
+        ServerState.server_intended_running = true
+    end
+    local recovery_resumed = false
+    if ServerState.server_intended_running and not running and self:_canRecoverServer() then
+        recovery_resumed = self:_resumeServerRecovery()
+    end
+    if recovery_resumed then
+        logger.dbg("[LocalSend] Resumed pending receiver crash recovery")
+    elseif ServerState.was_running_before_suspend and not ServerState.user_stopped then
         self:_restartWhenReady()
-    elseif self.autostart and not ServerState.user_stopped then
+    elseif self.autostart and not ServerState.user_stopped and not ServerState.server_intended_running then
         self:_startWhenConnected(true) -- silent - no WiFi prompt (will start silently if connected)
     end
 
@@ -406,6 +419,10 @@ end
 -- Note: onCloseWidget is called when switching books, so we don't stop the server there.
 -- Instead, we stop on Exit event which is only triggered when KOReader actually closes.
 function LocalSend:onExit()
+    if ServerState then
+        ServerState.shutdown_in_progress = true
+        self:_cancelServerRecovery(true)
+    end
     if not self.recovery_mode and lssender and lssender.stopActiveOperationsSync then
         lssender.stopActiveOperationsSync()
     end
@@ -428,6 +445,10 @@ end
 -- are considered released. Match KOReader's built-in SSH plugin and finish the
 -- receiver teardown before returning on both normal and forced stops.
 function LocalSend:stopPlugin(_force)
+    if ServerState then
+        ServerState.shutdown_in_progress = true
+        self:_cancelServerRecovery(true)
+    end
     self:_unregisterFileDialogButton()
     if not self.recovery_mode and lssender and lssender.stopActiveOperationsSync then
         lssender.stopActiveOperationsSync()
@@ -454,6 +475,7 @@ function LocalSend:registerEvents()
         or (self.autostart and not ServerState.user_stopped)
         or ServerState.was_running_before_suspend
         or ServerState.was_running_before_disconnect
+        or ServerState.server_intended_running
     if should_register then
         -- Server running or expected to run: register handlers
         self.onSuspend = self._onSuspend
@@ -496,6 +518,32 @@ function LocalSend:_restartWhenReady()
     self:start(true)
 end
 
+function LocalSend:_canRecoverServer()
+    return ServerState.server_intended_running
+        and not ServerState.user_stopped
+        and not ServerState.stop_in_progress
+        and not ServerState.shutdown_in_progress
+        and not ServerState.was_running_before_suspend
+        and not ServerState.was_running_before_disconnect
+        and NetworkMgr:isConnected()
+end
+
+function LocalSend:_scheduleServerRecovery(reason)
+    return lsserver.scheduleUnexpectedRestart(self, reason)
+end
+
+function LocalSend:_resumeServerRecovery()
+    return lsserver.resumeUnexpectedRestart(self)
+end
+
+function LocalSend:_runServerRecovery()
+    lsserver.runUnexpectedRestart(self)
+end
+
+function LocalSend:_cancelServerRecovery(clear_intent)
+    lsserver.cancelUnexpectedRestart(self, clear_intent)
+end
+
 -- Event handler implementations (underscore-prefixed for dynamic registration)
 -- Stop server before device suspends (WiFi will be disabled)
 function LocalSend:_onSuspend()
@@ -505,6 +553,7 @@ function LocalSend:_onSuspend()
     self:_unschedulePolling()
     self:_unscheduleResume()
     self:_unscheduleUpdateCheck()
+    self:_cancelServerRecovery(false)
 
     if not self.recovery_mode and lssender and lssender.stopActiveOperationsSync then
         lssender.stopActiveOperationsSync()
@@ -515,7 +564,7 @@ function LocalSend:_onSuspend()
         self:stopServer({ sync = true })
         logger.dbg("[LocalSend] Server stopped synchronously for suspend")
     else
-        ServerState.was_running_before_suspend = false
+        ServerState.was_running_before_suspend = ServerState.server_intended_running and not ServerState.user_stopped
     end
 end
 
@@ -543,6 +592,7 @@ function LocalSend:_onEnterStandby()
     state.recordLifecycle("standby_enter")
     -- Unschedule polling before stopping
     self:_unschedulePolling()
+    self:_cancelServerRecovery(false)
 
     if not self.recovery_mode and lssender and lssender.stopActiveOperationsSync then
         lssender.stopActiveOperationsSync()
@@ -553,7 +603,7 @@ function LocalSend:_onEnterStandby()
         self:stopServer({ sync = true })
         logger.dbg("[LocalSend] Server stopped synchronously for standby")
     else
-        ServerState.was_running_before_suspend = false
+        ServerState.was_running_before_suspend = ServerState.server_intended_running and not ServerState.user_stopped
     end
 end
 
@@ -574,6 +624,7 @@ end
 function LocalSend:_onNetworkDisconnecting()
     logger.dbg("[LocalSend] onNetworkDisconnecting")
     state.recordLifecycle("network_disconnecting")
+    self:_cancelServerRecovery(false)
     if not self.recovery_mode and lssender and lssender.stopActiveOperationsSync then
         lssender.stopActiveOperationsSync()
     end
@@ -581,12 +632,15 @@ function LocalSend:_onNetworkDisconnecting()
         ServerState.was_running_before_disconnect = true
         self:stopServer({ sync = true })
         logger.dbg("[LocalSend] Server stopped before network disconnect")
+    elseif ServerState.server_intended_running and not ServerState.user_stopped then
+        ServerState.was_running_before_disconnect = true
     end
 end
 
 function LocalSend:_onNetworkDisconnected()
     logger.dbg("[LocalSend] onNetworkDisconnected")
     state.recordLifecycle("network_disconnected")
+    self:_cancelServerRecovery(false)
     if self:isRunning() then
         -- Fallback for a platform/event path that skipped NetworkDisconnecting.
         ServerState.was_running_before_disconnect = true
@@ -704,6 +758,14 @@ function LocalSend:deletePluginSettings()
         ServerState.send_cancel_started_at = nil
         ServerState.server_op_id = 0
         ServerState.stop_in_progress = false
+        ServerState.server_intended_running = false
+        ServerState.server_restart_pending = false
+        ServerState.server_restart_due_at = nil
+        ServerState.server_restart_attempts = 0
+        ServerState.server_restart_exhausted = false
+        ServerState.server_started_at = nil
+        ServerState.server_recovery_start = false
+        ServerState.shutdown_in_progress = false
         ServerState.lifecycle_events = {}
         -- Runtime-added fields: set by the sender / discovery flow during a
         -- transfer or scan. Must be cleared too, else a user who deletes all
@@ -800,6 +862,11 @@ function LocalSend:onCloseWidget()
     -- Unschedule polling task
     self:_unschedulePolling()
     self.check_sentinel_task = nil
+
+    if self.server_restart_task then
+        UIManager:unschedule(self.server_restart_task)
+    end
+    self.server_restart_task = nil
 
     -- Unschedule any pending resume task
     self:_unscheduleResume()
@@ -935,7 +1002,7 @@ end
 
 -- Start the LocalSend server
 -- @param silent boolean If true, suppress the startup notification (used for resume from sleep)
-function LocalSend:start(silent)
+function LocalSend:start(silent, options)
     -- Block server start if reinstall is required (plugin may be in broken state)
     if REINSTALL_REQUIRED then
         if not silent then
@@ -946,7 +1013,7 @@ function LocalSend:start(silent)
         end
         return
     end
-    lsserver.start(self, silent)
+    lsserver.start(self, silent, options)
 end
 
 -- Start server when network is available.

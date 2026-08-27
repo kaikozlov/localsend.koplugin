@@ -19,6 +19,9 @@ directory, so the suite is self-contained and does not depend on anything under
 specific local checkout, or set `OFFICIAL_LOCALSEND_REF` while testing an
 upstream revision.
 
+The default native authority is LocalSend 1.18.2 at
+`af0416be50770a97760f7070684bc667b759a15c`.
+
 ## Coverage
 
 - Official `LsHttpClientV2` -> Go receiver: registration, info, IPv4/IPv6,

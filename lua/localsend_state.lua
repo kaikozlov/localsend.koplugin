@@ -32,6 +32,14 @@ M.ServerState = {
     -- Server lifecycle operation tracking (prevents stale async callbacks)
     server_op_id = 0, -- Monotonic operation counter for start/stop transitions
     stop_in_progress = false, -- True while graceful stop is in progress
+    server_intended_running = false, -- True while the user/session expects the receiver to stay available
+    server_restart_pending = false, -- True while an unexpected-exit retry is scheduled
+    server_restart_due_at = nil, -- Absolute os.time() deadline for widget handoff
+    server_restart_attempts = 0, -- Consecutive crash/start-failure recovery attempts
+    server_restart_exhausted = false, -- True after the bounded retry budget is spent
+    server_started_at = nil, -- Used to forgive failures after a stable run
+    server_recovery_start = false, -- Current startup belongs to crash recovery
+    shutdown_in_progress = false, -- Suppresses recovery during plugin/KOReader teardown
     lifecycle_events = {}, -- Recent timestamped server/power/network transitions
 }
 

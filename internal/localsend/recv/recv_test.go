@@ -2,6 +2,7 @@ package recv
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,7 +10,33 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"localsend-cli/internal/models"
 )
+
+type supervisedDiscoverer struct {
+	id       int
+	listen   chan<- int
+	stop     chan struct{}
+	stopOnce sync.Once
+	err      error
+}
+
+func (d *supervisedDiscoverer) Listen() error {
+	d.listen <- d.id
+	if d.err != nil {
+		return d.err
+	}
+	<-d.stop
+	return nil
+}
+
+func (d *supervisedDiscoverer) Shutdown() error {
+	d.stopOnce.Do(func() { close(d.stop) })
+	return nil
+}
+
+func (d *supervisedDiscoverer) RegisterDevice(models.Announcement) {}
 
 // =============================================================================
 // Race Condition Tests
@@ -373,6 +400,53 @@ func TestWaitDiscoveryRetry_Cancellation(t *testing.T) {
 	cancel()
 	if waitDiscoveryRetry(ctx, time.Minute) {
 		t.Fatal("canceled discovery retry reported success")
+	}
+}
+
+func TestDiscoverySupervisor_RebindsFreshDiscovererAfterUnexpectedListenerFailure(t *testing.T) {
+	fr := NewFileReceiver("test", t.TempDir(), false)
+	fr.discoveryRetryDelay = time.Millisecond
+	listened := make(chan int, 2)
+	created := make([]*supervisedDiscoverer, 0, 2)
+	fr.newDiscoverer = func() (receiverDiscoverer, error) {
+		d := &supervisedDiscoverer{
+			id:     len(created) + 1,
+			listen: listened,
+			stop:   make(chan struct{}),
+		}
+		if d.id == 1 {
+			d.err = errors.New("multicast socket failed")
+		}
+		created = append(created, d)
+		return d, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		fr.startDiscoveryWithRetry(ctx)
+		close(done)
+	}()
+
+	for want := 1; want <= 2; want++ {
+		select {
+		case got := <-listened:
+			if got != want {
+				t.Fatalf("listener instance = %d; want fresh instance %d", got, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for discovery listener %d", want)
+		}
+	}
+	if len(created) != 2 || created[0] == created[1] {
+		t.Fatalf("discoverers created = %d; want two distinct instances", len(created))
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("discovery supervisor did not stop after cancellation")
 	}
 }
 

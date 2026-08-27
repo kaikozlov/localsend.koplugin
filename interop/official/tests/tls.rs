@@ -77,7 +77,8 @@ async fn go_sender_uploads_over_mtls_to_official_tls_server() {
                 }
                 ServerEventV2::SessionEnd { .. }
                 | ServerEventV2::PrepareUploadAborted { .. }
-                | ServerEventV2::CancelReceived { .. } => {}
+                | ServerEventV2::CancelReceived { .. }
+                | ServerEventV2::ListenerFailed { .. } => {}
             }
         }
     });

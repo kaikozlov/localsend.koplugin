@@ -24,25 +24,27 @@ import (
 )
 
 type FileReceiver struct {
-	cert               tls.Certificate
-	identity           models.DeviceInfo
-	webServer          *fiber.App
-	supportHttps       bool
-	sessman            *sess.RecvSessManager
-	saveToDir          string
-	discoverier        *localsend.Discoverer
-	discoveryMu        sync.Mutex
-	expectedPin        string
-	allowedExtensions  []string         // New field for extension filtering
-	transferLogPath    string           // Path to transfer log file
-	transferLogFile    *os.File         // Persistent file handle for transfer log
-	onTransferCmd      string           // Shell command to run after each transfer
-	transferNotifyPath string           // Tiny file rewritten after each completed transfer
-	onTransferStart    func()           // Optional process-integration activity callback
-	onTransferDone     func()           // Optional process-integration activity callback
-	transferNotifySeq  uint64           // Protected by configMu
-	router             *ExtensionRouter // Routes files to different dirs by extension
-	listenAddr         string           // Custom listen address (defaults to constants.DefaultListenAddr)
+	cert                tls.Certificate
+	identity            models.DeviceInfo
+	webServer           *fiber.App
+	supportHttps        bool
+	sessman             *sess.RecvSessManager
+	saveToDir           string
+	discoverier         receiverDiscoverer
+	discoveryMu         sync.Mutex
+	newDiscoverer       func() (receiverDiscoverer, error)
+	discoveryRetryDelay time.Duration
+	expectedPin         string
+	allowedExtensions   []string         // New field for extension filtering
+	transferLogPath     string           // Path to transfer log file
+	transferLogFile     *os.File         // Persistent file handle for transfer log
+	onTransferCmd       string           // Shell command to run after each transfer
+	transferNotifyPath  string           // Tiny file rewritten after each completed transfer
+	onTransferStart     func()           // Optional process-integration activity callback
+	onTransferDone      func()           // Optional process-integration activity callback
+	transferNotifySeq   uint64           // Protected by configMu
+	router              *ExtensionRouter // Routes files to different dirs by extension
+	listenAddr          string           // Custom listen address (defaults to constants.DefaultListenAddr)
 
 	// configMu protects configuration fields that can be modified after creation
 	// (expectedPin, allowedExtensions, transferLogPath, transferLogFile, onTransferCmd, transferNotifyPath, callbacks, router, listenAddr)
@@ -61,6 +63,19 @@ type FileReceiver struct {
 	stopped  bool
 }
 
+type receiverDiscoverer interface {
+	Listen() error
+	Shutdown() error
+	RegisterDevice(models.Announcement)
+}
+
+func (fr *FileReceiver) createDiscoverer() (receiverDiscoverer, error) {
+	if fr.newDiscoverer != nil {
+		return fr.newDiscoverer()
+	}
+	return localsend.NewDiscovererWithCertificate(fr.identity, fr.supportHttps, fr.cert)
+}
+
 // PIN rate limiting constants - use shared constants from constants package
 const (
 	maxPINAttempts     = constants.MaxPINAttempts
@@ -77,7 +92,7 @@ type TransferLogEntry struct {
 }
 
 func NewFileReceiver(devname string, saveToDir string, supportHttps bool) *FileReceiver {
-	return &FileReceiver{
+	fr := &FileReceiver{
 		identity:            models.NewDeviceInfo(devname, lsutils.GenFingerprint()),
 		webServer:           lsutils.NewWebServer(),
 		supportHttps:        supportHttps,
@@ -89,7 +104,12 @@ func NewFileReceiver(devname string, saveToDir string, supportHttps bool) *FileR
 		receivedNonceCache:  localsend.NewNonceCache(200),
 		generatedNonceCache: localsend.NewNonceCache(200),
 		cmdSlots:            make(chan struct{}, 4),
+		discoveryRetryDelay: 2 * time.Second,
 	}
+	fr.newDiscoverer = func() (receiverDiscoverer, error) {
+		return localsend.NewDiscovererWithCertificate(fr.identity, fr.supportHttps, fr.cert)
+	}
+	return fr
 }
 
 func (fr *FileReceiver) SetPIN(pin string) {
@@ -395,7 +415,7 @@ func (fr *FileReceiver) Init() error {
 
 	// Create the initial discovery instance. Failure is non-fatal: the runtime
 	// supervisor below retries when a network interface becomes available.
-	discoverer, discoveryErr := localsend.NewDiscovererWithCertificate(fr.identity, fr.supportHttps, fr.cert)
+	discoverer, discoveryErr := fr.createDiscoverer()
 	if discoveryErr != nil {
 		slog.Warn("Failed to create discoverer; will retry", "error", discoveryErr)
 	} else {
@@ -449,19 +469,19 @@ func (fr *FileReceiver) registerRoutes(server *fiber.App) {
 }
 
 // currentDiscoverer returns the currently owned discovery instance.
-func (fr *FileReceiver) currentDiscoverer() *localsend.Discoverer {
+func (fr *FileReceiver) currentDiscoverer() receiverDiscoverer {
 	fr.discoveryMu.Lock()
 	defer fr.discoveryMu.Unlock()
 	return fr.discoverier
 }
 
-func (fr *FileReceiver) installDiscoverer(discoverer *localsend.Discoverer) {
+func (fr *FileReceiver) installDiscoverer(discoverer receiverDiscoverer) {
 	fr.discoveryMu.Lock()
 	fr.discoverier = discoverer
 	fr.discoveryMu.Unlock()
 }
 
-func (fr *FileReceiver) clearDiscoverer(discoverer *localsend.Discoverer) {
+func (fr *FileReceiver) clearDiscoverer(discoverer receiverDiscoverer) {
 	fr.discoveryMu.Lock()
 	if fr.discoverier == discoverer {
 		fr.discoverier = nil
@@ -485,16 +505,14 @@ func waitDiscoveryRetry(ctx context.Context, delay time.Duration) bool {
 // when Listen returns unexpectedly, discard the instance and bind a fresh set
 // of sockets instead of leaving the HTTP receiver alive but undiscoverable.
 func (fr *FileReceiver) startDiscoveryWithRetry(ctx context.Context) {
-	const retryDelay = 2 * time.Second
-
 	for ctx.Err() == nil {
 		discoverer := fr.currentDiscoverer()
 		if discoverer == nil {
 			var err error
-			discoverer, err = localsend.NewDiscovererWithCertificate(fr.identity, fr.supportHttps, fr.cert)
+			discoverer, err = fr.createDiscoverer()
 			if err != nil {
 				slog.Debug("Discovery bind unavailable; retrying", "error", err)
-				if !waitDiscoveryRetry(ctx, retryDelay) {
+				if !waitDiscoveryRetry(ctx, fr.discoveryRetryDelay) {
 					return
 				}
 				continue
@@ -517,7 +535,7 @@ func (fr *FileReceiver) startDiscoveryWithRetry(ctx context.Context) {
 		} else {
 			slog.Warn("Discovery listener stopped unexpectedly; rebinding")
 		}
-		if !waitDiscoveryRetry(ctx, retryDelay) {
+		if !waitDiscoveryRetry(ctx, fr.discoveryRetryDelay) {
 			return
 		}
 	}

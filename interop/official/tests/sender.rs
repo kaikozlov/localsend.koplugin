@@ -71,7 +71,8 @@ async fn go_sender_uploads_file_to_official_rust_server() {
                 }
                 ServerEventV2::SessionEnd { .. }
                 | ServerEventV2::PrepareUploadAborted { .. }
-                | ServerEventV2::CancelReceived { .. } => {}
+                | ServerEventV2::CancelReceived { .. }
+                | ServerEventV2::ListenerFailed { .. } => {}
             }
         }
     });
