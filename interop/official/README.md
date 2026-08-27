@@ -24,6 +24,7 @@ The default native authority is LocalSend 1.18.2 at
 
 ## Coverage
 
+- Official Rust multicast discovery <-> Go receiver: real v2.2 UDP announcements and HTTP registration in both directions, in one network namespace.
 - Official `LsHttpClientV2` -> Go receiver: registration, info, IPv4/IPv6,
   multi-file upload, persisted bytes, token rejection/retry, malformed upload,
   session exclusion/cancellation, PIN authentication, and PIN rate limiting.
