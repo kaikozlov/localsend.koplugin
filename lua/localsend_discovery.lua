@@ -22,6 +22,12 @@ function M.init(d, paths)
     binary_path = paths.binary_path
 end
 
+local function notifyActivityChanged()
+    if deps.onActivityChanged then
+        deps.onActivityChanged()
+    end
+end
+
 -- Parse JSON output from localsend scan --json
 -- @param json_str string JSON string from scan command
 -- @return table Array of device objects with type, alias, ip/id, port, version, protocol
@@ -112,6 +118,7 @@ function M.scanDevices(callback, options)
     ServerState.scan_cancelled = false -- Reset cancel flag
     ServerState.scan_start_time = os.time() -- Track start time for timeout guard
     power.acquire("scan")
+    notifyActivityChanged()
     -- Ensure the PID/output observed by this op cannot belong to a completed
     -- prior scan. The diagnostics log is overwritten by the launch redirection.
     os.remove(constants.SCAN_OUTPUT_FILE)
@@ -213,6 +220,7 @@ function M.scanDevices(callback, options)
         os.remove(constants.SCAN_OUTPUT_FILE)
         os.remove(pid_file)
         power.release("scan")
+        notifyActivityChanged()
 
         -- Call completion callback
         if callback then
@@ -241,6 +249,7 @@ function M.cancelScan()
     os.remove(constants.SCAN_OUTPUT_FILE)
     ServerState.scan_in_progress = false
     power.release("scan")
+    notifyActivityChanged()
 end
 
 -- Synchronously stop an active scan for PluginLoader/KOReader teardown.
@@ -278,6 +287,7 @@ function M.stopActiveScanSync(usleep)
     os.remove(pid_file)
     ServerState.scan_in_progress = false
     power.release("scan")
+    notifyActivityChanged()
     return not isLocalSendScanProcess(pid)
 end
 

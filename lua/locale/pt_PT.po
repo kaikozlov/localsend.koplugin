@@ -9,7 +9,7 @@ msgstr ""
 "Project-Id-Version: localsend v1.4.3\n"
 "Report-Msgid-Bugs-To: https://github.com/kaikozlov/localsend.koplugin/"
 "issues\n"
-"POT-Creation-Date: 2026-08-27 16:23+0000\n"
+"POT-Creation-Date: 2026-08-28 18:36+0000\n"
 "PO-Revision-Date: 2026-07-21 07:21+0100\n"
 "Last-Translator: CookieCaptainD\n"
 "Language-Team: Portuguese (Portugal)\n"
@@ -20,11 +20,11 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "X-Generator: Poedit 3.9\n"
 
-#: lua/_meta.lua:3 lua/main.lua:1417
+#: lua/_meta.lua:3 lua/main.lua:1423
 msgid "LocalSend"
 msgstr "LocalSend"
 
-#: lua/_meta.lua:4 lua/main.lua:1336
+#: lua/_meta.lua:4 lua/main.lua:1342
 msgid "Send and receive files using LocalSend protocol."
 msgstr "Envie e receba ficheiros através do protocolo LocalSend."
 
@@ -89,7 +89,7 @@ msgid "Receiver self-test"
 msgstr "Autoteste do recetor"
 
 #: lua/localsend_diagnostics.lua:640 lua/localsend_diagnostics.lua:653
-#: lua/main.lua:1337
+#: lua/main.lua:1343
 msgid "unknown"
 msgstr "desconhecido"
 
@@ -143,7 +143,7 @@ msgstr "há %1 min"
 msgid "Last send"
 msgstr "Último envio"
 
-#: lua/localsend_diagnostics.lua:684 lua/localsend_sender.lua:749
+#: lua/localsend_diagnostics.lua:684 lua/localsend_sender.lua:794
 msgid "OK"
 msgstr "OK"
 
@@ -297,12 +297,12 @@ msgstr ""
 "Encaminhamento por tipo de ficheiro."
 
 #: lua/localsend_diagnostics.lua:1304 lua/localsend_diagnostics.lua:1833
-#: lua/main.lua:1743
+#: lua/main.lua:1749
 msgid "Technical details"
 msgstr "Detalhes técnicos"
 
 #: lua/localsend_diagnostics.lua:1324 lua/localsend_diagnostics.lua:1492
-#: lua/localsend_diagnostics.lua:1845 lua/main.lua:1343
+#: lua/localsend_diagnostics.lua:1845 lua/main.lua:1349
 msgid "Close"
 msgstr "Fechar"
 
@@ -580,7 +580,7 @@ msgstr ""
 msgid "Device discovery"
 msgstr "Deteção de dispositivos"
 
-#: lua/localsend_diagnostics.lua:1837 lua/main.lua:1764
+#: lua/localsend_diagnostics.lua:1837 lua/main.lua:1770
 msgid "Discovery details"
 msgstr "Detalhes da deteção"
 
@@ -648,10 +648,10 @@ msgid "Leave empty for default ('KOReader')"
 msgstr "Deixe em branco para usar a predefinição ('KOReader')"
 
 #: lua/localsend_dialogs.lua:118 lua/localsend_dialogs.lua:163
-#: lua/localsend_dialogs.lua:199 lua/localsend_discovery.lua:323
-#: lua/localsend_discovery.lua:382 lua/localsend_discovery.lua:414
-#: lua/localsend_routing.lua:139 lua/localsend_sender.lua:739
-#: lua/localsend_update.lua:802 lua/main.lua:1181
+#: lua/localsend_dialogs.lua:199 lua/localsend_discovery.lua:333
+#: lua/localsend_discovery.lua:392 lua/localsend_discovery.lua:424
+#: lua/localsend_routing.lua:139 lua/localsend_sender.lua:288
+#: lua/localsend_sender.lua:784 lua/localsend_update.lua:802 lua/main.lua:1187
 msgid "Cancel"
 msgstr "Cancelar"
 
@@ -660,7 +660,7 @@ msgstr "Cancelar"
 msgid "Save"
 msgstr "Guardar"
 
-#: lua/localsend_dialogs.lua:156 lua/localsend_sender.lua:735
+#: lua/localsend_dialogs.lua:156 lua/localsend_sender.lua:780
 msgid "PIN code"
 msgstr "Código PIN"
 
@@ -676,31 +676,31 @@ msgstr "Extensões personalizadas"
 msgid "Comma-separated list (e.g., 'epub,pdf,mobi')"
 msgstr "Lista separada por vírgulas (ex.: 'epub,pdf,mobi')"
 
-#: lua/localsend_discovery.lua:311
+#: lua/localsend_discovery.lua:321
 msgid "No devices found"
 msgstr "Nenhum dispositivo encontrado"
 
-#: lua/localsend_discovery.lua:312
+#: lua/localsend_discovery.lua:322
 msgid "Make sure LocalSend is running on the target device."
 msgstr ""
 "Certifique-se de que o LocalSend está em execução no dispositivo de destino."
 
-#: lua/localsend_discovery.lua:316 lua/localsend_discovery.lua:373
-#: lua/localsend_sender.lua:547
+#: lua/localsend_discovery.lua:326 lua/localsend_discovery.lua:383
+#: lua/localsend_sender.lua:591
 msgid "Scan again"
 msgstr "Procurar novamente"
 
-#: lua/localsend_discovery.lua:338
+#: lua/localsend_discovery.lua:348
 msgid "No devices found. Make sure LocalSend is running on the target device."
 msgstr ""
 "Nenhum dispositivo encontrado. Certifique-se de que o LocalSend está em "
 "execução no dispositivo de destino."
 
-#: lua/localsend_discovery.lua:394
+#: lua/localsend_discovery.lua:404
 msgid "Select target device"
 msgstr "Selecionar dispositivo de destino"
 
-#: lua/localsend_discovery.lua:410
+#: lua/localsend_discovery.lua:420
 msgid "Scanning for devices..."
 msgstr "A procurar dispositivos..."
 
@@ -782,85 +782,89 @@ msgstr ""
 "diretório principal de destino. Quando desativado, só são aceites os tipos "
 "de ficheiro encaminhados."
 
-#: lua/localsend_sender.lua:150
+#: lua/localsend_sender.lua:157
 msgid "Another send operation is in progress"
 msgstr "Já existe um envio em curso"
 
-#: lua/localsend_sender.lua:158
+#: lua/localsend_sender.lua:165
 msgid "File does not exist"
 msgstr "O ficheiro não existe"
 
-#: lua/localsend_sender.lua:231
+#: lua/localsend_sender.lua:240
 #, fuzzy
 msgid "Failed to start send process"
 msgstr "Falha ao parar o processo do LocalSend."
 
-#: lua/localsend_sender.lua:259
+#: lua/localsend_sender.lua:268
 msgid "Send in progress"
 msgstr "Envio em curso"
 
-#: lua/localsend_sender.lua:263
+#: lua/localsend_sender.lua:283
 msgid "Sending %1 to %2..."
 msgstr "A enviar %1 para %2..."
 
-#: lua/localsend_sender.lua:298 lua/localsend_sender.lua:308
-#: lua/localsend_sender.lua:433
+#: lua/localsend_sender.lua:296
+msgid "Cancelling send..."
+msgstr "A cancelar envio..."
+
+#: lua/localsend_sender.lua:338 lua/localsend_sender.lua:350
+#: lua/localsend_sender.lua:477
 msgid "Cancelled"
 msgstr "Cancelado"
 
-#: lua/localsend_sender.lua:304 lua/localsend_sender.lua:366
+#: lua/localsend_sender.lua:346 lua/localsend_sender.lua:410
 msgid "Send cancelled"
 msgstr "Envio cancelado"
 
-#: lua/localsend_sender.lua:346
+#: lua/localsend_sender.lua:390
 msgid "Sent %1 to %2"
 msgstr "%1 enviado para %2"
 
-#: lua/localsend_sender.lua:355
+#: lua/localsend_sender.lua:399
 msgid "Transfer was rejected by the recipient"
 msgstr "A transferência foi rejeitada pelo destinatário"
 
-#: lua/localsend_sender.lua:357
+#: lua/localsend_sender.lua:401
 msgid "PIN required"
 msgstr "PIN necessário"
 
-#: lua/localsend_sender.lua:376
+#: lua/localsend_sender.lua:420
 msgid "Device is not running LocalSend"
 msgstr "O dispositivo não tem o LocalSend em execução"
 
-#: lua/localsend_sender.lua:378
+#: lua/localsend_sender.lua:422
 msgid "Too many failed attempts - try again later"
 msgstr "Demasiadas tentativas falhadas. Tente novamente mais tarde"
 
-#: lua/localsend_sender.lua:380
+#: lua/localsend_sender.lua:424
 msgid "Connection failed"
 msgstr "A ligação falhou"
 
-#: lua/localsend_sender.lua:382
+#: lua/localsend_sender.lua:426
 msgid "Connection timed out"
 msgstr "A ligação esgotou o tempo limite"
 
-#: lua/localsend_sender.lua:384
+#: lua/localsend_sender.lua:428
 msgid "Send failed"
 msgstr "Falha no envio"
 
-#: lua/localsend_sender.lua:534
+#: lua/localsend_sender.lua:578
 msgid "Send more files?"
 msgstr "Enviar mais ficheiros?"
 
-#: lua/localsend_sender.lua:538
+#: lua/localsend_sender.lua:582
 msgid "Yes"
 msgstr "Sim"
 
-#: lua/localsend_sender.lua:556
+#: lua/localsend_sender.lua:600
 msgid "No"
 msgstr "Não"
 
-#: lua/localsend_sender.lua:576
+#: lua/localsend_sender.lua:620
 msgid "A send operation is already in progress"
 msgstr "Já existe um envio em curso"
 
-#: lua/localsend_sender.lua:733
+#: lua/localsend_sender.lua:778
 msgid "Enter PIN for %1"
 msgstr "Introduza o PIN de %1"
 
@@ -1117,11 +1121,11 @@ msgstr ""
 msgid "Update check timed out."
 msgstr "A verificação de atualizações esgotou o tempo limite."
 
-#: lua/main.lua:941
+#: lua/main.lua:947
 msgid "Device name is too long (max 64 characters)."
 msgstr "O nome do dispositivo é demasiado longo (máx. 64 caracteres)."
 
-#: lua/main.lua:943
+#: lua/main.lua:949
 msgid ""
 "Device name can only contain letters, numbers, spaces, hyphens, underscores, "
 "and apostrophes."
@@ -1129,20 +1133,20 @@ msgstr ""
 "O nome do dispositivo só pode conter letras, números, espaços, hífenes, "
 "sublinhados e apóstrofes."
 
-#: lua/main.lua:953
+#: lua/main.lua:959
 msgid "Invalid path: must be an absolute path without special characters."
 msgstr ""
 "Caminho inválido: tem de ser um caminho absoluto sem caracteres especiais."
 
-#: lua/main.lua:962
+#: lua/main.lua:968
 msgid "Directory does not exist and could not be created."
 msgstr "O diretório não existe e não foi possível criá-lo."
 
-#: lua/main.lua:970
+#: lua/main.lua:976
 msgid "Directory is not writable."
 msgstr "O diretório não tem permissão de escrita."
 
-#: lua/main.lua:1011
+#: lua/main.lua:1017
 msgid ""
 "Cannot start LocalSend: plugin reinstall required.\n"
 "\n"
@@ -1152,11 +1156,11 @@ msgstr ""
 "\n"
 "Use 'Verificar atualizações' para reinstalar."
 
-#: lua/main.lua:1156
+#: lua/main.lua:1162
 msgid "No book is currently open."
 msgstr "Não existe nenhum livro aberto de momento."
 
-#: lua/main.lua:1179
+#: lua/main.lua:1185
 msgid ""
 "This will delete the current TLS certificates.\n"
 "\n"
@@ -1171,21 +1175,21 @@ msgstr ""
 "\n"
 "Continuar?"
 
-#: lua/main.lua:1180
+#: lua/main.lua:1186
 msgid "Delete"
 msgstr "Eliminar"
 
-#: lua/main.lua:1189
+#: lua/main.lua:1195
 msgid "Certificates cleared. New certificates will be generated on next start."
 msgstr ""
 "Certificados eliminados. Serão gerados novos certificados no próximo "
 "arranque."
 
-#: lua/main.lua:1274
+#: lua/main.lua:1280
 msgid "GitHub link copied to clipboard"
 msgstr "Ligação do GitHub copiada para a área de transferência"
 
-#: lua/main.lua:1281
+#: lua/main.lua:1287
 msgid ""
 "Project page:\n"
 "%1"
@@ -1193,7 +1197,7 @@ msgstr ""
 "Página do projeto:\n"
 "%1"
 
-#: lua/main.lua:1338
+#: lua/main.lua:1344
 msgid ""
 "LocalSend for KOReader\n"
 "\n"
@@ -1213,103 +1217,103 @@ msgstr ""
 "\n"
 "%4"
 
-#: lua/main.lua:1342
+#: lua/main.lua:1348
 msgid "GitHub"
 msgstr "GitHub"
 
-#: lua/main.lua:1354
+#: lua/main.lua:1360
 msgid "LocalSend (Recovery Mode)"
 msgstr "LocalSend (Modo de recuperação)"
 
-#: lua/main.lua:1358
+#: lua/main.lua:1364
 msgid "Plugin Error - Reinstall Required"
 msgstr "Erro no plugin: é necessário reinstalar"
 
-#: lua/main.lua:1364
+#: lua/main.lua:1370
 msgid "Missing modules:"
 msgstr "Módulos em falta:"
 
-#: lua/main.lua:1388
+#: lua/main.lua:1394
 msgid "Reinstall plugin (%1)"
 msgstr "Reinstalar plugin (%1)"
 
-#: lua/main.lua:1403
+#: lua/main.lua:1409
 msgid "LocalSend (⚠ Reinstall Required)"
 msgstr "LocalSend (⚠ é necessário reinstalar)"
 
-#: lua/main.lua:1406
+#: lua/main.lua:1412
 msgid "LocalSend (stopping...)"
 msgstr "LocalSend (a parar...)"
 
-#: lua/main.lua:1410
+#: lua/main.lua:1416
 msgid "LocalSend (%1 received)"
 msgstr "LocalSend (%1 recebido)"
 
-#: lua/main.lua:1412
+#: lua/main.lua:1418
 msgid "LocalSend (running)"
 msgstr "LocalSend (em execução)"
 
-#: lua/main.lua:1415
+#: lua/main.lua:1421
 msgid "LocalSend (update available)"
 msgstr "LocalSend (atualização disponível)"
 
-#: lua/main.lua:1440
+#: lua/main.lua:1446
 msgid "⚠ Previous update failed - Reinstall required"
 msgstr "⚠ A atualização anterior falhou, é necessário reinstalar"
 
-#: lua/main.lua:1451
+#: lua/main.lua:1457
 msgid "⬆ Update available: %1"
 msgstr "⬆ Atualização disponível: %1"
 
-#: lua/main.lua:1464
+#: lua/main.lua:1470
 msgid "Stopping server..."
 msgstr "A parar o servidor..."
 
-#: lua/main.lua:1467
+#: lua/main.lua:1473
 msgid "Stop server"
 msgstr "Parar servidor"
 
-#: lua/main.lua:1469
+#: lua/main.lua:1475
 msgid "Start server"
 msgstr "Iniciar servidor"
 
-#: lua/main.lua:1494
+#: lua/main.lua:1500
 msgid "Recent transfers (%1)"
 msgstr "Transferências recentes (%1)"
 
-#: lua/main.lua:1496
+#: lua/main.lua:1502
 msgid "Recent transfers"
 msgstr "Transferências recentes"
 
-#: lua/main.lua:1510
+#: lua/main.lua:1516
 msgid "Save directory (%1)"
 msgstr "Diretório de destino (%1)"
 
-#: lua/main.lua:1523
+#: lua/main.lua:1529
 msgid "Settings"
 msgstr "Definições"
 
-#: lua/main.lua:1531
+#: lua/main.lua:1537
 msgid "Device name (%1)"
 msgstr "Nome do dispositivo (%1)"
 
-#: lua/main.lua:1533
+#: lua/main.lua:1539
 msgid "Device name (KOReader)"
 msgstr "Nome do dispositivo (KOReader)"
 
-#: lua/main.lua:1544
+#: lua/main.lua:1550
 msgid "Allowed extensions (using routing)"
 msgstr "Extensões permitidas (a usar encaminhamento)"
 
-#: lua/main.lua:1546
+#: lua/main.lua:1552
 msgid "Allowed extensions (%1)"
 msgstr "Extensões permitidas (%1)"
 
-#: lua/main.lua:1548
+#: lua/main.lua:1554
 msgid "Allowed extensions (all)"
 msgstr "Extensões permitidas (todas)"
 
-#: lua/main.lua:1557
+#: lua/main.lua:1563
 msgid ""
 "When file type routing is enabled, allowed extensions are determined by the "
 "routing rules."
@@ -1317,23 +1321,23 @@ msgstr ""
 "Quando o encaminhamento por tipo de ficheiro está ativado, as extensões "
 "permitidas são determinadas pelas regras de encaminhamento."
 
-#: lua/main.lua:1567
+#: lua/main.lua:1573
 msgid "File type routing (%1 rule)"
 msgid_plural "File type routing (%1 rules)"
 msgstr[0] "Encaminhamento por tipo de ficheiro (%1 regra)"
 msgstr[1] "Encaminhamento por tipo de ficheiro (%1 regras)"
 
-#: lua/main.lua:1569
+#: lua/main.lua:1575
 msgid "File type routing (disabled, %1 rule)"
 msgid_plural "File type routing (disabled, %1 rules)"
 msgstr[0] "Encaminhamento por tipo de ficheiro (desativado, %1 regra)"
 msgstr[1] "Encaminhamento por tipo de ficheiro (desativado, %1 regras)"
 
-#: lua/main.lua:1572
+#: lua/main.lua:1578
 msgid "File type routing"
 msgstr "Encaminhamento por tipo de ficheiro"
 
-#: lua/main.lua:1578
+#: lua/main.lua:1584
 msgid ""
 "Route different file types to different directories (e.g., EPUBs to Books "
 "folder, PDFs to Documents)."
@@ -1341,19 +1345,19 @@ msgstr ""
 "Encaminhe diferentes tipos de ficheiro para diferentes diretórios (ex.: "
 "EPUBs para a pasta Livros, PDFs para Documentos)."
 
-#: lua/main.lua:1583
+#: lua/main.lua:1589
 msgid "PIN code (enabled)"
 msgstr "Código PIN (ativado)"
 
-#: lua/main.lua:1585
+#: lua/main.lua:1591
 msgid "PIN code (disabled)"
 msgstr "Código PIN (desativado)"
 
-#: lua/main.lua:1595
+#: lua/main.lua:1601
 msgid "Use HTTPS"
 msgstr "Usar HTTPS"
 
-#: lua/main.lua:1603
+#: lua/main.lua:1609
 msgid ""
 "HTTPS encrypts transfers for security. Disable only if you experience "
 "compatibility issues."
@@ -1361,19 +1365,19 @@ msgstr ""
 "O HTTPS encripta as transferências por motivos de segurança. Desative apenas "
 "se tiver problemas de compatibilidade."
 
-#: lua/main.lua:1606
+#: lua/main.lua:1612
 msgid "Start with KOReader"
 msgstr "Iniciar com o KOReader"
 
-#: lua/main.lua:1614
+#: lua/main.lua:1620
 msgid "Automatically start the LocalSend server when KOReader launches."
 msgstr "Inicia automaticamente o servidor do LocalSend ao abrir o KOReader."
 
-#: lua/main.lua:1617
+#: lua/main.lua:1623
 msgid "Enable WebRTC Support (Experimental)"
 msgstr "Ativar suporte WebRTC (experimental)"
 
-#: lua/main.lua:1625
+#: lua/main.lua:1631
 msgid ""
 "Connect to public signaling server for WebRTC transfers. Requires internet "
 "access."
@@ -1381,11 +1385,11 @@ msgstr ""
 "Liga a um servidor de sinalização público para transferências WebRTC. Requer "
 "acesso à Internet."
 
-#: lua/main.lua:1628
+#: lua/main.lua:1634
 msgid "Show 'Send with LocalSend' in file menu"
 msgstr "Mostrar 'Enviar com LocalSend' no menu de ficheiros"
 
-#: lua/main.lua:1637
+#: lua/main.lua:1643
 msgid ""
 "Add a 'Send with LocalSend' action to the long-press menu for files and "
 "folders in the file browser, History, and Collections."
@@ -1393,11 +1397,11 @@ msgstr ""
 "Adiciona a ação 'Enviar com LocalSend' ao menu de pressão longa para "
 "ficheiros e pastas no navegador de ficheiros, Histórico e Coleções."
 
-#: lua/main.lua:1641
+#: lua/main.lua:1647
 msgid "Rotate certificates"
 msgstr "Renovar certificados"
 
-#: lua/main.lua:1646
+#: lua/main.lua:1652
 msgid ""
 "Generate new TLS certificates. Use if you experience connection issues or "
 "want to reset trusted device pairings."
@@ -1405,40 +1409,40 @@ msgstr ""
 "Gera novos certificados TLS. Utilize se tiver problemas de ligação ou quiser "
 "repor os emparelhamentos de dispositivos de confiança."
 
-#: lua/main.lua:1654
+#: lua/main.lua:1660
 msgid "Troubleshooting"
 msgstr "Resolução de problemas"
 
-#: lua/main.lua:1664
+#: lua/main.lua:1670
 msgid "Send file..."
 msgstr "Enviar ficheiro..."
 
-#: lua/main.lua:1668
+#: lua/main.lua:1674
 msgid "Send a file or folder to another LocalSend device on the network."
 msgstr ""
 "Envia um ficheiro ou pasta para outro dispositivo com LocalSend na rede."
 
-#: lua/main.lua:1673
+#: lua/main.lua:1679
 msgid "Send current book"
 msgstr "Enviar livro atual"
 
-#: lua/main.lua:1680
+#: lua/main.lua:1686
 msgid "Send the currently open book to another LocalSend device."
 msgstr "Envia o livro atualmente aberto para outro dispositivo com LocalSend."
 
-#: lua/main.lua:1687
+#: lua/main.lua:1693
 msgid "Updates"
 msgstr "Atualizações"
 
-#: lua/main.lua:1695
+#: lua/main.lua:1701
 msgid "About LocalSend"
 msgstr "Acerca do LocalSend"
 
-#: lua/main.lua:1708
+#: lua/main.lua:1714
 msgid "Check LocalSend"
 msgstr "Verificar LocalSend"
 
-#: lua/main.lua:1713
+#: lua/main.lua:1719
 msgid ""
 "Check Wi-Fi, the receiver, the save folder, and network access, then "
 "recommend the next step."
@@ -1446,100 +1450,100 @@ msgstr ""
 "Verifica o Wi-Fi, o recetor, a pasta de destino e o acesso à rede, e "
 "recomenda o passo seguinte."
 
-#: lua/main.lua:1716
+#: lua/main.lua:1722
 msgid "Can't find a device?"
 msgstr "Não encontra um dispositivo?"
 
-#: lua/main.lua:1721
+#: lua/main.lua:1727
 msgid ""
 "Use this when a phone, computer, or e-reader does not appear in LocalSend."
 msgstr ""
 "Utilize esta opção quando um telemóvel, computador ou e-reader não aparecer "
 "no LocalSend."
 
-#: lua/main.lua:1724
+#: lua/main.lua:1730
 msgid "Transfer failed?"
 msgstr "Falha na transferência?"
 
-#: lua/main.lua:1729
+#: lua/main.lua:1735
 msgid ""
 "Explain the most recent send or receive failure and suggest a relevant "
 "action."
 msgstr ""
 "Explica a falha de envio ou receção mais recente e sugere uma ação relevante."
 
-#: lua/main.lua:1732
+#: lua/main.lua:1738
 msgid "Create support report"
 msgstr "Criar relatório de suporte"
 
-#: lua/main.lua:1740
+#: lua/main.lua:1746
 msgid "Advanced"
 msgstr "Avançado"
 
-#: lua/main.lua:1750
+#: lua/main.lua:1756
 msgid "Network details"
 msgstr "Detalhes de rede"
 
-#: lua/main.lua:1757
+#: lua/main.lua:1763
 msgid "Backend log"
 msgstr "Registo interno"
 
-#: lua/main.lua:1771
+#: lua/main.lua:1777
 msgid "Restart LocalSend server"
 msgstr "Reiniciar servidor do LocalSend"
 
-#: lua/main.lua:1789
+#: lua/main.lua:1795
 msgid "Auto-check for updates (%1)"
 msgstr "Verificação automática de atualizações (%1)"
 
-#: lua/main.lua:1791
+#: lua/main.lua:1797
 msgid "Auto-check for updates"
 msgstr "Verificação automática de atualizações"
 
-#: lua/main.lua:1811
+#: lua/main.lua:1817
 msgid "Every 12 hours"
 msgstr "A cada 12 horas"
 
-#: lua/main.lua:1812
+#: lua/main.lua:1818
 msgid "Every 24 hours"
 msgstr "A cada 24 horas"
 
-#: lua/main.lua:1813
+#: lua/main.lua:1819
 msgid "Every 3 days"
 msgstr "A cada 3 dias"
 
-#: lua/main.lua:1814
+#: lua/main.lua:1820
 msgid "Weekly (default)"
 msgstr "Semanalmente (predefinição)"
 
-#: lua/main.lua:1818
+#: lua/main.lua:1824
 msgid "Enable auto-check"
 msgstr "Ativar verificação automática"
 
-#: lua/main.lua:1855
+#: lua/main.lua:1861
 msgid "Update available: %1 → %2"
 msgstr "Atualização disponível: %1 → %2"
 
-#: lua/main.lua:1857
+#: lua/main.lua:1863
 msgid "Installed version: %1"
 msgstr "Versão instalada: %1"
 
-#: lua/main.lua:1865
+#: lua/main.lua:1871
 msgid "Check for updates"
 msgstr "Verificar atualizações"
 
-#: lua/main.lua:1880
+#: lua/main.lua:1886
 msgid "Toggle LocalSend server"
 msgstr "Ligar/desligar servidor do LocalSend"
 
-#: lua/main.lua:1885
+#: lua/main.lua:1891
 msgid "LocalSend: send file"
 msgstr "LocalSend: enviar ficheiro"
 
-#: lua/main.lua:1890
+#: lua/main.lua:1896
 msgid "LocalSend: send current book"
 msgstr "LocalSend: enviar livro atual"
 
-#: lua/main.lua:1931
+#: lua/main.lua:1937
 msgid "Send with LocalSend"
 msgstr "Enviar com LocalSend"

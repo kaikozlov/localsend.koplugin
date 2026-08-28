@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/gofiber/fiber/v3"
 	"localsend-cli/internal/crypto"
@@ -19,6 +20,67 @@ const (
 	maxRegisterBodyBytes  = 1 * 1024 * 1024
 	maxNonceBodyBytes     = 64 * 1024
 )
+
+const (
+	// Uploads have no total-duration limit: large files on e-readers can be slow.
+	// Only a connection that makes zero read progress for this long is failed.
+	uploadIdleTimeout             = 2 * time.Minute
+	uploadDeadlineRefreshInterval = 10 * time.Second
+)
+
+type readDeadlineSetter interface {
+	SetReadDeadline(time.Time) error
+}
+
+// idleDeadlineReader keeps an active upload bounded without a polling goroutine.
+// The deadline is armed before the first potentially-blocking read, then renewed
+// only after real byte progress and at a coarse cadence.
+type idleDeadlineReader struct {
+	r           io.Reader
+	deadlines   readDeadlineSetter
+	lastRefresh time.Time
+	armErr      error
+}
+
+func newIdleDeadlineReader(r io.Reader, deadlines readDeadlineSetter) *idleDeadlineReader {
+	reader := &idleDeadlineReader{r: r, deadlines: deadlines}
+	reader.refreshDeadline(time.Now())
+	return reader
+}
+
+func (r *idleDeadlineReader) refreshDeadline(now time.Time) {
+	if r.deadlines == nil {
+		return
+	}
+	if err := r.deadlines.SetReadDeadline(now.Add(uploadIdleTimeout)); err != nil {
+		r.armErr = err
+		return
+	}
+	r.lastRefresh = now
+}
+
+func (r *idleDeadlineReader) Read(p []byte) (int, error) {
+	if r.armErr != nil {
+		return 0, r.armErr
+	}
+	n, err := r.r.Read(p)
+	if n > 0 {
+		now := time.Now()
+		if r.lastRefresh.IsZero() || now.Sub(r.lastRefresh) >= uploadDeadlineRefreshInterval {
+			r.refreshDeadline(now)
+			if r.armErr != nil && err == nil {
+				err = r.armErr
+			}
+		}
+	}
+	return n, err
+}
+
+func (r *idleDeadlineReader) clearDeadline() {
+	if r.deadlines != nil {
+		_ = r.deadlines.SetReadDeadline(time.Time{})
+	}
+}
 
 var errRequestBodyTooLarge = errors.New("request body too large")
 
@@ -209,6 +271,13 @@ func (fr *FileReceiver) uploadHandler(c fiber.Ctx) error {
 	} else {
 		bodyReader = bytes.NewReader(c.Body())
 	}
+
+	// Arm a sliding idle deadline on this upload connection. This is not a
+	// transfer-duration timeout: each interval with actual byte progress renews
+	// it, so healthy long-running transfers remain unlimited.
+	idleReader := newIdleDeadlineReader(bodyReader, c.RequestCtx().Conn())
+	defer idleReader.clearDeadline()
+	bodyReader = idleReader
 
 	// Report activity only after the upload has passed session/file validation.
 	// KOReader uses this to inhibit standby while bytes are actively written.

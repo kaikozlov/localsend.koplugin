@@ -68,7 +68,14 @@ function M.init(d, paths)
         logger = d.logger,
         T = d.T,
         _ = d._,
+        onActivityChanged = d.onActivityChanged,
     }, paths)
+end
+
+local function notifyActivityChanged()
+    if deps.onActivityChanged then
+        deps.onActivityChanged()
+    end
 end
 
 -- Check if a send operation is in progress
@@ -166,6 +173,7 @@ function M.sendFile(device, filepath, pin, callback, options)
     ServerState.send_cancelled = false -- Reset cancel flag
     ServerState.send_cancel_started_at = nil
     power.acquire("send")
+    notifyActivityChanged()
     local send_started_at = os.time()
     local send_size = fileSize(filepath)
 
@@ -226,6 +234,7 @@ function M.sendFile(device, filepath, pin, callback, options)
     if launched ~= true and launched ~= 0 then
         ServerState.send_in_progress = false
         power.release("send")
+        notifyActivityChanged()
         cleanupSendFiles()
         if callback then
             callback(false, deps._("Failed to start send process"))
@@ -258,15 +267,46 @@ function M.sendFile(device, filepath, pin, callback, options)
 
     recordOutcome(nil, deps._("Send in progress"), "", nil, "in_progress")
 
-    -- Show progress notification
-    deps.UIManager:show(deps.Notification:new({
-        text = deps.T(deps._("Sending %1 to %2..."), filename, device.alias),
-        timeout = 3,
-    }))
+    -- Keep an actionable status dialog visible for the whole transfer. The
+    -- existing send state and PID supervisor remain authoritative; this dialog
+    -- is only the user-facing control for the already-supported cancellation
+    -- path. It is non-dismissable so closing the UI cannot leave a transfer
+    -- running with no way to cancel it.
+    local send_dialog
+    local function closeSendDialog()
+        if send_dialog then
+            deps.UIManager:close(send_dialog)
+            send_dialog = nil
+        end
+    end
+    send_dialog = deps.ButtonDialog:new({
+        title = deps.T(deps._("Sending %1 to %2..."), filename, device.alias),
+        dismissable = false,
+        buttons = {
+            {
+                {
+                    text = deps._("Cancel"),
+                    callback = function()
+                        if ServerState.send_cancelled then
+                            return
+                        end
+                        M.cancelSend()
+                        closeSendDialog()
+                        deps.UIManager:show(deps.Notification:new({
+                            text = deps._("Cancelling send..."),
+                            timeout = 2,
+                        }))
+                    end,
+                },
+            },
+        },
+    })
+    deps.UIManager:show(send_dialog)
 
     -- Poll for completion
     local function checkSendComplete()
         if ServerState.send_op_id ~= op_id then
+            closeSendDialog()
             return
         end
         -- Check if send was cancelled - show "Cancelled" not "Send failed".
@@ -296,10 +336,12 @@ function M.sendFile(device, filepath, pin, callback, options)
             -- The child is dead; a cancelled send does not consume exit status.
             local output = deps.util.readFromFile(constants.SEND_OUTPUT_FILE) or ""
             recordOutcome(false, deps._("Cancelled"), output, nil, "cancelled")
+            closeSendDialog()
             cleanupSendFiles()
             ServerState.send_in_progress = false
             ServerState.send_cancel_started_at = nil
             power.release("send")
+            notifyActivityChanged()
             deps.UIManager:show(deps.Notification:new({
                 text = deps._("Send cancelled"),
                 timeout = 2,
@@ -317,8 +359,10 @@ function M.sendFile(device, filepath, pin, callback, options)
         end
 
         -- Send complete
+        closeSendDialog()
         ServerState.send_in_progress = false
         power.release("send")
+        notifyActivityChanged()
 
         -- Check exit code
         local exit_code = nil
@@ -676,6 +720,7 @@ function M.stopActiveOperationsSync()
     ServerState.send_cancelled = false
     ServerState.send_cancel_started_at = nil
     power.release("send")
+    notifyActivityChanged()
 end
 
 -- Categorize an error message from send output

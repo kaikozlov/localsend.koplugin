@@ -282,6 +282,9 @@ function LocalSend:init()
             T = T,
             _ = _,
             N_ = N_,
+            onActivityChanged = function()
+                self:registerEvents()
+            end,
         }, {
             binary_path = binary_path,
         })
@@ -471,8 +474,11 @@ function LocalSend:registerEvents()
     -- 1. Server is currently running
     -- 2. Autostart is enabled and user hasn't stopped it
     -- 3. Server was running before suspend/disconnect (so we can restart on resume)
+    -- 4. An outbound scan/send is active and must be torn down before sleep/network loss
     local should_register = self:isRunning()
         or (self.autostart and not ServerState.user_stopped)
+        or ServerState.scan_in_progress
+        or ServerState.send_in_progress
         or ServerState.was_running_before_suspend
         or ServerState.was_running_before_disconnect
         or ServerState.server_intended_running

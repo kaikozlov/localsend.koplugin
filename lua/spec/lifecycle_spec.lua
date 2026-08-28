@@ -334,6 +334,42 @@ describe("LocalSend Lifecycle", function()
             assert.is_function(instance.onSuspend, "onSuspend should be registered when autostart is enabled")
         end)
 
+        it("registers suspend/network handlers while an outbound send is active with receiver off", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+            instance.autostart = false
+            instance.isRunning = function()
+                return false
+            end
+            LocalSend._ServerState.server_intended_running = false
+            LocalSend._ServerState.was_running_before_suspend = false
+            LocalSend._ServerState.was_running_before_disconnect = false
+            LocalSend._ServerState.send_in_progress = true
+
+            instance:registerEvents()
+
+            assert.is_function(instance.onSuspend)
+            assert.is_function(instance.onNetworkDisconnecting)
+        end)
+
+        it("registers suspend/network handlers while an outbound scan is active with receiver off", function()
+            LocalSend = require("main")
+            local instance = helper.create_instance()
+            instance.autostart = false
+            instance.isRunning = function()
+                return false
+            end
+            LocalSend._ServerState.server_intended_running = false
+            LocalSend._ServerState.was_running_before_suspend = false
+            LocalSend._ServerState.was_running_before_disconnect = false
+            LocalSend._ServerState.scan_in_progress = true
+
+            instance:registerEvents()
+
+            assert.is_function(instance.onSuspend)
+            assert.is_function(instance.onNetworkDisconnecting)
+        end)
+
         it("_onSuspend should stop server and set was_running_before_suspend", function()
             LocalSend = require("main")
             LocalSend._ServerState.was_running_before_suspend = false

@@ -35,8 +35,12 @@ type ForwardSender struct {
 
 type trackedUploadConn struct {
 	net.Conn
-	owner *ForwardSender
-	once  sync.Once
+	owner                    *ForwardSender
+	once                     sync.Once
+	lastReadDeadlineRefresh  atomic.Int64
+	lastWriteDeadlineRefresh atomic.Int64
+	externalReadDeadline     atomic.Bool
+	externalWriteDeadline    atomic.Bool
 }
 
 func (c *trackedUploadConn) Close() error {
@@ -48,12 +52,92 @@ func (c *trackedUploadConn) Close() error {
 	return c.Conn.Close()
 }
 
+func (c *trackedUploadConn) refreshReadDeadline() error {
+	if c.externalReadDeadline.Load() {
+		return nil
+	}
+	now := time.Now()
+	last := c.lastReadDeadlineRefresh.Load()
+	if last != 0 && now.UnixNano()-last < int64(uploadDeadlineRefresh) {
+		return nil
+	}
+	if err := c.Conn.SetReadDeadline(now.Add(uploadIdleTimeout)); err != nil {
+		return err
+	}
+	c.lastReadDeadlineRefresh.Store(now.UnixNano())
+	return nil
+}
+
+func (c *trackedUploadConn) refreshWriteDeadline() error {
+	if c.externalWriteDeadline.Load() {
+		return nil
+	}
+	now := time.Now()
+	last := c.lastWriteDeadlineRefresh.Load()
+	if last != 0 && now.UnixNano()-last < int64(uploadDeadlineRefresh) {
+		return nil
+	}
+	if err := c.Conn.SetWriteDeadline(now.Add(uploadIdleTimeout)); err != nil {
+		return err
+	}
+	c.lastWriteDeadlineRefresh.Store(now.UnixNano())
+	return nil
+}
+
+func (c *trackedUploadConn) Read(p []byte) (int, error) {
+	if err := c.refreshReadDeadline(); err != nil {
+		return 0, err
+	}
+	return c.Conn.Read(p)
+}
+
+func (c *trackedUploadConn) Write(p []byte) (int, error) {
+	if err := c.refreshWriteDeadline(); err != nil {
+		return 0, err
+	}
+	return c.Conn.Write(p)
+}
+
+// fasthttp deliberately clears deadlines when no total request timeout is set.
+// Preserve that API contract, but make the next actual I/O operation re-arm our
+// independent sliding idle deadline.
+func (c *trackedUploadConn) SetDeadline(deadline time.Time) error {
+	external := !deadline.IsZero()
+	c.externalReadDeadline.Store(external)
+	c.externalWriteDeadline.Store(external)
+	if !external {
+		c.lastReadDeadlineRefresh.Store(0)
+		c.lastWriteDeadlineRefresh.Store(0)
+	}
+	return c.Conn.SetDeadline(deadline)
+}
+
+func (c *trackedUploadConn) SetReadDeadline(deadline time.Time) error {
+	external := !deadline.IsZero()
+	c.externalReadDeadline.Store(external)
+	if !external {
+		c.lastReadDeadlineRefresh.Store(0)
+	}
+	return c.Conn.SetReadDeadline(deadline)
+}
+
+func (c *trackedUploadConn) SetWriteDeadline(deadline time.Time) error {
+	external := !deadline.IsZero()
+	c.externalWriteDeadline.Store(external)
+	if !external {
+		c.lastWriteDeadlineRefresh.Store(0)
+	}
+	return c.Conn.SetWriteDeadline(deadline)
+}
+
 const (
 	requestTimeout             = 30 * time.Second
 	maxControlResponseBytes    = 1 << 20
 	maxUploadAttempts          = 3
 	uploadConcurrency          = 2
 	httpsUploadWriteBufferSize = 64 * 1024
+	uploadIdleTimeout          = 2 * time.Minute
+	uploadDeadlineRefresh      = 10 * time.Second
 )
 
 func NewForwardSender() *ForwardSender {

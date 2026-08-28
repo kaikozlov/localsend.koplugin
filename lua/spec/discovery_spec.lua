@@ -23,7 +23,7 @@ describe("localsend_discovery", function()
 
     -- Load a fresh discovery module wired to real KOReader deps. json_dep lets a
     -- test substitute a controlled decoder without clobbering the real json module.
-    local function init_discovery(json_dep)
+    local function init_discovery(json_dep, on_activity_changed)
         package.loaded["localsend_discovery"] = nil
         local discovery = require("localsend_discovery")
         discovery.init({
@@ -36,6 +36,7 @@ describe("localsend_discovery", function()
             logger = logger,
             T = T,
             _ = _,
+            onActivityChanged = on_activity_changed,
         }, { binary_path = "/tmp/localsend" })
         return discovery
     end
@@ -231,6 +232,17 @@ describe("localsend_discovery", function()
             assert.is_true(constants.LEGACY_SCAN_TIMEOUT_SECONDS >= 6)
             assert.is_true(constants.SCAN_TIMEOUT_SECONDS < constants.LEGACY_SCAN_TIMEOUT_SECONDS)
             assert.is_true(constants.LEGACY_SCAN_TIMEOUT_SECONDS < constants.SCAN_MAX_POLL_DURATION)
+        end)
+
+        it("notifies lifecycle registration when a scan starts", function()
+            local activity_changes = 0
+            discovery = init_discovery(nil, function()
+                activity_changes = activity_changes + 1
+            end)
+
+            discovery.scanDevices(nil, { use_webrtc = false })
+
+            assert.equal(1, activity_changes)
         end)
 
         it("passes a separate legacy deadline and preserves the scan log", function()

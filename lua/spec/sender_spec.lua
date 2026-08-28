@@ -24,7 +24,7 @@ describe("localsend_sender", function()
         helper.reset_localsend_state()
     end)
 
-    local function init_sender(network_mgr)
+    local function init_sender(network_mgr, on_activity_changed)
         package.loaded["localsend_sender"] = nil
         local sender = require("localsend_sender")
         sender.init({
@@ -41,6 +41,7 @@ describe("localsend_sender", function()
             logger = logger,
             T = T,
             _ = _,
+            onActivityChanged = on_activity_changed,
         }, { binary_path = "/tmp/localsend" })
         return sender
     end
@@ -139,6 +140,67 @@ describe("localsend_sender", function()
             assert.is_false(state.ServerState.send_in_progress)
             sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" }, "/test/file.epub", nil, nil)
             assert.is_true(state.ServerState.send_in_progress)
+        end)
+
+        it("notifies lifecycle registration when a send starts", function()
+            local activity_changes = 0
+            sender = init_sender(nil, function()
+                activity_changes = activity_changes + 1
+            end)
+
+            sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" }, "/test/file.epub", nil, nil)
+
+            assert.equal(1, activity_changes)
+        end)
+
+        it("shows a persistent cancel dialog while sending", function()
+            local state = require("localsend_state")
+            sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" }, "/test/file.epub", nil, nil)
+
+            local dialog = helper.find_dialog_with_title("ButtonDialog", "Sending")
+            assert.is_not_nil(dialog)
+            assert.is_false(dialog.dismissable)
+            assert.equals("Cancel", dialog.buttons[1][1].text)
+
+            dialog.buttons[1][1].callback()
+            assert.is_true(state.ServerState.send_cancelled)
+            assert.equals(dialog, helper.state.close_calls[#helper.state.close_calls])
+        end)
+
+        it("closes the send dialog when synchronous teardown invalidates the send", function()
+            sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "http", alias = "Phone" }, "/test/file.epub", nil, nil)
+            local dialog = helper.find_dialog_with_title("ButtonDialog", "Sending")
+            assert.is_not_nil(dialog)
+            local poll = helper.state.scheduled_tasks[#helper.state.scheduled_tasks].callback
+
+            sender.stopActiveOperationsSync()
+            poll()
+
+            assert.equals(dialog, helper.state.close_calls[#helper.state.close_calls])
+        end)
+
+        it("closes the send dialog when the transfer completes", function()
+            local original_read = util.readFromFile
+            finally(function()
+                util.readFromFile = original_read
+            end)
+            util.pathExists = function(path)
+                return path == "/test/file.epub" or path == "/tmp/localsend_send.out.exit"
+            end
+            util.readFromFile = function(path)
+                if path == "/tmp/localsend_send.out.exit" then
+                    return "0\n"
+                elseif path == "/tmp/localsend_send.out" then
+                    return ""
+                end
+            end
+
+            sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "http", alias = "Phone" }, "/test/file.epub", nil, nil)
+            local dialog = helper.find_dialog_with_title("ButtonDialog", "Sending")
+            assert.is_not_nil(dialog)
+
+            helper.state.scheduled_tasks[#helper.state.scheduled_tasks].callback()
+            assert.equals(dialog, helper.state.close_calls[#helper.state.close_calls])
         end)
 
         it("retains raw failure evidence after cleaning up the send log", function()

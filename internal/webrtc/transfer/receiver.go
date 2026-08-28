@@ -39,10 +39,12 @@ const (
 
 // Configuration constants
 const (
-	maxPINAttempts         = constants.MaxPINAttempts   // Maximum incorrect PIN attempts before closing connection
-	tokenPreviewLength     = 30                         // Max characters to show in token preview logs
-	pinBlockDuration       = constants.PINBlockDuration // How long a peer is blocked after max PIN attempts
-	maxControlMessageBytes = 2 * 1024 * 1024
+	maxPINAttempts          = constants.MaxPINAttempts   // Maximum incorrect PIN attempts before closing connection
+	tokenPreviewLength      = 30                         // Max characters to show in token preview logs
+	pinBlockDuration        = constants.PINBlockDuration // How long a peer is blocked after max PIN attempts
+	maxControlMessageBytes  = 2 * 1024 * 1024
+	receiveFileIdleTimeout  = 2 * time.Minute
+	receiveWatchdogInterval = 30 * time.Second
 )
 
 // Package-level blocked peers map (persists across receiver instances)
@@ -104,11 +106,16 @@ type RTCReceiver struct {
 	uniqueFiles   utils.UniqueFileAllocator
 
 	// Callbacks
-	onSelectFiles   func([]RTCFileDto) []string
-	onFileReceived  func(filename string, size int64, sender string)
-	onTransferStart func()
-	onTransferDone  func()
-	transferActive  bool
+	onSelectFiles                func([]RTCFileDto) []string
+	onFileReceived               func(filename string, size int64, sender string)
+	onTransferStart              func()
+	onTransferDone               func()
+	transferActive               bool
+	transferWatchdog             *time.Timer
+	transferWatchdogGeneration   uint64
+	transferWatchdogLastFileID   string
+	transferWatchdogLastBytes    int64
+	transferWatchdogLastProgress time.Time
 
 	// TrustedDeviceStore for PAIR flow persistence
 	trustedStore *storage.TrustedDeviceStore
@@ -202,9 +209,48 @@ func (r *RTCReceiver) markTransferStartedLocked() {
 		return
 	}
 	r.transferActive = true
+	r.transferWatchdogGeneration++
+	r.transferWatchdogLastFileID = r.currentFileID
+	r.transferWatchdogLastBytes = r.currentBytes
+	r.transferWatchdogLastProgress = time.Now()
+	r.scheduleTransferWatchdogLocked(r.transferWatchdogGeneration)
 	if r.onTransferStart != nil {
 		r.onTransferStart()
 	}
+}
+
+func (r *RTCReceiver) scheduleTransferWatchdogLocked(generation uint64) {
+	r.transferWatchdog = time.AfterFunc(receiveWatchdogInterval, func() {
+		r.checkTransferWatchdog(generation)
+	})
+}
+
+func (r *RTCReceiver) checkTransferWatchdog(generation uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.transferActive || generation != r.transferWatchdogGeneration {
+		return
+	}
+
+	now := time.Now()
+	if r.currentFileID != r.transferWatchdogLastFileID || r.currentBytes != r.transferWatchdogLastBytes {
+		r.transferWatchdogLastFileID = r.currentFileID
+		r.transferWatchdogLastBytes = r.currentBytes
+		r.transferWatchdogLastProgress = now
+	}
+
+	if now.Sub(r.transferWatchdogLastProgress) >= receiveFileIdleTimeout {
+		slog.Warn("WebRTC receive stalled; closing inactive transfer",
+			"fileId", r.currentFileID,
+			"bytes", r.currentBytes,
+			"idle", now.Sub(r.transferWatchdogLastProgress),
+		)
+		r.terminateLocked()
+		return
+	}
+
+	r.scheduleTransferWatchdogLocked(generation)
 }
 
 func (r *RTCReceiver) markTransferDoneLocked() {
@@ -212,6 +258,14 @@ func (r *RTCReceiver) markTransferDoneLocked() {
 		return
 	}
 	r.transferActive = false
+	r.transferWatchdogGeneration++
+	if r.transferWatchdog != nil {
+		r.transferWatchdog.Stop()
+		r.transferWatchdog = nil
+	}
+	r.transferWatchdogLastFileID = ""
+	r.transferWatchdogLastBytes = 0
+	r.transferWatchdogLastProgress = time.Time{}
 	if r.onTransferDone != nil {
 		r.onTransferDone()
 	}
@@ -1190,10 +1244,10 @@ func (r *RTCReceiver) startReceivingFile(header *RTCSendFileHeader) bool {
 		r.fileHashers[header.ID] = sha256.New()
 	}
 
-	r.markTransferStartedLocked()
 	r.currentFileID = header.ID
 	r.currentBytes = 0
 	r.state = stateReceivingFiles
+	r.markTransferStartedLocked()
 	slog.Info("Receiving file", "id", header.ID)
 	return true
 }
