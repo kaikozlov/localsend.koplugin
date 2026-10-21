@@ -73,8 +73,11 @@ func TestForwardSender_CancelInterruptsActiveUpload(t *testing.T) {
 	cancelDone := make(chan error, 1)
 	go func() { cancelDone <- sender.Cancel() }()
 	select {
-	case <-done:
+	case err := <-done:
 		close(releaseUpload)
+		if err == nil {
+			t.Fatal("Start returned nil after upload cancellation")
+		}
 	case <-time.After(time.Second):
 		close(releaseUpload)
 		t.Fatal("Cancel did not interrupt active upload")

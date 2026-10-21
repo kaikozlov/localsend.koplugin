@@ -74,7 +74,9 @@ func TestDiscovererListen_ProcessesDatagramsContinuously(t *testing.T) {
 	}()
 	t.Cleanup(func() {
 		_ = d.Shutdown()
-		<-listenDone
+		if err := <-listenDone; err != nil {
+			t.Errorf("discovery listener failed: %v", err)
+		}
 	})
 
 	sender, err := net.DialUDP("udp4", nil, conn.LocalAddr().(*net.UDPAddr))
@@ -317,7 +319,9 @@ func TestDiscovererListen_DoesNotExposeUnconfirmedAnnouncement(t *testing.T) {
 	go func() { listenDone <- d.Listen() }()
 	t.Cleanup(func() {
 		_ = d.Shutdown()
-		<-listenDone
+		if err := <-listenDone; err != nil {
+			t.Errorf("discovery listener failed: %v", err)
+		}
 	})
 
 	packet, err := json.Marshal(models.Announcement{
@@ -379,7 +383,9 @@ func TestDiscovererListen_StoresRegisterResponseAfterAnnouncement(t *testing.T) 
 	go func() { listenDone <- d.Listen() }()
 	t.Cleanup(func() {
 		_ = d.Shutdown()
-		<-listenDone
+		if err := <-listenDone; err != nil {
+			t.Errorf("discovery listener failed: %v", err)
+		}
 	})
 
 	packet, err := json.Marshal(models.Announcement{

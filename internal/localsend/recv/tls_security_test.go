@@ -41,7 +41,10 @@ func TestFileReceiver_HTTPSRequiresClientCertificate(t *testing.T) {
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-done:
+		case err := <-done:
+			if err != nil {
+				t.Errorf("receiver failed: %v", err)
+			}
 		case <-time.After(5 * time.Second):
 			t.Error("receiver did not stop")
 		}

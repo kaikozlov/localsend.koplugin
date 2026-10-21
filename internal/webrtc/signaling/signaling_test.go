@@ -48,8 +48,8 @@ func TestConnectWithContext_CancelInterruptsHelloWait(t *testing.T) {
 		}
 	case <-time.After(250 * time.Millisecond):
 		close(release)
-		<-done
-		t.Fatal("context cancellation did not interrupt the HELLO read")
+		err := <-done
+		t.Fatalf("context cancellation did not interrupt the HELLO read; ConnectWithContext returned: %v", err)
 	}
 }
 
