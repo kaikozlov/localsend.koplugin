@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net"
+	"net/netip"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -147,7 +148,7 @@ func NewForwardSender() *ForwardSender {
 			tokens: make(map[string]string),
 		},
 		remotePort:        constants.DefaultPortStr,
-		httpClient:        &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes},
+		httpClient:        &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes, DialDualStack: true},
 		uploadClient:      newUploadClient(nil, false),
 		activeUploadConns: make(map[*trackedUploadConn]struct{}),
 	}
@@ -157,6 +158,7 @@ func newUploadClient(tlsConfig *tls.Config, https bool) *fasthttp.Client {
 	client := &fasthttp.Client{
 		MaxResponseBodySize: maxControlResponseBytes,
 		TLSConfig:           tlsConfig,
+		DialDualStack:       true,
 	}
 	if https {
 		// fasthttp defaults to a 4 KiB connection write buffer. TLS cannot use
@@ -171,9 +173,9 @@ func (fsp *ForwardSender) trackUploadDial(addr string, timeout time.Duration) (n
 	var conn net.Conn
 	var err error
 	if timeout > 0 {
-		conn, err = fasthttp.DialTimeout(addr, timeout)
+		conn, err = fasthttp.DialDualStackTimeout(addr, timeout)
 	} else {
-		conn, err = fasthttp.Dial(addr)
+		conn, err = fasthttp.DialDualStack(addr)
 	}
 	if err != nil {
 		return nil, err
@@ -242,7 +244,7 @@ func (fsp *ForwardSender) Init(target *models.DeviceInfo, https bool) error {
 	}
 	localInfo := models.NewDeviceInfo(alias, fingerprint)
 	fsp.local = &localInfo
-	fsp.httpClient = &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes, TLSConfig: clientTLSConfig}
+	fsp.httpClient = &fasthttp.Client{MaxResponseBodySize: maxControlResponseBytes, TLSConfig: clientTLSConfig, DialDualStack: true}
 	fsp.uploadClient = newUploadClient(clientTLSConfig, https)
 	fsp.uploadClient.DialTimeout = fsp.trackUploadDial
 
@@ -460,4 +462,9 @@ func (fsp *ForwardSender) prepareUri(req *fasthttp.Request, path string) {
 		req.URI().SetScheme("http")
 	}
 	req.URI().SetHost(remoteAddr)
+	if addr, err := netip.ParseAddr(fsp.remote.IP); err == nil && addr.Zone() != "" {
+		// The zone selects our local interface; it must not be sent to the peer.
+		req.UseHostHeader = true
+		req.Header.SetHost(net.JoinHostPort(addr.WithZone("").String(), fsp.remotePort))
+	}
 }

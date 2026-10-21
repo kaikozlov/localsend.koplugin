@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"localsend-cli/internal/localsend"
 	"localsend-cli/internal/localsend/recv"
 	"localsend-cli/internal/localsend/send"
 	"localsend-cli/internal/models"
@@ -456,4 +457,47 @@ func TestIntegration_EndToEnd_RealHTTP(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestIntegration_ScopedIPv6Transfer(t *testing.T) {
+	recvDir := t.TempDir()
+	receiver := recv.NewFileReceiver("Kindle", recvDir, false)
+	receiver.SetListenAddr("[::1]:53317")
+	if err := receiver.Init(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- receiver.Start(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		if err := <-serverErr; err != nil {
+			t.Errorf("receiver: %v", err)
+		}
+	})
+	waitForServer(t, "http://[::1]:53317/api/localsend/v2/info", 5*time.Second)
+
+	target, err := localsend.GetDeviceInfo("::1%lo", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sender := send.NewForwardSender()
+	if err := sender.Init(&target, false); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("p { text-indent: 0 !important; }\n")
+	file := createTestFiles(t, t.TempDir(), map[string][]byte{"style.css": content})[0]
+	if err := sender.AddFile(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.Start(); err != nil {
+		t.Fatal(err)
+	}
+	received, err := os.ReadFile(filepath.Join(recvDir, "style.css"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(received, content) {
+		t.Fatalf("received bytes = %q; want %q", received, content)
+	}
 }

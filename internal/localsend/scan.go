@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -721,6 +723,11 @@ func (mcs *Discoverer) sendHTTPResponse(ip string, anno models.Announcement) (mo
 	req.URI().SetScheme(scheme)
 	req.URI().SetHost(remoteAddr)
 	req.URI().SetPath(constants.RegisterPath)
+	if addr, err := netip.ParseAddr(ip); err == nil && addr.Zone() != "" {
+		// The zone selects our local interface; it must not be sent to the peer.
+		req.UseHostHeader = true
+		req.Header.SetHost(net.JoinHostPort(addr.WithZone("").String(), strconv.Itoa(port)))
+	}
 	req.Header.SetMethod(fiber.MethodPost)
 	req.Header.SetContentType(fiber.MIMEApplicationJSON)
 	req.SetBody(bodyBytes)
@@ -1055,9 +1062,9 @@ var httpClientForScan = &http.Client{
 // Returns true if a device was found and registered.
 func (mcs *Discoverer) tryScanIP(ctx context.Context, ip, scheme string, bodyBytes []byte) bool {
 	remoteAddr := net.JoinHostPort(ip, constants.DefaultPortStr)
-	url := fmt.Sprintf("%s://%s%s", scheme, remoteAddr, constants.RegisterPath)
+	endpoint := url.URL{Scheme: scheme, Host: remoteAddr, Path: constants.RegisterPath}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(bodyBytes))
 	if err != nil {
 		return false
 	}

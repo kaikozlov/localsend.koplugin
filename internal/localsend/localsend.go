@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"localsend-cli/internal/localsend/constants"
@@ -70,8 +71,8 @@ func GetDeviceInfo(ip string, https bool) (models.DeviceInfo, error) {
 		tlsConfig = lsutils.TLSClientConfig(cert, "")
 	}
 	client := newDeviceInfoHTTPClient(tlsConfig)
-	url := fmt.Sprintf("%s://%s%s", scheme, remoteAddr, constants.InfoPath)
-	resp, err := client.Get(url)
+	endpoint := url.URL{Scheme: scheme, Host: remoteAddr, Path: constants.InfoPath}
+	resp, err := client.Get(endpoint.String())
 	if err != nil {
 		return models.DeviceInfo{}, err
 	}
