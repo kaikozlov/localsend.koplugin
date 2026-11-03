@@ -4,11 +4,12 @@ LocalSend supports older e-readers on a best-effort basis. This document records
 
 ## Verified devices and firmware
 
-Two Kindle vendor-kernel boundaries have been audited:
+Three Kindle vendor-kernel boundaries have been audited:
 
 | Update | Device | Kernel | ARM syscall table |
 |---|---|---|---|
 | `update_kindle_5.6.1.1.bin` | Original Paperwhite (`yoshime3`) | `2.6.31-rt11-lab126` | 368 entries (0–367) |
+| `Update_kindle_3.4_B008.bin` | Kindle Keyboard (Kindle 3 Wi-Fi, `imx35_luigi`) | `2.6.26-rt-lab126` | 356 entries (0–355) |
 | `Update_kindle_2.5.8_B009.bin` | Kindle DX Graphite | `2.6.22.19-lab126` | 352 entries (0–351) |
 
 The diagnostics report for issue #15 identifies KOReader's `KindlePaperWhite` model, and the extracted firmware identifies the platform as `yoshime3`, the original Paperwhite (PW/PW1):
@@ -42,7 +43,28 @@ Size:    217523739 bytes
 Kindle DX Graphite 2.5.8:
 SHA-256: 902cc39cee4d663c1ddd4301b07ed084aad8fa35fb752a278b7ea2a5c3088887
 Size:    5560209 bytes
+
+Kindle Keyboard 3.4:
+SHA-256: 9f9257df734c125df2b8c09b357d46256961d27261e8959e897e9ac5f20c0c5f
+Size:    20086645 bytes
 ```
+
+The Kindle Keyboard package is no longer on Amazon's site. It is available from
+the Internet Archive capture of
+`https://s3.amazonaws.com/G7G_FirmwareUpdates_WebDownloads/Update_kindle_3.4_B008.bin`
+(snapshot `20160315080624`). KindleTool reports target device `Kindle 3 WiFi`.
+[Issue #19](https://github.com/kaikozlov/localsend.koplugin/issues/19) reports
+firmware 3.4.3 with the same kernel version string. No 3.4.3 package was found,
+and the archived 3.4.1→3.4.2 incremental update ships no kernel, so 3.4 is the
+audited stand-in. Its `update-kernel.tar.gz` contains `imx35_luigi/uImage`;
+the gzip payload after the 64-byte U-Boot header reports:
+
+```text
+Linux version 2.6.26-rt-lab126 (jenkins-official@lucid-build02) (gcc version 4.1.2) #5 Sat Sep 1 14:28:26 PDT 2012
+```
+
+The image embeds its build configuration (`IKCFG_ST`): `CONFIG_CPU_V6=y`
+(ARM1136), `CONFIG_AEABI=y`, `CONFIG_OABI_COMPAT=y`, `CONFIG_PREEMPT_NONE=y`.
 
 The DXG package is an OTA V1 update containing incremental rootfs patches and
 intermediate/final kernels, not a complete root filesystem. KindleTool reports
@@ -208,6 +230,32 @@ The decoded table, rather than the nominal upstream kernel version, is the autho
 The legacy process primitives used by the overlay are also present: `pipe`
 (42), `fcntl` (55), and `dup2` (63).
 
+The Kindle Keyboard kernel has `sys_call_table` at `0xc00a3c28`. Its
+`vector_swi` compares the syscall number with 356 (`cmp r7, #356`) before
+loading from the table, so entries 0 through 355 exist. Decoding them the same
+way gives:
+
+```text
+ 42 pipe           sys_pipe
+ 63 dup2           sys_dup2
+250 epoll_create   sys_epoll_create
+252 epoll_wait     sys_epoll_wait
+281 socket         sys_socket
+285 accept         sys_accept
+346 epoll_pwait    sys_ni_syscall
+351 eventfd        sys_eventfd
+355                sys_ni_syscall
+356 eventfd2       OUT OF TABLE
+357 epoll_create1  OUT OF TABLE
+358 dup3           OUT OF TABLE
+359 pipe2          OUT OF TABLE
+366 accept4        OUT OF TABLE
+```
+
+Its syscall gaps are therefore the DXG gaps, and the existing overlay fallbacks
+cover them. Table presence does not cover flag semantics, though; see
+[Confirmed socket type-flag gap](#confirmed-socket-type-flag-gap).
+
 ### 4. Inspect the release binary
 
 Build an unstripped 32-bit compatibility binary so Go symbols and disassembly remain available:
@@ -312,6 +360,7 @@ test "$(cat /tmp/legacy-callback)" = callback-ok
 rg 'epoll_create1\(|epoll_create\(|eventfd2\(|eventfd\(' /tmp/legacy-recv.trace
 rg 'accept4\(|accept\(|pipe2\(|pipe\(|dup3\(|dup2\(' /tmp/legacy-recv.trace
 rg 'epoll_wait\(' /tmp/legacy-recv.trace
+rg 'socket\(' /tmp/legacy-recv.trace
 ! rg -q 'epoll_pwait\(' /tmp/legacy-recv.trace
 ```
 
@@ -320,15 +369,17 @@ The Linux seccomp launcher (`tools/armcompat/testdata/kindle_enosys.c`) returns
 `epoll_create1`, flagged `eventfd2`, flagged `accept4`, flagged `pipe2`, `dup3`,
 `recvmmsg`, `sendmmsg`, `getrandom`, and `prlimit64`. QEMU maps guest legacy
 `eventfd`, `accept`, and `pipe` to the flagged host variants with flags 0, so
-the launcher permits those exact calls.
+the launcher permits those exact calls. It also returns `EINVAL` for any
+`socket` call whose type includes `SOCK_NONBLOCK` or `SOCK_CLOEXEC`, matching
+Linux before 2.6.27. QEMU passes guest socket type flags through unchanged.
 
 `epoll_pwait` cannot be fault-injected this way. QEMU user mode implements guest
 `epoll_wait` by calling host `epoll_pwait`, so a host-level `ENOSYS` would also
 break the patched path. Confirm it with the guest trace and disassembly.
 
-A successful audit exercises all five overlay families: netpoll initialization,
-network polling, TCP accept, the process status pipe, and child descriptor
-remapping. The on-transfer callback proves that the `pipe2`/`dup3` fallbacks
+A successful audit exercises all six overlay families: netpoll initialization,
+network polling, socket creation, TCP accept, the process status pipe, and child
+descriptor remapping. The on-transfer callback proves that the `pipe2`/`dup3` fallbacks
 work through a complete `os/exec` operation.
 
 This approximates the Kindle-shaped failures that matter for the V2 receive path where QEMU's host mapping allows it. It is still not a full syscall-table emulator. Static table inspection and final testing on the actual Kindle remain necessary.
@@ -359,10 +410,10 @@ This was a latent compatibility problem, not a regression introduced by Go 1.26.
 
 `just release` generates a scoped Go build overlay through `tools/armcompat`.
 For 32-bit ARM release builds, it restores `epoll_wait`, legacy netpoll
-initialization, `accept`, and the process-creation fallbacks described below.
-ARM64 builds are unchanged. The generator targets the pinned Go 1.26 runtime
-layout and deliberately fails if any expected runtime, poll, syscall, pipe, or
-exec source no longer matches. Other Go versions are unsupported until their
+initialization, flagless socket creation, `accept`, and the process-creation
+fallbacks described below. ARM64 builds are unchanged. The generator targets the
+pinned Go 1.26 runtime layout and deliberately fails if any expected runtime,
+poll, syscall, net, netlink, pipe, or exec source no longer matches. Other Go versions are unsupported until their
 actual source trees and a complete release build are validated.
 
 ## Confirmed `accept4` gap
@@ -391,29 +442,60 @@ The deterministic packaged-binary audit forces all four modern calls to
 `ENOSYS`, completes a V2 transfer, and requires the shell callback to create
 its sentinel file through traced legacy calls.
 
+## Confirmed socket type-flag gap
+
+Linux 2.6.27 added `SOCK_NONBLOCK` and `SOCK_CLOEXEC` as `socket` type flags.
+Go 1.26 always passes them: `net.sysSocket` creates every TCP and UDP socket
+with both, and `syscall.NetlinkRIB`, which backs `net.Interfaces`, uses
+`SOCK_CLOEXEC`. Neither has a fallback.
+
+The Kindle Keyboard kernel rejects them. Its `sys_socket` passes the type
+unmasked to `__sock_create`, which returns `-EINVAL` for any type above 10
+(`cmp r2, #10; mvnhi r4, #21`). KOReader's own log in issue #19 shows the same
+rejection (`socket(AF_INET) failed: Invalid argument`). A full-system QEMU
+`versatilepb` guest running Debian's stock `2.6.26-2-versatile` kernel
+reproduces the failure with the v1.4.5 `arm-legacy` binary:
+
+```text
+WARN Failed to create discoverer; will retry error="listen udp 224.0.0.167:53317: socket: invalid argument"
+ERROR Receiver component failed error="HTTP receiver stopped: failed to listen: failed to listen: listen tcp :53317: socket: invalid argument"
+```
+
+The DXG kernel was not disassembled for this check. Upstream 2.6.22 predates
+the flags, so it is expected to fail the same way. The original static audit
+missed the gap because the syscall table only shows that `socket` (281) exists,
+and QEMU user mode forwarded the flags to the modern host kernel.
+
+The overlay retries both calls without the flags when they return `EINVAL`. It
+sets close-on-exec while holding `ForkLock`, then sets nonblocking mode for
+`net` sockets. fasthttp's `tcplisten` already has the same `EINVAL` fallback.
+The packaged-binary audit forces every flagged host `socket` call to `EINVAL`
+and requires the flagless TCP, UDP, and netlink retries in the guest trace.
+
 ## Verified syscall gaps
 
 The current binary contains or can reach syscalls newer than this firmware. The statuses below combine the decoded Kindle syscall table, current Go source, linked binary symbols, and the QEMU-traced V2 workflow.
 
-| Syscall | PW 5.6.1.1 | DXG 2.5.8 | Compatibility status |
-|---|---|---|---|
-| `pipe` (42), `dup2` (63) | Present | Present | Process fallbacks used only after modern calls return `ENOSYS`. |
-| `epoll_create` (250), `epoll_wait` (252) | Present | Present | Runtime overlay initialization and polling paths. |
-| `accept` (285) | Present | Present | Incoming TCP fallback. |
-| `epoll_pwait` (346) | `sys_ni_syscall` | `sys_ni_syscall` | Replaced by `epoll_wait`. |
-| `eventfd` (351) | Present | Present, final table entry | DXG fallback for netpoll wakeups. |
-| `eventfd2` (356), `epoll_create1` (357) | Present | Outside table | DXG probes fall back to legacy calls plus `fcntl`. |
-| `dup3` (358), `pipe2` (359) | Present | Outside table | DXG `os/exec` paths fall back to `dup2` and `pipe` plus `fcntl`. |
-| `inotify_init1` (360) | Present | Outside table | No current receiver path calls it; direct users still receive `ENOSYS`. |
-| `recvmmsg` (365) | `sys_ni_syscall` | Outside table | Future batch-UDP risk; normal V2 and current Pion/mDNS paths use ordinary reads. |
-| `accept4` (366) | `sys_ni_syscall` | Outside table | Falls back to `accept`, then applies close-on-exec and nonblocking state. |
-| `prlimit64` (369) | Outside table | Outside table | Startup initialization tolerates failure; explicit operations may fail. |
-| `sendmmsg` (374) | Outside table | Outside table | Same future batch-UDP risk as `recvmmsg`. |
-| `getrandom` (384) | Outside table | Outside table | Crypto path falls back to `/dev/urandom`. |
-| `copy_file_range` (391) | Outside table | Outside table | Version-gated; generic copying remains available. |
-| `futex_time64` (422) | Outside table | Outside table | Go selects legacy `futex` 240 for both audited kernel releases. |
-| `pidfd_*`, `clone3` | Outside table | Outside table | Go probes support and retains older process-management paths in the audited workflow. |
-| `faccessat2`, `fchmodat2` | Outside table | Outside table | Go handles `ENOSYS` and uses older paths where semantics allow it. |
+| Syscall | PW 5.6.1.1 | K3 3.4 | DXG 2.5.8 | Compatibility status |
+|---|---|---|---|---|
+| `pipe` (42), `dup2` (63) | Present | Present | Present | Process fallbacks used only after modern calls return `ENOSYS`. |
+| `epoll_create` (250), `epoll_wait` (252) | Present | Present | Present | Runtime overlay initialization and polling paths. |
+| `socket` (281) type flags | Accepted (2.6.31) | `EINVAL` | Unsupported (2.6.22) | Retries without flags, then applies close-on-exec and nonblocking state. |
+| `accept` (285) | Present | Present | Present | Incoming TCP fallback. |
+| `epoll_pwait` (346) | `sys_ni_syscall` | `sys_ni_syscall` | `sys_ni_syscall` | Replaced by `epoll_wait`. |
+| `eventfd` (351) | Present | Present | Present, final table entry | Fallback for netpoll wakeups. |
+| `eventfd2` (356), `epoll_create1` (357) | Present | Outside table | Outside table | Probes fall back to legacy calls plus `fcntl`. |
+| `dup3` (358), `pipe2` (359) | Present | Outside table | Outside table | `os/exec` paths fall back to `dup2` and `pipe` plus `fcntl`. |
+| `inotify_init1` (360) | Present | Outside table | Outside table | No current receiver path calls it; direct users still receive `ENOSYS`. |
+| `recvmmsg` (365) | `sys_ni_syscall` | Outside table | Outside table | Future batch-UDP risk; normal V2 and current Pion/mDNS paths use ordinary reads. |
+| `accept4` (366) | `sys_ni_syscall` | Outside table | Outside table | Falls back to `accept`, then applies close-on-exec and nonblocking state. |
+| `prlimit64` (369) | Outside table | Outside table | Outside table | Startup initialization tolerates failure; explicit operations may fail. |
+| `sendmmsg` (374) | Outside table | Outside table | Outside table | Same future batch-UDP risk as `recvmmsg`. |
+| `getrandom` (384) | Outside table | Outside table | Outside table | Crypto path falls back to `/dev/urandom`. |
+| `copy_file_range` (391) | Outside table | Outside table | Outside table | Version-gated; generic copying remains available. |
+| `futex_time64` (422) | Outside table | Outside table | Outside table | Go selects legacy `futex` 240 on the PW and DXG kernel releases. |
+| `pidfd_*`, `clone3` | Outside table | Outside table | Outside table | Go probes support and retains older process-management paths in the audited workflow. |
+| `faccessat2`, `fchmodat2` | Outside table | Outside table | Outside table | Go handles `ENOSYS` and uses older paths where semantics allow it. |
 
 The current deterministic workflow verifies receiver startup, repeated API
 requests, a complete V2 transfer, and the on-transfer `os/exec` callback while

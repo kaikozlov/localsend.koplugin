@@ -111,6 +111,32 @@ childerror:
 	return err1
 }
 `
+	netSocketSourceFixture = `package net
+
+import (
+	"os"
+	"syscall"
+)
+
+func sysSocket(family, sotype, proto int) (int, error) {
+	s, err := socketFunc(family, sotype|syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC, proto)
+	if err != nil {
+		return -1, os.NewSyscallError("socket", err)
+	}
+	return s, nil
+}
+`
+	netlinkSourceFixture = `package syscall
+
+func NetlinkRIB(proto, family int) ([]byte, error) {
+	s, err := Socket(AF_NETLINK, SOCK_RAW|SOCK_CLOEXEC, NETLINK_ROUTE)
+	if err != nil {
+		return nil, err
+	}
+	defer Close(s)
+	return nil, nil
+}
+`
 )
 
 func writeRuntimeSource(t *testing.T, goroot, relativePath, source string) string {
@@ -131,6 +157,8 @@ func writeStandardLibrarySources(t *testing.T, goroot string) (pollPath, syscall
 	syscallPath = writeRuntimeSource(t, goroot, "src/syscall/syscall_linux.go", syscallSourceFixture)
 	writeRuntimeSource(t, goroot, "src/syscall/forkpipe2.go", forkPipeSourceFixture)
 	writeRuntimeSource(t, goroot, "src/syscall/exec_linux.go", execLinuxSourceFixture)
+	writeRuntimeSource(t, goroot, "src/net/sock_cloexec.go", netSocketSourceFixture)
+	writeRuntimeSource(t, goroot, "src/syscall/netlink_linux.go", netlinkSourceFixture)
 	return pollPath, syscallPath
 }
 
@@ -339,8 +367,8 @@ func TestGenerateOverlay_RejectsUnexpectedRuntimeSource(t *testing.T) {
 func TestGenerateOverlay_RejectsUnexpectedPollSource(t *testing.T) {
 	goroot := t.TempDir()
 	writeRuntimeSource(t, goroot, currentRuntimeSourcePath, runtimeSourceFixture)
+	writeStandardLibrarySources(t, goroot)
 	writeRuntimeSource(t, goroot, "src/internal/poll/sock_cloexec.go", "package poll\n")
-	writeRuntimeSource(t, goroot, "src/syscall/syscall_linux.go", syscallSourceFixture)
 
 	_, err := generateOverlay(goroot, filepath.Join(t.TempDir(), "overlay"))
 	if err == nil {
@@ -381,5 +409,29 @@ func TestGenerateOverlay_RejectsUnexpectedExecSource(t *testing.T) {
 	_, err := generateOverlay(goroot, filepath.Join(t.TempDir(), "overlay"))
 	if err == nil {
 		t.Fatal("generateOverlay() succeeded without the expected dup3 implementations")
+	}
+}
+
+func TestGenerateOverlay_RejectsUnexpectedNetSocketSource(t *testing.T) {
+	goroot := t.TempDir()
+	writeRuntimeSource(t, goroot, currentRuntimeSourcePath, runtimeSourceFixture)
+	writeStandardLibrarySources(t, goroot)
+	writeRuntimeSource(t, goroot, "src/net/sock_cloexec.go", "package net\n")
+
+	_, err := generateOverlay(goroot, filepath.Join(t.TempDir(), "overlay"))
+	if err == nil || !strings.Contains(err.Error(), "go net source") {
+		t.Fatalf("generateOverlay() error = %v, want unexpected net source rejection", err)
+	}
+}
+
+func TestGenerateOverlay_RejectsUnexpectedNetlinkSource(t *testing.T) {
+	goroot := t.TempDir()
+	writeRuntimeSource(t, goroot, currentRuntimeSourcePath, runtimeSourceFixture)
+	writeStandardLibrarySources(t, goroot)
+	writeRuntimeSource(t, goroot, "src/syscall/netlink_linux.go", "package syscall\n")
+
+	_, err := generateOverlay(goroot, filepath.Join(t.TempDir(), "overlay"))
+	if err == nil || !strings.Contains(err.Error(), "NetlinkRIB") {
+		t.Fatalf("generateOverlay() error = %v, want missing NetlinkRIB rejection", err)
 	}
 }

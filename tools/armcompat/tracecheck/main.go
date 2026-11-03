@@ -9,21 +9,35 @@ import (
 	"strings"
 )
 
+// Each pair is a QEMU -strace call prefix for the modern probe and for the
+// legacy fallback that must follow it.
 type syscallPair struct {
 	modern string
 	legacy string
 }
 
-var fallbackPairs = []syscallPair{
-	{modern: "epoll_create1", legacy: "epoll_create"},
-	{modern: "eventfd2", legacy: "eventfd"},
-	{modern: "accept4", legacy: "accept"},
-	{modern: "pipe2", legacy: "pipe"},
-	{modern: "dup3", legacy: "dup2"},
-}
-
 func syscallCall(name string) string {
 	return name + "("
+}
+
+var fallbackPairs = []syscallPair{
+	{modern: syscallCall("epoll_create1"), legacy: syscallCall("epoll_create")},
+	{modern: syscallCall("eventfd2"), legacy: syscallCall("eventfd")},
+	{modern: syscallCall("accept4"), legacy: syscallCall("accept")},
+	{modern: syscallCall("pipe2"), legacy: syscallCall("pipe")},
+	{modern: syscallCall("dup3"), legacy: syscallCall("dup2")},
+	{
+		modern: "socket(PF_INET,SOCK_STREAM|SOCK_CLOEXEC|SOCK_NONBLOCK,",
+		legacy: "socket(PF_INET,SOCK_STREAM,",
+	},
+	{
+		modern: "socket(PF_INET,SOCK_DGRAM|SOCK_CLOEXEC|SOCK_NONBLOCK,",
+		legacy: "socket(PF_INET,SOCK_DGRAM,",
+	},
+	{
+		modern: "socket(PF_NETLINK,SOCK_RAW|SOCK_CLOEXEC,",
+		legacy: "socket(PF_NETLINK,SOCK_RAW,",
+	},
 }
 
 type checkOptions struct {
@@ -44,15 +58,14 @@ func checkTraceWithOptions(trace []byte, options checkOptions) error {
 	}
 
 	for _, pair := range fallbackPairs {
-		modernCall := syscallCall(pair.modern)
-		modernAt := strings.Index(contents, modernCall)
+		modernAt := strings.Index(contents, pair.modern)
 		if modernAt < 0 {
 			return fmt.Errorf("guest trace did not call modern %s probe", pair.modern)
 		}
-		if options.skipDup2Fallback && pair.legacy == "dup2" {
+		if options.skipDup2Fallback && pair.legacy == syscallCall("dup2") {
 			continue
 		}
-		if !strings.Contains(contents[modernAt+len(modernCall):], syscallCall(pair.legacy)) {
+		if !strings.Contains(contents[modernAt+len(pair.modern):], pair.legacy) {
 			return fmt.Errorf("guest trace did not call legacy %s fallback after %s", pair.legacy, pair.modern)
 		}
 	}

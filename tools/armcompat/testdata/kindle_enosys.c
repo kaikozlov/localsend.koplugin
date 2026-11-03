@@ -11,6 +11,7 @@
 //   eventfd2       ENOSYS when flags != 0
 //   pipe2          ENOSYS when flags != 0
 //   dup3           ENOSYS when the host has a distinct legacy dup2 syscall
+//   socket         EINVAL when the type has SOCK_NONBLOCK or SOCK_CLOEXEC
 //   recvmmsg       ENOSYS
 //   sendmmsg       ENOSYS
 //   getrandom      ENOSYS
@@ -21,6 +22,10 @@
 // epoll_create1, eventfd2, and pipe2 respectively, with flags 0. Modern guest
 // calls use nonzero CLOEXEC and NONBLOCK flags, so the filter can reject them
 // without breaking the legacy fallback.
+//
+// socket() exists on every audited kernel, but Linux before 2.6.27 (Kindle DX
+// Graphite 2.6.22, Kindle Keyboard 2.6.26) rejects type flags with EINVAL.
+// QEMU passes guest socket type flags through to the host unchanged.
 //
 // AArch64 hosts have no dup2 syscall: QEMU maps both guest dup3(..., 0) and
 // guest dup2(...) onto the identical host dup3(..., 0) call, so seccomp cannot
@@ -40,6 +45,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <sys/prctl.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 
@@ -90,6 +96,14 @@ int main(int argc, char **argv) {
 		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_dup3, 0, 1),
 		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | ENOSYS),
 #endif
+
+		/* socket: pre-2.6.27 kernels reject type flags. */
+		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_socket, 0, 4),
+		BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
+			 offsetof(struct seccomp_data, args[1])),
+		BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, SOCK_NONBLOCK | SOCK_CLOEXEC, 0, 1),
+		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ERRNO | EINVAL),
+		BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
 
 		/* Unconditional Kindle-shaped gaps that QEMU forwards 1:1. */
 		BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_recvmmsg, 0, 1),

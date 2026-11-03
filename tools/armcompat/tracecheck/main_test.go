@@ -18,6 +18,12 @@ const completeTrace = `100 epoll_create1(524288) = -1 errno=38 (Function not imp
 101 pipe(123) = 0
 102 dup3(14,0,0) = -1 errno=38 (Function not implemented)
 102 dup2(14,0) = 0
+103 socket(PF_NETLINK,SOCK_RAW|SOCK_CLOEXEC,NETLINK_ROUTE) = -1 errno=22 (Invalid argument)
+103 socket(PF_NETLINK,SOCK_RAW,NETLINK_ROUTE) = 9
+103 socket(PF_INET,SOCK_DGRAM|SOCK_CLOEXEC|SOCK_NONBLOCK,IPPROTO_IP) = -1 errno=22 (Invalid argument)
+103 socket(PF_INET,SOCK_DGRAM,IPPROTO_IP) = 8
+104 socket(PF_INET,SOCK_STREAM|SOCK_CLOEXEC|SOCK_NONBLOCK,IPPROTO_TCP) = -1 errno=22 (Invalid argument)
+104 socket(PF_INET,SOCK_STREAM,IPPROTO_TCP) = 9
 `
 
 func TestCheckTrace_AcceptsInterleavedQEMUResults(t *testing.T) {
@@ -39,6 +45,31 @@ func TestCheckTrace_RejectsMissingLegacyFallback(t *testing.T) {
 	err := checkTrace([]byte(trace))
 	if err == nil || !strings.Contains(err.Error(), "pipe") {
 		t.Fatalf("checkTrace() error = %v, want missing pipe fallback", err)
+	}
+}
+
+func TestCheckTrace_RejectsFlagOnlySocketWithoutLegacyRetry(t *testing.T) {
+	trace := strings.Replace(completeTrace, "104 socket(PF_INET,SOCK_STREAM,IPPROTO_TCP) = 9\n", "", 1)
+
+	err := checkTrace([]byte(trace))
+	if err == nil || !strings.Contains(err.Error(), "SOCK_STREAM") {
+		t.Fatalf("checkTrace() error = %v, want missing flagless TCP socket fallback", err)
+	}
+}
+
+func TestCheckTrace_RejectsLegacySocketBeforeFlaggedProbe(t *testing.T) {
+	trace := strings.Replace(
+		completeTrace,
+		"103 socket(PF_NETLINK,SOCK_RAW|SOCK_CLOEXEC,NETLINK_ROUTE) = -1 errno=22 (Invalid argument)\n"+
+			"103 socket(PF_NETLINK,SOCK_RAW,NETLINK_ROUTE) = 9\n",
+		"103 socket(PF_NETLINK,SOCK_RAW,NETLINK_ROUTE) = 9\n"+
+			"103 socket(PF_NETLINK,SOCK_RAW|SOCK_CLOEXEC,NETLINK_ROUTE) = 9\n",
+		1,
+	)
+
+	err := checkTrace([]byte(trace))
+	if err == nil || !strings.Contains(err.Error(), "PF_NETLINK") {
+		t.Fatalf("checkTrace() error = %v, want netlink fallback ordering rejection", err)
 	}
 }
 

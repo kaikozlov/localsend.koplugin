@@ -1,6 +1,6 @@
 // Command armcompat creates a Go build overlay for 32-bit ARM release
-// binaries. It restores the legacy epoll, eventfd, accept, pipe, and dup
-// syscall paths required by older Kindle kernels.
+// binaries. It restores the legacy epoll, eventfd, accept, pipe, dup, and
+// flagless socket paths required by older Kindle kernels.
 package main
 
 import (
@@ -20,11 +20,15 @@ const (
 	syscallSourcePath          = "src/syscall/syscall_linux.go"
 	forkPipeSourcePath         = "src/syscall/forkpipe2.go"
 	execLinuxSourcePath        = "src/syscall/exec_linux.go"
+	netSocketSourcePath        = "src/net/sock_cloexec.go"
+	netlinkSourcePath          = "src/syscall/netlink_linux.go"
 	patchedRuntimeSourceName   = "runtime_syscall_linux.go.overlay"
 	patchedPollSourceName      = "sock_cloexec.go.overlay"
 	patchedSyscallSourceName   = "syscall_linux.go.overlay"
 	patchedForkPipeSourceName  = "forkpipe2.go.overlay"
 	patchedExecLinuxSourceName = "exec_linux.go.overlay"
+	patchedNetSocketSourceName = "net_sock_cloexec.go.overlay"
+	patchedNetlinkSourceName   = "netlink_linux.go.overlay"
 	patchedGuardSourceName     = "arm_only_guard.go.overlay"
 	guardVirtualSourceName     = "armcompat_overlay_guard.go"
 	overlayFileName            = "overlay.json"
@@ -381,6 +385,90 @@ func patchExecLinuxSource(source []byte) ([]byte, error) {
 	return []byte(text), nil
 }
 
+const currentNetSocketImports = `import (
+	"os"
+	"syscall"
+)`
+
+const legacyNetSocketImports = `import (
+	"internal/poll"
+	"os"
+	"syscall"
+)`
+
+const currentNetSocket = `func sysSocket(family, sotype, proto int) (int, error) {
+	s, err := socketFunc(family, sotype|syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC, proto)
+	if err != nil {
+		return -1, os.NewSyscallError("socket", err)
+	}
+	return s, nil
+}`
+
+const legacyNetSocket = `func sysSocket(family, sotype, proto int) (int, error) {
+	s, err := socketFunc(family, sotype|syscall.SOCK_NONBLOCK|syscall.SOCK_CLOEXEC, proto)
+	if err == nil {
+		return s, nil
+	}
+	// Linux before 2.6.27 rejects SOCK_NONBLOCK and SOCK_CLOEXEC in the
+	// socket type with EINVAL.
+	if err != syscall.EINVAL {
+		return -1, os.NewSyscallError("socket", err)
+	}
+
+	syscall.ForkLock.RLock()
+	s, err = socketFunc(family, sotype, proto)
+	if err == nil {
+		syscall.CloseOnExec(s)
+	}
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		return -1, os.NewSyscallError("socket", err)
+	}
+	if err = syscall.SetNonblock(s, true); err != nil {
+		poll.CloseFunc(s)
+		return -1, os.NewSyscallError("setnonblock", err)
+	}
+	return s, nil
+}`
+
+func patchNetSocketSource(source []byte) ([]byte, error) {
+	text := string(source)
+	if strings.Count(text, currentNetSocketImports) != 1 {
+		return nil, errors.New("go net source does not contain exactly one expected import block")
+	}
+	if strings.Count(text, currentNetSocket) != 1 {
+		return nil, errors.New("go net source does not contain exactly one expected sysSocket implementation")
+	}
+	text = strings.Replace(text, currentNetSocketImports, legacyNetSocketImports, 1)
+	return []byte(strings.Replace(text, currentNetSocket, legacyNetSocket, 1)), nil
+}
+
+const currentNetlinkSocket = `s, err := Socket(AF_NETLINK, SOCK_RAW|SOCK_CLOEXEC, NETLINK_ROUTE)
+	if err != nil {
+		return nil, err
+	}`
+
+const legacyNetlinkSocket = `s, err := Socket(AF_NETLINK, SOCK_RAW|SOCK_CLOEXEC, NETLINK_ROUTE)
+	if err == EINVAL {
+		ForkLock.RLock()
+		s, err = Socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE)
+		if err == nil {
+			CloseOnExec(s)
+		}
+		ForkLock.RUnlock()
+	}
+	if err != nil {
+		return nil, err
+	}`
+
+func patchNetlinkSource(source []byte) ([]byte, error) {
+	text := string(source)
+	if strings.Count(text, currentNetlinkSocket) != 1 {
+		return nil, errors.New("go netlink source does not contain exactly one expected NetlinkRIB socket call")
+	}
+	return []byte(strings.Replace(text, currentNetlinkSocket, legacyNetlinkSocket, 1)), nil
+}
+
 func requiredSource(goroot, relativePath string) (string, error) {
 	path := filepath.Join(goroot, filepath.FromSlash(relativePath))
 	info, err := os.Stat(path)
@@ -426,6 +514,14 @@ func generateOverlay(goroot, outputDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	netSocketPath, err := requiredSource(goroot, netSocketSourcePath)
+	if err != nil {
+		return "", err
+	}
+	netlinkPath, err := requiredSource(goroot, netlinkSourcePath)
+	if err != nil {
+		return "", err
+	}
 
 	patchedRuntime, err := readAndPatch(runtimePath, "Go runtime", patchRuntimeSource)
 	if err != nil {
@@ -444,6 +540,14 @@ func generateOverlay(goroot, outputDir string) (string, error) {
 		return "", err
 	}
 	patchedExecLinux, err := readAndPatch(execLinuxPath, "Go exec", patchExecLinuxSource)
+	if err != nil {
+		return "", err
+	}
+	patchedNetSocket, err := readAndPatch(netSocketPath, "Go net socket", patchNetSocketSource)
+	if err != nil {
+		return "", err
+	}
+	patchedNetlink, err := readAndPatch(netlinkPath, "Go netlink", patchNetlinkSource)
 	if err != nil {
 		return "", err
 	}
@@ -467,6 +571,8 @@ func generateOverlay(goroot, outputDir string) (string, error) {
 		{syscallPath, patchedSyscallSourceName, patchedSyscall},
 		{forkPipePath, patchedForkPipeSourceName, patchedForkPipe},
 		{execLinuxPath, patchedExecLinuxSourceName, patchedExecLinux},
+		{netSocketPath, patchedNetSocketSourceName, patchedNetSocket},
+		{netlinkPath, patchedNetlinkSourceName, patchedNetlink},
 		{guardPath, patchedGuardSourceName, []byte(armOnlyGuardSource)},
 	}
 	replacements := make(map[string]string, len(patches))
