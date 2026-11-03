@@ -40,7 +40,7 @@ describe("Receiver crash recovery", function()
             table.insert(starts, { silent = silent, recovery = options and options.recovery })
         end
 
-        instance:_checkSentinelFile()
+        instance:_pollReceiver()
 
         assert.equal(1, #helper.state.scheduled_tasks)
         assert.equal(2, helper.state.scheduled_tasks[1].delay)
@@ -52,8 +52,8 @@ describe("Receiver crash recovery", function()
     it("debounces duplicate death observations into one restart", function()
         local instance = dead_intended_receiver()
 
-        instance:_checkSentinelFile()
-        instance:_checkSentinelFile()
+        instance:_pollReceiver()
+        instance:_pollReceiver()
 
         assert.equal(1, #helper.state.scheduled_tasks)
     end)
@@ -67,7 +67,7 @@ describe("Receiver crash recovery", function()
             lsserver.onServerStartFailed(self, true)
         end
 
-        instance:_checkSentinelFile()
+        instance:_pollReceiver()
         local task_index = 1
         while helper.state.scheduled_tasks[task_index] do
             helper.state.scheduled_tasks[task_index].callback()
@@ -95,7 +95,7 @@ describe("Receiver crash recovery", function()
             started = true
         end
 
-        instance:_checkSentinelFile()
+        instance:_pollReceiver()
         local stale_callback = helper.state.scheduled_tasks[1].callback
         instance.stopServer = function(_, options)
             options.callback(true)
@@ -111,7 +111,7 @@ describe("Receiver crash recovery", function()
         local instance, ServerState = dead_intended_receiver()
         ServerState.stop_in_progress = true
 
-        instance:_checkSentinelFile()
+        instance:_pollReceiver()
 
         assert.equal(0, #helper.state.scheduled_tasks)
     end)
@@ -122,7 +122,7 @@ describe("Receiver crash recovery", function()
         instance.start = function()
             started = true
         end
-        instance:_checkSentinelFile()
+        instance:_pollReceiver()
         local stale_callback = helper.state.scheduled_tasks[1].callback
 
         instance:_onSuspend()
@@ -137,7 +137,7 @@ describe("Receiver crash recovery", function()
         instance.start = function()
             started = true
         end
-        instance:_checkSentinelFile()
+        instance:_pollReceiver()
         local stale_callback = helper.state.scheduled_tasks[1].callback
 
         instance:_onNetworkDisconnecting()
@@ -152,7 +152,7 @@ describe("Receiver crash recovery", function()
         instance.start = function()
             started = true
         end
-        instance:_checkSentinelFile()
+        instance:_pollReceiver()
         local stale_callback = helper.state.scheduled_tasks[1].callback
 
         instance:onExit()

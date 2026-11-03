@@ -47,7 +47,6 @@ end
 local TMP_FILES = {
     "/tmp/localsend_koreader.pid",
     "/tmp/localsend_transfers.log",
-    "/tmp/localsend_notify",
     "/tmp/localsend_signaling.id",
     "/tmp/localsend_send.pid",
     "/tmp/localsend_send.out",
@@ -172,7 +171,6 @@ describe("deletePluginSettings", function()
             ss.was_running_before_disconnect = true
             ss.transfer_count = 5
             ss.last_log_position = 100
-            ss.last_sentinel_value = "sentinel"
             ss.server_op_id = 42
             ss.discovered_devices = { "device1" }
             ss.scan_cancelled = true
@@ -196,7 +194,6 @@ describe("deletePluginSettings", function()
             assert.is_false(ss.was_running_before_disconnect)
             assert.are.equal(0, ss.last_log_position)
             assert.are.equal(0, ss.transfer_count)
-            assert.is_nil(ss.last_sentinel_value)
             assert.is_false(ss.telemetry_cleaned)
             assert.are.same({}, ss.discovered_devices)
             assert.is_false(ss.scan_in_progress)

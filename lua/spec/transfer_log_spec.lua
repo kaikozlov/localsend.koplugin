@@ -159,19 +159,19 @@ describe("Transfer Log", function()
         end)
 
         it("returns all entries on first read", function()
+            local instance = helper.create_instance()
             write_log({
                 '{"filename":"test.epub","size":1024}',
                 '{"filename":"book.pdf","size":2048}',
             })
-            local instance = helper.create_instance()
             local transfers = instance:getNewTransfers()
             assert.equal(2, #transfers)
             assert.is_true(LocalSend._ServerState.last_log_position > 0)
         end)
 
         it("returns only new entries on subsequent reads", function()
-            write_log({ '{"filename":"test.epub","size":1024}' })
             local instance = helper.create_instance()
+            write_log({ '{"filename":"test.epub","size":1024}' })
             assert.equal(1, #instance:getNewTransfers())
             assert.equal(0, #instance:getNewTransfers())
         end)

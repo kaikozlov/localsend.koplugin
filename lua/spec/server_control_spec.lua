@@ -420,8 +420,8 @@ describe("Server Control", function()
                 return nil
             end
             instance._unschedulePolling = function() end
-            instance._checkSentinelFile = function() end
-            instance.check_sentinel_task = function() end
+            instance._pollReceiver = function() end
+            instance.poll_receiver_task = function() end
             instance.isRunning = function()
                 return false
             end

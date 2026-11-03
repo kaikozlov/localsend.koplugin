@@ -380,8 +380,6 @@ local function buildDiagnosticRecvArgs(instance)
             table.insert(args, routing_path)
         end
     end
-    table.insert(args, "--notify-file")
-    table.insert(args, constants.TRANSFER_NOTIFY_FILE)
     table.insert(args, "--busy-file")
     table.insert(args, constants.TRANSFER_BUSY_FILE)
     if instance.use_webrtc then
@@ -878,7 +876,7 @@ function M.collectAsync(instance, callback)
         -- This deliberately calls the same start method as the normal plugin.
         -- It therefore validates its settings, command construction, firewall
         -- setup, PID handling, and readiness behavior as one lifecycle.
-        instance:start(true)
+        instance:start(true, { keep_history = true })
         local function poll(attempt)
             local probe = probeLocalAPI(instance)
             local fallback = nil
@@ -942,7 +940,7 @@ function M.collectAsync(instance, callback)
                             -- Preserve the user's original desired state even
                             -- after a failed probe; start() will surface details
                             -- in the backend log included with the report.
-                            instance:start(true)
+                            instance:start(true, { keep_history = true })
                         end
                         finish(server_probe, firewall_probe)
                     end,
@@ -1881,7 +1879,7 @@ end
 local function finishDiscoveryTest(instance, restart_after)
     instance:closeFirewall()
     if restart_after then
-        instance:start(true)
+        instance:start(true, { keep_history = true })
     end
 end
 

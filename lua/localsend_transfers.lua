@@ -2,6 +2,7 @@
 -- Transfer logging and notification system for LocalSend plugin
 -- Handles reading transfer logs, checking for new transfers, and showing notifications
 
+local lfs = require("libs/libkoreader-lfs")
 local state = require("localsend_state")
 local constants = require("localsend_constants")
 local power = require("localsend_power")
@@ -47,43 +48,33 @@ function M.getTransferLog()
     return transfers
 end
 
--- Optimized log reading - only reads new entries since last check
--- This is more efficient for e-reader CPUs that poll every 5 seconds
--- Uses ServerState.last_log_position to persist across widget instances
+-- Read entries appended since ServerState.last_log_position and advance it.
+-- Only newline-terminated lines are consumed: the receiver may be mid-write.
 -- @return table Array of new transfer entries
 function M.getNewTransfers()
     local ServerState = state.ServerState
     local transfers = {}
-    if not deps.util.pathExists(constants.TRANSFER_LOG_FILE) then
-        ServerState.last_log_position = 0
-        return transfers
-    end
-
-    local open_ok, f = pcall(io.open, constants.TRANSFER_LOG_FILE, "r")
-    if not open_ok or not f then
+    local f = io.open(constants.TRANSFER_LOG_FILE, "r")
+    if not f then
         ServerState.last_log_position = 0
         return transfers
     end
 
     local success, _ = pcall(function()
-        -- Check if file was truncated (position beyond file size)
-        local file_size = f:seek("end")
-        if ServerState.last_log_position > file_size then
-            ServerState.last_log_position = 0
+        if ServerState.last_log_position > f:seek("end") then
+            ServerState.last_log_position = 0 -- Truncated or recreated
         end
-
-        -- Seek to last known position
         f:seek("set", ServerState.last_log_position)
 
-        for line in f:lines() do
+        local complete = (f:read("*a") or ""):match("^.*\n") or ""
+        for line in complete:gmatch("([^\n]*)\n") do
             local decode_ok, entry = pcall(deps.json.decode, line)
             if decode_ok and entry then
                 table.insert(transfers, entry)
             end
         end
 
-        -- Save new position and update cached count
-        ServerState.last_log_position = f:seek()
+        ServerState.last_log_position = ServerState.last_log_position + #complete
         ServerState.transfer_count = ServerState.transfer_count + #transfers
     end)
     f:close()
@@ -93,6 +84,16 @@ function M.getNewTransfers()
     end
 
     return transfers
+end
+
+-- The log lives in /tmp and outlives KOReader, but the read position does not.
+-- Entries already present when a KOReader session starts belong to an earlier
+-- session: count them as history without announcing them.
+function M.adoptExistingLog()
+    if state.ServerState.last_log_position == nil then
+        state.ServerState.last_log_position = 0
+        M.getNewTransfers()
+    end
 end
 
 -- Returns the cached transfer count (avoids file I/O on e-readers)
@@ -106,23 +107,19 @@ end
 function M.clearTransferLog()
     local ServerState = state.ServerState
     os.remove(constants.TRANSFER_LOG_FILE)
-    os.remove(constants.TRANSFER_NOTIFY_FILE) -- Also remove sentinel file
     os.remove(constants.TRANSFER_BUSY_FILE)
     power.release("receive")
-    ServerState.last_log_position = 0 -- Reset position tracking when log is cleared
-    ServerState.transfer_count = 0 -- Reset cached count
-    ServerState.last_sentinel_value = nil -- Reset sentinel tracking
+    ServerState.last_log_position = 0
+    ServerState.transfer_count = 0
 end
 
--- Internal polling method for checking new transfers
--- Shows notification when new files are received
+-- Shows a notification for entries appended to the log since the last read
 -- @param instance table LocalSend instance (for calling isRunning, getNewTransfers, _updateCache)
 function M.checkForNewTransfers(instance)
     if not instance:isRunning() then
         return
     end
 
-    -- Use optimized getNewTransfers() instead of reading the whole file
     local new_transfers = instance:getNewTransfers()
     if #new_transfers > 0 then
         -- Update cache to reflect new transfer count
@@ -143,10 +140,10 @@ function M.checkForNewTransfers(instance)
     end
 end
 
--- Fast sentinel file check - reads tiny sentinel file content
--- When content changes, triggers an immediate full log check
+-- Periodic receiver poll: reconciles an exited process, holds the receive
+-- wakelock while a file is being written, and announces logged transfers.
 -- @param instance table LocalSend instance
-function M.checkSentinelFile(instance)
+function M.pollReceiver(instance)
     local ServerState = state.ServerState
 
     if not instance:isRunning() then
@@ -173,23 +170,15 @@ function M.checkSentinelFile(instance)
         power.release("receive")
     end
 
-    -- Read sentinel file content (tiny monotonically changing value)
-    local content = deps.util.readFromFile(constants.TRANSFER_NOTIFY_FILE)
-    if content then
-        content = content:gsub("%s+", "") -- Trim whitespace
-        -- Trigger check if:
-        -- 1. First time seeing sentinel (last_sentinel_value is nil) - handles first transfer
-        -- 2. Sentinel content changed - handles subsequent transfers
-        if ServerState.last_sentinel_value == nil or content ~= ServerState.last_sentinel_value then
-            deps.logger.dbg("[LocalSend] Sentinel file changed, checking for new transfers")
-            instance:_checkForNewTransfers()
-        end
-        ServerState.last_sentinel_value = content
+    -- The log is append-only, so a size that differs from the read position
+    -- means new entries (or a truncation that getNewTransfers resets on).
+    local log_size = lfs.attributes(constants.TRANSFER_LOG_FILE, "size") or 0
+    if log_size ~= ServerState.last_log_position then
+        instance:_checkForNewTransfers()
     end
 
-    -- Schedule next sentinel check
     if instance:isRunning() then
-        deps.UIManager:scheduleIn(constants.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
+        deps.UIManager:scheduleIn(constants.RECEIVER_POLL_INTERVAL, instance.poll_receiver_task)
     end
 end
 

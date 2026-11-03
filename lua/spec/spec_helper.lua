@@ -330,9 +330,8 @@ function M.reset_localsend_state()
     s.user_stopped = false
     s.was_running_before_suspend = false
     s.was_running_before_disconnect = false
-    s.last_log_position = 0
+    s.last_log_position = nil
     s.transfer_count = 0
-    s.last_sentinel_value = nil
     s.discovered_devices = {}
     s.scan_in_progress = false
     s.scan_op_id = 0

@@ -105,7 +105,7 @@ describe("LocalSend Lifecycle", function()
     end)
 
     describe("widget recreation while server is running", function()
-        it("takes over sentinel polling from the destroyed widget", function()
+        it("takes over receiver polling from the destroyed widget", function()
             LocalSend = require("main")
             local original_isRunning = LocalSend.isRunning
             local original_schedulePolling = LocalSend._schedulePolling
@@ -588,80 +588,6 @@ describe("LocalSend Lifecycle", function()
             local found_ready_notification = helper.find_notification("LocalSend Ready")
 
             assert.is_nil(found_ready_notification, "start(true) should not show 'LocalSend Ready' notification")
-        end)
-
-        it("start(true) should not clear transfer log", function()
-            LocalSend = require("main")
-
-            local instance = helper.create_instance()
-
-            local clear_log_called = false
-            local is_running = false
-            instance.save_dir = "/mnt/us/documents"
-            instance.validateSaveDir = function()
-                return true
-            end
-            instance.clearTransferLog = function()
-                clear_log_called = true
-            end
-            instance.openFirewall = function() end
-            instance.exportExtRouting = function()
-                return nil
-            end
-            -- isRunning returns false initially, then true after os.execute
-            instance.isRunning = function()
-                return is_running
-            end
-
-            local original_execute = os.execute
-            os.execute = function()
-                is_running = true
-                return 0
-            end
-
-            -- Start with silent=true
-            instance:start(true)
-
-            os.execute = original_execute
-
-            assert.is_false(clear_log_called, "start(true) should not clear transfer log (preserve across sleep)")
-        end)
-
-        it("start(false) should clear transfer log", function()
-            LocalSend = require("main")
-
-            local instance = helper.create_instance()
-
-            local clear_log_called = false
-            local is_running = false
-            instance.save_dir = "/mnt/us/documents"
-            instance.validateSaveDir = function()
-                return true
-            end
-            instance.clearTransferLog = function()
-                clear_log_called = true
-            end
-            instance.openFirewall = function() end
-            instance.exportExtRouting = function()
-                return nil
-            end
-            -- isRunning returns false initially, then true after os.execute
-            instance.isRunning = function()
-                return is_running
-            end
-
-            local original_execute = os.execute
-            os.execute = function()
-                is_running = true
-                return 0
-            end
-
-            -- Start with silent=false (or nil)
-            instance:start()
-
-            os.execute = original_execute
-
-            assert.is_true(clear_log_called, "start() without silent should clear transfer log")
         end)
     end)
 

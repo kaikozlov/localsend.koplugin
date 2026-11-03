@@ -294,19 +294,7 @@ function M.onServerStarted(instance, silent, effective_name)
     ServerState.server_started_at = os.time()
     state.recordLifecycle("server_ready", "name=" .. tostring(effective_name) .. " port=" .. tostring(instance.port))
     M.reconcileServerState(instance)
-
-    -- Recreate task references if they were nullified by onCloseWidget
-    -- This can happen during suspend/resume cycles when the widget is closed
-    if not instance.check_sentinel_task then
-        instance.check_sentinel_task = function()
-            instance:_checkSentinelFile()
-        end
-    end
-
-    -- Start fast sentinel polling for responsive notifications
-    instance:_unschedulePolling() -- Ensure no duplicate polling
-    ServerState.last_sentinel_value = nil -- Reset to pick up current state
-    deps.UIManager:scheduleIn(constants.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
+    instance:_schedulePolling()
 
     if not silent then
         -- Build concise startup message for top notification
@@ -363,6 +351,8 @@ end
 -- Start the LocalSend server
 -- @param instance table LocalSend instance
 -- @param silent boolean If true, suppress the startup notification
+-- @param options table|nil keep_history: continue the current transfer history;
+--   recovery: crash-recovery restart (also keeps history)
 function M.start(instance, silent, options)
     local ServerState = state.ServerState
     options = options or {}
@@ -397,13 +387,10 @@ function M.start(instance, silent, options)
         deps.logger.dbg("[LocalSend] Server already running, taking over polling")
         -- Sync cache with actual state
         M.reconcileServerState(instance)
-        -- Start sentinel polling for fast notifications
-        instance:_unschedulePolling()
-        ServerState.last_sentinel_value = nil
         ServerState.server_intended_running = true
         ServerState.server_recovery_start = false
         ServerState.server_started_at = ServerState.server_started_at or os.time()
-        deps.UIManager:scheduleIn(constants.SENTINEL_POLL_INTERVAL, instance.check_sentinel_task)
+        instance:_schedulePolling()
         return
     end
 
@@ -424,8 +411,9 @@ function M.start(instance, silent, options)
         return
     end
 
-    -- Clear old transfer log and reset count (only on fresh start, not resume)
-    if not silent then
+    -- A new receiver run starts a new transfer history. Automatic restarts
+    -- (resume, reconnect, crash recovery, diagnostics) continue the current one.
+    if not (options.keep_history or options.recovery) then
         instance:clearTransferLog()
     end
 
@@ -478,8 +466,6 @@ function M.start(instance, silent, options)
     end
 
     -- Native integration markers avoid assumptions about vendor-shell date(1).
-    table.insert(args, "--notify-file")
-    table.insert(args, constants.TRANSFER_NOTIFY_FILE)
     table.insert(args, "--busy-file")
     table.insert(args, constants.TRANSFER_BUSY_FILE)
 

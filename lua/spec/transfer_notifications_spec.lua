@@ -74,26 +74,26 @@ describe("checkForNewTransfers", function()
         end)
 
         it("shows notification for single new transfer", function()
-            write_log({ '{"filename":"book.epub","size":1024}' })
             local instance = helper.create_instance()
             instance.isRunning = function()
                 return true
             end
+            write_log({ '{"filename":"book.epub","size":1024}' })
             instance:_checkForNewTransfers()
             assert.equal(1, #helper.state.notifications_shown)
             assert.truthy(helper.state.notifications_shown[1].text:match("received"))
         end)
 
         it("shows notification for multiple new transfers", function()
+            local instance = helper.create_instance()
+            instance.isRunning = function()
+                return true
+            end
             write_log({
                 '{"filename":"book1.epub","size":1024}',
                 '{"filename":"book2.pdf","size":2048}',
                 '{"filename":"book3.mobi","size":3072}',
             })
-            local instance = helper.create_instance()
-            instance.isRunning = function()
-                return true
-            end
             instance:_checkForNewTransfers()
             assert.equal(1, #helper.state.notifications_shown)
             assert.truthy(helper.state.notifications_shown[1].text:match("received"))
@@ -113,12 +113,12 @@ describe("checkForNewTransfers", function()
         end)
 
         it("updates last_log_position after checking", function()
-            write_log({ '{"filename":"book.epub","size":1024}' })
-            ServerState.last_log_position = 0
             local instance = helper.create_instance()
             instance.isRunning = function()
                 return true
             end
+            write_log({ '{"filename":"book.epub","size":1024}' })
+            ServerState.last_log_position = 0
             instance:_checkForNewTransfers()
             assert.is_true(ServerState.last_log_position > 0)
         end)
@@ -142,18 +142,82 @@ describe("checkForNewTransfers", function()
                 '{"filename":"old2.epub","size":2048}',
                 '{"filename":"new.pdf","size":3072}',
             }
-            local ServerState = require("main")._ServerState
-            write_log(lines)
-            ServerState.last_log_position = bytes_through(lines, 2)
-
             local instance = helper.create_instance()
             instance.isRunning = function()
                 return true
             end
+            local ServerState = require("main")._ServerState
+            write_log(lines)
+            ServerState.last_log_position = bytes_through(lines, 2)
             helper.reset_state()
             instance:_checkForNewTransfers()
             assert.equal(1, #helper.state.notifications_shown)
             assert.truthy(helper.state.notifications_shown[1].text:match("received"))
+        end)
+    end)
+
+    local function append_log(line)
+        local f = assert(io.open(LOG, "a"))
+        f:write(line, "\n")
+        f:close()
+    end
+
+    local function running_instance()
+        local instance = helper.create_instance()
+        instance.isRunning = function()
+            return true
+        end
+        return instance
+    end
+
+    -- The Go receiver keeps the log in /tmp, which outlives a KOReader restart;
+    -- helper.before_each() reloads every plugin module, so create_instance()
+    -- below runs init() in a fresh KOReader session.
+    describe("across a KOReader restart", function()
+        it("does not re-announce files received before the restart", function()
+            write_log({ '{"filename":"dropcaps.css","size":512}' })
+            local instance = running_instance()
+            helper.reset_state()
+
+            instance:_pollReceiver()
+
+            assert.is_nil(helper.find_notification("dropcaps%.css"))
+        end)
+
+        it("announces files received after the restart", function()
+            write_log({ '{"filename":"dropcaps.css","size":512}' })
+            local instance = running_instance()
+            instance:_pollReceiver()
+            helper.reset_state()
+
+            append_log('{"filename":"new.epub","size":1024}')
+            instance:_pollReceiver()
+
+            assert.is_truthy(helper.find_notification("^File received: new%.epub$"))
+        end)
+
+        it("keeps files received before the restart in the recent transfers count", function()
+            write_log({ '{"filename":"dropcaps.css","size":512}' })
+            local instance = running_instance()
+
+            assert.equal(1, instance:getTransferCount())
+        end)
+    end)
+
+    describe("across a silent receiver restart", function()
+        it("announces the first transfer received by the restarted receiver", function()
+            local instance = running_instance()
+            append_log('{"filename":"before.epub","size":1}')
+            instance:_pollReceiver()
+
+            instance:_onServerStarted(true, "KOReader")
+            instance:_pollReceiver()
+            helper.reset_state()
+
+            append_log('{"filename":"after.epub","size":1}')
+            instance:_pollReceiver()
+
+            assert.is_truthy(helper.find_notification("^File received: after%.epub$"))
         end)
     end)
 
@@ -166,11 +230,11 @@ describe("checkForNewTransfers", function()
         end)
 
         it("should use Notification (toast) instead of InfoMessage (modal)", function()
-            write_log({ '{"filename":"book.epub","size":1024}' })
             local instance = helper.create_instance()
             instance.isRunning = function()
                 return true
             end
+            write_log({ '{"filename":"book.epub","size":1024}' })
             helper.reset_state()
             instance:_checkForNewTransfers()
             assert.equal(1, #helper.state.notifications_shown)
@@ -180,11 +244,11 @@ describe("checkForNewTransfers", function()
         end)
 
         it("should set appropriate timeout for toast notifications", function()
-            write_log({ '{"filename":"book.epub","size":1024}' })
             local instance = helper.create_instance()
             instance.isRunning = function()
                 return true
             end
+            write_log({ '{"filename":"book.epub","size":1024}' })
             instance:_checkForNewTransfers()
             local timeout = helper.state.notifications_shown[1].timeout
             assert.is_truthy(timeout)

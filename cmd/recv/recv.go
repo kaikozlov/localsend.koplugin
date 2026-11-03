@@ -22,21 +22,20 @@ import (
 )
 
 var (
-	devname            string
-	savetodir          string
-	supportHttps       bool
-	pin                string
-	acceptExt          string
-	logFile            string
-	webrtcMode         bool
-	extRouting         string
-	onTransferCmd      string
-	transferNotifyFile string
-	transferBusyFile   string
-	configDir          string
-	requirePairing     bool
-	stunServers        []string
-	signalingIDFile    string
+	devname          string
+	savetodir        string
+	supportHttps     bool
+	pin              string
+	acceptExt        string
+	logFile          string
+	webrtcMode       bool
+	extRouting       string
+	onTransferCmd    string
+	transferBusyFile string
+	configDir        string
+	requirePairing   bool
+	stunServers      []string
+	signalingIDFile  string
 )
 
 const (
@@ -84,7 +83,6 @@ var Cmd = &cobra.Command{
 		recver.SetPIN(pin)
 		recver.SetTransferLog(logFile)
 		recver.SetOnTransferCmd(onTransferCmd)
-		recver.SetTransferNotifyFile(transferNotifyFile)
 		recver.SetTransferActivityCallbacks(activity.Begin, activity.End)
 
 		// Set extension router if configured
@@ -343,7 +341,6 @@ func init() {
 	Cmd.PersistentFlags().BoolVarP(&webrtcMode, "webrtc", "w", true, "Listen for WebRTC offers via signaling server (v3 protocol)")
 	Cmd.PersistentFlags().StringVar(&extRouting, "ext-routing", "", "Path to extension routing config (JSON). Routes files to different directories by extension.")
 	Cmd.PersistentFlags().StringVar(&onTransferCmd, "on-transfer", "", "Shell command to run after each file transfer completes (WARNING: executed with full shell privileges via 'sh -c')")
-	Cmd.PersistentFlags().StringVar(&transferNotifyFile, "notify-file", "", "Rewrite this file after each completed transfer")
 	Cmd.PersistentFlags().StringVar(&transferBusyFile, "busy-file", "", "Create this file while one or more file writes are active")
 	Cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", "Config directory for trusted devices persistence")
 	Cmd.PersistentFlags().BoolVar(&requirePairing, "require-pairing", false, "Require PAIR before accepting WebRTC transfers from unknown devices")

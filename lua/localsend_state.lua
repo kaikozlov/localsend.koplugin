@@ -12,9 +12,8 @@ M.ServerState = {
     user_stopped = false, -- True when user explicitly stopped the server
     was_running_before_suspend = false, -- True if server was running before suspend/standby
     was_running_before_disconnect = false, -- True if server was running before network disconnect
-    last_log_position = 0, -- Track transfer log read position across instances
+    last_log_position = nil, -- Transfer log bytes already read; nil until adoptExistingLog() runs this session
     transfer_count = 0, -- Cached transfer count (avoids full file read on e-readers)
-    last_sentinel_value = nil, -- Last known content of sentinel file for fast change detection
     telemetry_cleaned = false, -- True after clearTmpTelemetryFiles() has run (once per session)
 
     -- Send-related state

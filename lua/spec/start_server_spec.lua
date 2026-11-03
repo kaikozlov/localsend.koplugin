@@ -97,13 +97,11 @@ describe("start() function", function()
             assert.is_true(found_cmd)
         end)
 
-        it("should pass native transfer notification and activity markers to the receiver", function()
+        it("should pass the native activity marker to the receiver", function()
             setup_successful_start()
             make_instance():start()
             local cmd = helper.find_execute_call("localsend")
             assert.is_truthy(cmd)
-            assert.truthy(cmd:find("--notify-file", 1, true))
-            assert.truthy(cmd:find("/tmp/localsend_notify", 1, true))
             assert.truthy(cmd:find("--busy-file", 1, true))
             assert.truthy(cmd:find("/tmp/localsend_busy", 1, true))
         end)
@@ -174,15 +172,31 @@ describe("start() function", function()
             return instance
         end
 
-        it("should call clearTransferLog before starting", function()
+        local function clears_history(silent, options)
             local instance = make_instance()
             local clear_called = false
             instance.clearTransferLog = function()
                 clear_called = true
             end
             instance.openFirewall = function() end
-            instance:start()
-            assert.is_true(clear_called)
+            instance:start(silent, options)
+            return clear_called
+        end
+
+        it("should call clearTransferLog before starting", function()
+            assert.is_true(clears_history(false))
+        end)
+
+        it("should clear transfer history on a silent fresh start (autostart)", function()
+            assert.is_true(clears_history(true))
+        end)
+
+        it("should keep transfer history when restarting with keep_history", function()
+            assert.is_false(clears_history(true, { keep_history = true }))
+        end)
+
+        it("should keep transfer history on crash recovery", function()
+            assert.is_false(clears_history(true, { recovery = true }))
         end)
 
         it("should call openFirewall before starting", function()
@@ -214,7 +228,7 @@ describe("start() function", function()
             return instance
         end
 
-        it("should schedule sentinel polling for fast notifications", function()
+        it("should schedule receiver polling for fast notifications", function()
             local instance = make_instance()
             instance:start()
             local found = false

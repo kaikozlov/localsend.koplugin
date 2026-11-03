@@ -7,7 +7,6 @@ local M = {}
 -- File paths (temporary files for server lifecycle)
 M.PID_FILE = "/tmp/localsend_koreader.pid"
 M.TRANSFER_LOG_FILE = "/tmp/localsend_transfers.log"
-M.TRANSFER_NOTIFY_FILE = "/tmp/localsend_notify"
 M.TRANSFER_BUSY_FILE = "/tmp/localsend_busy" -- Exists while an inbound file is actively being written
 M.SIGNALING_ID_FILE = "/tmp/localsend_signaling.id" -- WebRTC signaling ID for self-filtering
 M.SERVER_OUTPUT_FILE = "/tmp/localsend_server.out" -- Combined stdout/stderr from receiver process
@@ -27,7 +26,7 @@ M.NETTEST_PID_FILE = "/tmp/localsend_nettest.pid"
 M.NETTEST_DURATION = 3 -- seconds the Go nettest probe listens
 
 -- Polling intervals (seconds)
-M.SENTINEL_POLL_INTERVAL = 2
+M.RECEIVER_POLL_INTERVAL = 2
 M.SERVER_RESTART_INITIAL_DELAY = 2
 M.SERVER_RESTART_MAX_DELAY = 30
 M.SERVER_RESTART_MAX_ATTEMPTS = 5

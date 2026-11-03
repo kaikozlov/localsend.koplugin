@@ -320,8 +320,8 @@ function LocalSend:init()
 
     -- Create instance-specific task references for proper unscheduling
     -- (See UIManager docs: anonymous functions cannot be unscheduled)
-    self.check_sentinel_task = function()
-        self:_checkSentinelFile()
+    self.poll_receiver_task = function()
+        self:_pollReceiver()
     end
     self.resume_start_task = function()
         self:_restartWhenReady()
@@ -335,6 +335,7 @@ function LocalSend:init()
 
     -- Clean up orphaned resources from previous crashes
     self:_cleanupOrphanedResources()
+    lstransfers.adoptExistingLog()
 
     -- Automatic server startup logic:
     -- 1. Resume after suspend (widget was destroyed) - silent restart
@@ -521,7 +522,7 @@ function LocalSend:_restartWhenReady()
 
     ServerState.was_running_before_suspend = false
     ServerState.was_running_before_disconnect = false
-    self:start(true)
+    self:start(true, { keep_history = true })
 end
 
 function LocalSend:_canRecoverServer()
@@ -725,7 +726,6 @@ function LocalSend:deletePluginSettings()
     local tmp_files = {
         constants.PID_FILE,
         constants.TRANSFER_LOG_FILE,
-        constants.TRANSFER_NOTIFY_FILE,
         constants.TRANSFER_BUSY_FILE,
         constants.SIGNALING_ID_FILE,
         constants.SEND_PID_FILE,
@@ -752,7 +752,6 @@ function LocalSend:deletePluginSettings()
         ServerState.was_running_before_disconnect = false
         ServerState.last_log_position = 0
         ServerState.transfer_count = 0
-        ServerState.last_sentinel_value = nil
         ServerState.telemetry_cleaned = false
         ServerState.discovered_devices = {}
         ServerState.scan_in_progress = false
@@ -796,19 +795,19 @@ end
 -- Unschedule helpers for proper task cleanup
 -- These use stored task references so UIManager can actually unschedule them
 function LocalSend:_unschedulePolling()
-    if self.check_sentinel_task then
-        UIManager:unschedule(self.check_sentinel_task)
+    if self.poll_receiver_task then
+        UIManager:unschedule(self.poll_receiver_task)
     end
 end
 
 function LocalSend:_schedulePolling()
-    if not self.check_sentinel_task then
-        self.check_sentinel_task = function()
-            self:_checkSentinelFile()
+    if not self.poll_receiver_task then
+        self.poll_receiver_task = function()
+            self:_pollReceiver()
         end
     end
     self:_unschedulePolling()
-    UIManager:scheduleIn(constants.SENTINEL_POLL_INTERVAL, self.check_sentinel_task)
+    UIManager:scheduleIn(constants.RECEIVER_POLL_INTERVAL, self.poll_receiver_task)
 end
 
 function LocalSend:_unscheduleResume()
@@ -867,7 +866,7 @@ function LocalSend:onCloseWidget()
 
     -- Unschedule polling task
     self:_unschedulePolling()
-    self.check_sentinel_task = nil
+    self.poll_receiver_task = nil
 
     if self.server_restart_task then
         UIManager:unschedule(self.server_restart_task)
@@ -1002,12 +1001,13 @@ function LocalSend:_checkForNewTransfers()
     lstransfers.checkForNewTransfers(self)
 end
 
-function LocalSend:_checkSentinelFile()
-    lstransfers.checkSentinelFile(self)
+function LocalSend:_pollReceiver()
+    lstransfers.pollReceiver(self)
 end
 
 -- Start the LocalSend server
--- @param silent boolean If true, suppress the startup notification (used for resume from sleep)
+-- @param silent boolean If true, suppress startup UI (autostart, resume from sleep)
+-- @param options table|nil { keep_history = bool, recovery = bool }; see lsserver.start
 function LocalSend:start(silent, options)
     -- Block server start if reinstall is required (plugin may be in broken state)
     if REINSTALL_REQUIRED then
