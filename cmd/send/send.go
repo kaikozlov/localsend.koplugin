@@ -2,14 +2,17 @@ package send
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"mime"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
@@ -35,21 +38,39 @@ var (
 	configDir         string
 	stunServers       []string
 	devName           string
+	text              string
 )
+
+// maxStdinTextBytes bounds text read from stdin, which is held in memory until sent.
+const maxStdinTextBytes = 16_000_000
 
 var Cmd = &cobra.Command{
 	Use:   "send [files]...",
-	Short: "Send files to localsend instance",
-	Long:  "Send files to localsend instance",
+	Short: "Send files or a text message to localsend instance",
+	Long:  "Send files or a text message to localsend instance",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		files = append(files, args...)
-		if len(files) == 0 {
+		var message []byte
+		if cmd.Flags().Changed("text") {
+			if len(files) > 0 {
+				return errors.New("--text cannot be combined with files")
+			}
+			if text == "-" {
+				if info, err := os.Stdin.Stat(); err == nil && info.Mode()&os.ModeCharDevice != 0 {
+					fmt.Fprintln(os.Stderr, "Reading the text from stdin, end it with Ctrl+D")
+				}
+			}
+			var err error
+			if message, err = readText(text, os.Stdin); err != nil {
+				return err
+			}
+		} else if len(files) == 0 {
 			return errors.New("file is required")
 		}
 
 		// WebRTC mode
 		if useWebRTC {
-			return sendViaWebRTC()
+			return sendViaWebRTC(message)
 		}
 
 		// HTTP mode (original)
@@ -86,6 +107,9 @@ var Cmd = &cobra.Command{
 			return fmt.Errorf("sender initialization failed: %w", err)
 		}
 
+		if message != nil {
+			sender.AddText(message)
+		}
 		// try to add every file
 		for _, file := range files {
 			finfo, err := os.Stat(file)
@@ -141,7 +165,46 @@ var Cmd = &cobra.Command{
 	},
 }
 
-func sendViaWebRTC() error {
+// readText returns the text to send: arg itself, or stdin when arg is "-".
+// A single trailing line break is dropped from stdin.
+func readText(arg string, stdin io.Reader) ([]byte, error) {
+	message := []byte(arg)
+	if arg == "-" {
+		var err error
+		message, err = io.ReadAll(io.LimitReader(stdin, maxStdinTextBytes+1))
+		if err != nil {
+			return nil, fmt.Errorf("failed to read text from stdin: %w", err)
+		}
+		if len(message) > maxStdinTextBytes {
+			return nil, fmt.Errorf("stdin is longer than %d MB; save it to a file and send the file instead", maxStdinTextBytes/1_000_000)
+		}
+		if trimmed, ok := bytes.CutSuffix(message, []byte("\n")); ok {
+			message, _ = bytes.CutSuffix(trimmed, []byte("\r"))
+		}
+	}
+	if len(message) == 0 {
+		return nil, errors.New("nothing to send: the text is empty")
+	}
+	if !utf8.Valid(message) {
+		return nil, errors.New("text is not UTF-8; save it to a file and send the file instead")
+	}
+	return message, nil
+}
+
+func textFileMeta(message []byte) transfer.FileMeta {
+	meta := models.GenTextFileMeta(message)
+	return transfer.FileMeta{
+		ID:       meta.Id,
+		FileName: meta.Filename,
+		Size:     meta.Size,
+		FileType: meta.FileMIME,
+		SHA256:   meta.Checksum,
+		Preview:  meta.Preview,
+		Content:  meta.Content,
+	}
+}
+
+func sendViaWebRTC(message []byte) error {
 	if targetID == "" {
 		return errors.New("target ID is required for WebRTC mode (use --target)")
 	}
@@ -176,6 +239,9 @@ func sendViaWebRTC() error {
 
 	// Prepare file metadata
 	var fileMetas []transfer.FileMeta
+	if message != nil {
+		fileMetas = append(fileMetas, textFileMeta(message))
+	}
 	for _, file := range files {
 		finfo, err := os.Stat(file)
 		if err != nil {
@@ -338,4 +404,5 @@ func init() {
 	Cmd.PersistentFlags().StringVar(&configDir, "config-dir", "", "Config directory for trusted devices persistence")
 	Cmd.PersistentFlags().StringSliceVar(&stunServers, "stun-servers", nil, "Custom STUN servers for WebRTC (e.g., stun:stun.example.com:3478). Defaults to Google STUN servers if not set.")
 	Cmd.PersistentFlags().StringVarP(&devName, "devname", "n", "", "Device name to display to receiver")
+	Cmd.PersistentFlags().StringVar(&text, "text", "", "Send this text as a message instead of files; - reads it from stdin")
 }

@@ -1,6 +1,8 @@
 package models
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"mime"
 	"os"
 	"path/filepath"
@@ -25,6 +27,32 @@ type FileMeta struct {
 	Preview  string        `json:"preview,omitempty"`
 	Metadata *FileMetadata `json:"metadata,omitempty"`
 	FullPath string        `json:"-"`
+	// Content is the in-memory body of a file that has no FullPath.
+	Content []byte `json:"-"`
+}
+
+// MaxMessageBytes is the largest text sent as a message: the preview of a
+// single text file, which LocalSend receivers show without downloading it.
+// Longer text is sent as a plain .txt file.
+const MaxMessageBytes = 64_000
+
+// GenTextFileMeta describes text sent in place of files, named and typed as
+// LocalSend clients name text messages.
+func GenTextFileMeta(text []byte) FileMeta {
+	id := uuid.NewString()
+	checksum := sha256.Sum256(text)
+	meta := FileMeta{
+		Id:       id,
+		Filename: id + ".txt",
+		Size:     int64(len(text)),
+		FileMIME: "text/plain",
+		Checksum: hex.EncodeToString(checksum[:]),
+		Content:  text,
+	}
+	if len(text) <= MaxMessageBytes {
+		meta.Preview = string(text)
+	}
+	return meta
 }
 
 func GenFileMeta(fpath string) (FileMeta, error) {

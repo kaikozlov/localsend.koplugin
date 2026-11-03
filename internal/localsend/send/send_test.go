@@ -1348,3 +1348,110 @@ func TestForwardSender_PreUploadRejectsOversizedResponse(t *testing.T) {
 		t.Fatal("oversized pre-upload response was accepted")
 	}
 }
+
+// startMessageReceiver serves app on loopback and returns a sender initialized
+// for it with text added.
+func startMessageReceiver(t *testing.T, app *fiber.App, text string) *ForwardSender {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+	go func() { _ = app.Listener(ln) }()
+	t.Cleanup(func() { _ = app.Shutdown() })
+
+	sender := NewForwardSender()
+	if err := sender.Init(&models.DeviceInfo{Alias: "Receiver", IP: "127.0.0.1"}, false); err != nil {
+		t.Fatal(err)
+	}
+	sender.SetRemotePort(fmt.Sprintf("%d", ln.Addr().(*net.TCPAddr).Port))
+	sender.AddText([]byte(text))
+	return sender
+}
+
+func TestForwardSender_Start_SucceedsWithoutUpload_WhenReceiverTakesMessageFromPreview(t *testing.T) {
+	app := fiber.New()
+	var previews []string
+	uploads := 0
+	app.Post(constants.PreuploadPath, func(c fiber.Ctx) error {
+		var req models.PreUploadReq
+		if err := c.Bind().Body(&req); err != nil {
+			return c.SendStatus(400)
+		}
+		for _, file := range req.Files {
+			previews = append(previews, file.Preview)
+		}
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+	app.Post(constants.UploadPath, func(c fiber.Ctx) error {
+		uploads++
+		return c.SendStatus(200)
+	})
+	sender := startMessageReceiver(t, app, "hello")
+
+	if err := sender.Start(); err != nil {
+		t.Fatalf("Start() = %v, want nil for a message the receiver took from its preview", err)
+	}
+	if len(previews) != 1 || previews[0] != "hello" {
+		t.Fatalf("prepare-upload previews = %q, want one file previewing %q", previews, "hello")
+	}
+	if uploads != 0 {
+		t.Fatalf("uploads = %d, want 0", uploads)
+	}
+}
+
+func TestForwardSender_Start_FailsWhenReceiverAcceptsNoFiles(t *testing.T) {
+	app := fiber.New()
+	app.Post(constants.PreuploadPath, func(c fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("failed to create listener: %v", err)
+	}
+	go func() { _ = app.Listener(ln) }()
+	t.Cleanup(func() { _ = app.Shutdown() })
+
+	path := filepath.Join(t.TempDir(), "book.epub")
+	if err := os.WriteFile(path, []byte("content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	sender := NewForwardSender()
+	_ = sender.Init(&models.DeviceInfo{Alias: "Receiver", IP: "127.0.0.1"}, false)
+	sender.SetRemotePort(fmt.Sprintf("%d", ln.Addr().(*net.TCPAddr).Port))
+	if err := sender.AddFile(path); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sender.Start(); !errors.Is(err, constants.ErrFinished) {
+		t.Fatalf("Start() = %v, want %v for files nobody received", err, constants.ErrFinished)
+	}
+}
+
+func TestForwardSender_Start_UploadsMessageText_WhenReceiverRequestsTheFile(t *testing.T) {
+	app := fiber.New()
+	var uploaded []byte
+	app.Post(constants.PreuploadPath, func(c fiber.Ctx) error {
+		var req models.PreUploadReq
+		if err := c.Bind().Body(&req); err != nil {
+			return c.SendStatus(400)
+		}
+		tokens := make(models.FileTokens)
+		for id := range req.Files {
+			tokens[id] = "token-" + id
+		}
+		return c.JSON(models.PreUploadResp{SessionId: "session", Tokens: tokens})
+	})
+	app.Post(constants.UploadPath, func(c fiber.Ctx) error {
+		uploaded = append([]byte(nil), c.Body()...)
+		return c.SendStatus(200)
+	})
+	sender := startMessageReceiver(t, app, "saved as a file")
+
+	if err := sender.Start(); err != nil {
+		t.Fatalf("Start() = %v", err)
+	}
+	if string(uploaded) != "saved as a file" {
+		t.Fatalf("uploaded body = %q, want the message text", uploaded)
+	}
+}

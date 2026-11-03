@@ -3,6 +3,8 @@ use localsend::http::server::v2::{PrepareUploadDecisionV2, ServerEventV2};
 use localsend::http::server::web::WebConfig;
 use localsend::http::server::{start_with_port, ServerConfigV2};
 use localsend::http::state::ClientInfo;
+use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
@@ -78,6 +80,56 @@ async fn go_sender_uploads_file_to_official_rust_server() {
         }
     });
 
+    let stop_tx = start_official_server(event_tx).await;
+    run_go_sender(&[source.as_os_str()]).await;
+
+    let uploaded_path = tokio::time::timeout(Duration::from_secs(5), uploaded_rx)
+        .await
+        .expect("timed out waiting for upload")
+        .expect("upload completion channel closed");
+    assert_eq!(tokio::fs::read(uploaded_path).await.unwrap(), expected);
+    let _ = stop_tx.send(());
+}
+
+// Mirrors the official CLI's message handling at OFFICIAL_LOCALSEND_REF
+// (cli/src/app/receive.rs): a single text file carrying a preview is the
+// message, so the receiver accepts no file and the server answers 204.
+#[tokio::test]
+async fn go_sender_delivers_text_message_to_official_rust_server() {
+    let (event_tx, mut event_rx) = mpsc::channel::<ServerEventV2>(16);
+    let (preview_tx, preview_rx) = oneshot::channel::<Option<String>>();
+    let mut preview_tx = Some(preview_tx);
+
+    tokio::spawn(async move {
+        while let Some(event) = event_rx.recv().await {
+            if let ServerEventV2::PrepareUpload {
+                files, decision_tx, ..
+            } = event
+            {
+                let preview = match files.len() {
+                    1 => files.values().next().and_then(|file| file.preview.clone()),
+                    _ => None,
+                };
+                let _ = decision_tx.send(PrepareUploadDecisionV2::Accept(HashSet::new()));
+                if let Some(done) = preview_tx.take() {
+                    let _ = done.send(preview);
+                }
+            }
+        }
+    });
+
+    let stop_tx = start_official_server(event_tx).await;
+    run_go_sender(&["--text".as_ref(), "hello from Go".as_ref()]).await;
+
+    let preview = tokio::time::timeout(Duration::from_secs(5), preview_rx)
+        .await
+        .expect("timed out waiting for prepare-upload")
+        .expect("prepare-upload channel closed");
+    assert_eq!(preview.as_deref(), Some("hello from Go"));
+    let _ = stop_tx.send(());
+}
+
+async fn start_official_server(event_tx: mpsc::Sender<ServerEventV2>) -> oneshot::Sender<()> {
     let (stop_tx, stop_rx) = oneshot::channel::<()>();
     start_with_port(
         PORT,
@@ -101,7 +153,10 @@ async fn go_sender_uploads_file_to_official_rust_server() {
     .await
     .unwrap();
     wait_until_reachable().await;
+    stop_tx
+}
 
+async fn run_go_sender(args: &[&OsStr]) {
     let binary = std::env::var("LOCALSEND_BIN").expect("LOCALSEND_BIN must point to Go binary");
     let output = Command::new(binary)
         .arg("send")
@@ -110,7 +165,7 @@ async fn go_sender_uploads_file_to_official_rust_server() {
         .arg("--https=false")
         .arg("--devname")
         .arg("GoInteropSender")
-        .arg(&source)
+        .args(args)
         .output()
         .await
         .unwrap();
@@ -120,11 +175,4 @@ async fn go_sender_uploads_file_to_official_rust_server() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-
-    let uploaded_path = tokio::time::timeout(Duration::from_secs(5), uploaded_rx)
-        .await
-        .expect("timed out waiting for upload")
-        .expect("upload completion channel closed");
-    assert_eq!(tokio::fs::read(uploaded_path).await.unwrap(), expected);
-    let _ = stop_tx.send(());
 }

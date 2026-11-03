@@ -33,7 +33,9 @@ work after the 1.18.2 release; the app still declares version `1.18.2+64`.
   reuse, invalid session/file behavior, PIN authentication, and PIN rate
   limiting.
 - Go forward sender -> official Rust V2 server: a real file upload with
-  byte-for-byte verification by the official server.
+  byte-for-byte verification by the official server, and a `--text` message
+  that the server takes from the preview and answers with 204, as the official
+  CLI does.
 
 The official desktop-only `/show` tests, official web UI asset tests, and
 server-decision modes that this headless implementation does not expose are not

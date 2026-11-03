@@ -14,6 +14,7 @@ type FileSender interface {
 	AddFile(filePath string) error
 	AddDir(dirPath string) error
 	AddDirWithStructure(dirPath string) error
+	AddText(text []byte)
 	Start() error
 	Cancel() error
 }
@@ -46,6 +47,16 @@ func (fsp *baseSender) AddFile(filePath string) error {
 
 	fsp.files[fileMeta.Id] = fileMeta
 	return nil
+}
+
+// AddText adds text sent as a message, or as a .txt file when it is longer
+// than models.MaxMessageBytes.
+func (fsp *baseSender) AddText(text []byte) {
+	if fsp.files == nil {
+		fsp.files = make(map[string]models.FileMeta)
+	}
+	fileMeta := models.GenTextFileMeta(text)
+	fsp.files[fileMeta.Id] = fileMeta
 }
 
 func (fsp *baseSender) AddDir(dirPath string) error {

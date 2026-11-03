@@ -30,6 +30,18 @@ func (fm FileMetas) IsFolderTransfer() bool {
 	return false
 }
 
+// IsMessage reports whether the files are a text message: a single file whose
+// content travels in its preview, so the receiver may request no upload.
+func (fm FileMetas) IsMessage() bool {
+	if len(fm) != 1 {
+		return false
+	}
+	for _, meta := range fm {
+		return meta.Preview != ""
+	}
+	return false
+}
+
 type PreUploadResp struct {
 	SessionId string     `json:"sessionId"`
 	Tokens    FileTokens `json:"files"`

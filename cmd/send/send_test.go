@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -66,5 +67,42 @@ func TestMakeFileMetaWithBase_IncludesChecksumAndAccessedTimestamp(t *testing.T)
 	}
 	if !meta.Accessed.Equal(accessed) {
 		t.Fatalf("accessed = %s; want %s", meta.Accessed.Format(time.RFC3339Nano), accessed.Format(time.RFC3339Nano))
+	}
+}
+
+func TestReadText_DropsOneTrailingLineBreakFromStdin(t *testing.T) {
+	got, err := readText("-", strings.NewReader("first\r\n\r\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "first\r\n" {
+		t.Fatalf("readText = %q, want %q", got, "first\r\n")
+	}
+}
+
+func TestReadText_KeepsTrailingLineBreakInArgument(t *testing.T) {
+	got, err := readText("line\n", strings.NewReader(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "line\n" {
+		t.Fatalf("readText = %q, want the argument unchanged", got)
+	}
+}
+
+func TestReadText_RejectsStdinOverLimit(t *testing.T) {
+	if _, err := readText("-", strings.NewReader(strings.Repeat("a", maxStdinTextBytes+1))); err == nil {
+		t.Fatal("readText accepted stdin over the limit")
+	}
+	if _, err := readText("-", strings.NewReader(strings.Repeat("a", maxStdinTextBytes))); err != nil {
+		t.Fatalf("readText at the limit = %v, want accepted", err)
+	}
+}
+
+func TestReadText_RejectsEmptyAndNonUTF8Text(t *testing.T) {
+	for name, stdin := range map[string]string{"empty": "\n", "not UTF-8": "\xff\xfe"} {
+		if _, err := readText("-", strings.NewReader(stdin)); err == nil {
+			t.Fatalf("readText accepted %s text", name)
+		}
 	}
 }

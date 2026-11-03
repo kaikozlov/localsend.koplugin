@@ -70,8 +70,11 @@ type FileMeta struct {
 	Size     int64
 	FileType string
 	SHA256   string
+	Preview  string
 	Modified time.Time
 	Accessed time.Time
+	// Content is the in-memory body of a file that has no FilePath.
+	Content []byte
 }
 
 // RTCSender handles the LocalSend Web-compatible WebRTC transfer protocol.
@@ -621,6 +624,7 @@ func (s *RTCSender) fileDTOs() []RTCFileDto {
 			Size:     f.Size,
 			FileType: f.FileType,
 			SHA256:   f.SHA256,
+			Preview:  f.Preview,
 			Metadata: metadata,
 		}
 	}
@@ -884,51 +888,37 @@ func (s *RTCSender) SendFiles() error {
 
 		slog.Info("Sending file", "id", id, "name", file.FileName)
 
-		// Open file
-		f, err := os.Open(file.FilePath)
-		if err != nil {
-			return fmt.Errorf("failed to open file %s: %w", file.FilePath, err)
+		var f *os.File
+		if file.Content == nil {
+			var err error
+			f, err = os.Open(file.FilePath)
+			if err != nil {
+				return fmt.Errorf("failed to open file %s: %w", file.FilePath, err)
+			}
 		}
 
 		// Send file header
 		if !headerAlreadySent {
 			header := RTCSendFileHeader{ID: id, Token: token}
 			if err := ops.SendJSON(header); err != nil {
-				_ = f.Close()
+				if f != nil {
+					_ = f.Close()
+				}
 				return fmt.Errorf("failed to send file header: %w", err)
 			}
 		}
 		headerAlreadySent = false
 
-		// Send file data. Physical reads are large, but every data-channel frame
-		// remains at most ChunkSize for LocalSend Web compatibility.
-		for {
-			n, readErr := f.Read(buf)
-			if n > 0 {
-				for start := 0; start < n; start += ChunkSize {
-					end := start + ChunkSize
-					if end > n {
-						end = n
-					}
-					if err := ops.WaitBufferBelowWithTimeout(maxBufferedAmount, bufferBackpressureTimeout); err != nil {
-						_ = f.Close()
-						return fmt.Errorf("timed out waiting for WebRTC send buffer: %w", err)
-					}
-					if err := ops.Send(buf[start:end]); err != nil {
-						_ = f.Close()
-						return fmt.Errorf("failed to send data: %w", err)
-					}
-				}
-			}
-			if readErr == io.EOF {
-				break
-			}
-			if readErr != nil {
-				_ = f.Close()
-				return fmt.Errorf("failed to read file: %w", readErr)
-			}
+		var err error
+		if f != nil {
+			err = sendFileFrames(ops, f, buf)
+			_ = f.Close()
+		} else {
+			err = sendFrames(ops, file.Content)
 		}
-		_ = f.Close()
+		if err != nil {
+			return err
+		}
 
 		if index+1 < len(queue) {
 			next := queue[index+1]
@@ -975,6 +965,39 @@ func (s *RTCSender) SendFiles() error {
 	}
 
 	s.state = senderStateDone
+	return nil
+}
+
+// sendFileFrames streams f through buf. Physical reads are large, but every
+// data-channel frame remains at most ChunkSize for LocalSend Web compatibility.
+func sendFileFrames(ops sendOps, f *os.File, buf []byte) error {
+	for {
+		n, readErr := f.Read(buf)
+		if n > 0 {
+			if err := sendFrames(ops, buf[:n]); err != nil {
+				return err
+			}
+		}
+		if readErr == io.EOF {
+			return nil
+		}
+		if readErr != nil {
+			return fmt.Errorf("failed to read file: %w", readErr)
+		}
+	}
+}
+
+// sendFrames sends data as frames of at most ChunkSize bytes.
+func sendFrames(ops sendOps, data []byte) error {
+	for start := 0; start < len(data); start += ChunkSize {
+		end := min(start+ChunkSize, len(data))
+		if err := ops.WaitBufferBelowWithTimeout(maxBufferedAmount, bufferBackpressureTimeout); err != nil {
+			return fmt.Errorf("timed out waiting for WebRTC send buffer: %w", err)
+		}
+		if err := ops.Send(data[start:end]); err != nil {
+			return fmt.Errorf("failed to send data: %w", err)
+		}
+	}
 	return nil
 }
 

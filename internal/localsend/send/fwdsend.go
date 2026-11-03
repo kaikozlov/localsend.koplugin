@@ -335,24 +335,27 @@ func (fsp *ForwardSender) sendFile(fid string, ftoken string) error {
 	req.URI().QueryArgs().Add("token", ftoken)
 	req.URI().QueryArgs().Add("sessionId", fsp.session)
 	req.URI().QueryArgs().Add("fileId", fid)
-	// open file
-	fd, err := os.Open(fmeta.FullPath)
-	if err != nil {
-		return fmt.Errorf("failed to open file %s: %w", fmeta.Filename, err)
-	}
-	defer func() { _ = fd.Close() }()
+	if fmeta.Content != nil {
+		req.SetBodyRaw(fmeta.Content)
+	} else {
+		fd, err := os.Open(fmeta.FullPath)
+		if err != nil {
+			return fmt.Errorf("failed to open file %s: %w", fmeta.Filename, err)
+		}
+		defer func() { _ = fd.Close() }()
 
-	// Guard against integer overflow on 32-bit systems where int is 32-bit.
-	// On 64-bit systems, math.MaxInt is large enough that this check passes.
-	// On 32-bit systems, files larger than ~2.15GB would overflow.
-	if fmeta.Size > math.MaxInt {
-		return fmt.Errorf("file too large for transfer on this system: %s (%d bytes exceeds %d limit)", fmeta.Filename, fmeta.Size, math.MaxInt)
+		// Guard against integer overflow on 32-bit systems where int is 32-bit.
+		// On 64-bit systems, math.MaxInt is large enough that this check passes.
+		// On 32-bit systems, files larger than ~2.15GB would overflow.
+		if fmeta.Size > math.MaxInt {
+			return fmt.Errorf("file too large for transfer on this system: %s (%d bytes exceeds %d limit)", fmeta.Filename, fmeta.Size, math.MaxInt)
+		}
+		req.SetBodyStream(fd, int(fmeta.Size))
 	}
 
 	// send file. No total deadline: a slow receiver or large transfer may
 	// legitimately exceed 30s. Control requests remain bounded; the body
 	// stream itself is governed by the OS connection.
-	req.SetBodyStream(fd, int(fmeta.Size))
 	if err := fsp.uploadClient.Do(req, response); err != nil {
 		return fmt.Errorf("failed to upload file: %w", err)
 	}
@@ -373,6 +376,10 @@ func (fsp *ForwardSender) sendFileWithRetry(fid string, ftoken string) error {
 
 func (fsp *ForwardSender) Start() error {
 	err := fsp.preUploadReq()
+	if errors.Is(err, constants.ErrFinished) && fsp.files.IsMessage() {
+		slog.Info("Message delivered")
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("pre-upload failed: %w", err)
 	}

@@ -1,6 +1,7 @@
 package models
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -380,5 +381,20 @@ func TestFileMetadata_OmitsEmptyFields(t *testing.T) {
 
 	if _, ok := result["accessed"]; ok {
 		t.Error("accessed should be omitted when empty")
+	}
+}
+
+func TestGenTextFileMeta_PreviewsTextUpToMaxMessageBytes(t *testing.T) {
+	atLimit := GenTextFileMeta(bytes.Repeat([]byte("a"), MaxMessageBytes))
+	if len(atLimit.Preview) != MaxMessageBytes {
+		t.Fatalf("preview length at the limit = %d, want %d", len(atLimit.Preview), MaxMessageBytes)
+	}
+
+	overLimit := GenTextFileMeta(bytes.Repeat([]byte("a"), MaxMessageBytes+1))
+	if overLimit.Preview != "" {
+		t.Fatalf("preview over the limit has %d bytes, want none so the text is sent as a file", len(overLimit.Preview))
+	}
+	if overLimit.Filename != overLimit.Id+".txt" || overLimit.FileMIME != "text/plain" {
+		t.Fatalf("long text = %q (%s), want <id>.txt as text/plain", overLimit.Filename, overLimit.FileMIME)
 	}
 }

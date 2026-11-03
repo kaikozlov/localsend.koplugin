@@ -156,7 +156,18 @@ total. A connection over a limit is closed without an HTTP response.
 
 # Send with custom device name
 ./localsend send --ip 192.168.1.50 -n "My Computer" myfile.epub
+
+# Send a text message, or read it from stdin with -
+./localsend send --ip 192.168.1.50 --text "https://localsend.org"
+echo "Hello" | ./localsend send --ip 192.168.1.50 --text -
 ```
+
+`--text` works with every send mode and cannot be combined with files. Text up
+to 64 KB travels as the preview of a single `<id>.txt` file, which LocalSend
+receivers show as a message without downloading anything; a receiver that asks
+for the file gets the text uploaded as `<id>.txt`. Longer text is sent only as
+that file. Stdin is limited to 16 MB of UTF-8 text, and a single trailing line
+break is dropped from it.
 
 ## CLI Flags
 
@@ -185,6 +196,7 @@ total. A connection over a limit is closed without an HTTP response.
 | ---- | ----------- |
 | `--ip` | Target device IP address |
 | `-f, --file` | File or directory to send |
+| `--text` | Send this text as a message instead of files; `-` reads it from stdin |
 | `-p, --pin` | PIN code for authentication |
 | `-n, --devname` | Device name shown to receiver |
 | `--https` | Use HTTPS (default: true) |

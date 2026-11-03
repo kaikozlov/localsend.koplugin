@@ -141,7 +141,13 @@ func (rs *ReverseSender) downloadHandler(c fiber.Ctx) error {
 	})
 	c.Set(fiber.HeaderContentDisposition, disposition)
 
-	err := c.SendFile(fileMeta.FullPath)
+	var err error
+	if fileMeta.Content != nil {
+		c.Set(fiber.HeaderContentType, fileMeta.FileMIME)
+		err = c.Send(fileMeta.Content)
+	} else {
+		err = c.SendFile(fileMeta.FullPath)
+	}
 	if err != nil {
 		slog.Info("Fail to send file", "file", fileMeta.Filename)
 		return c.SendStatus(500)
