@@ -297,30 +297,37 @@ func NewWebServer(withTemplateEngine ...bool) *fiber.App {
 
 // ListenWithTLS starts the Fiber server with optional TLS support.
 func ListenWithTLS(server *fiber.App, addr string, cert tls.Certificate, useHTTPS bool) error {
-	config := fiber.ListenConfig{
-		DisableStartupMessage: true,
-		ListenerNetwork:       "tcp",
-	}
+	var tlsConfig *tls.Config
 	if useHTTPS {
-		config.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		tlsConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 	}
-	return server.Listen(addr, config)
+	return serveLimited(server, addr, tlsConfig)
 }
 
 // ListenWithMutualTLS serves a non-web LocalSend endpoint. Unlike ListenWithTLS,
 // which is also used by the browser-facing reverse sender, HTTPS here requires
 // every peer to present a valid self-signed LocalSend certificate.
 func ListenWithMutualTLS(server *fiber.App, addr string, cert tls.Certificate, useHTTPS bool) error {
-	config := fiber.ListenConfig{
-		DisableStartupMessage: true,
-		ListenerNetwork:       "tcp",
-	}
+	var tlsConfig *tls.Config
 	if useHTTPS {
-		config.TLSConfig = &tls.Config{
+		tlsConfig = &tls.Config{
 			Certificates:          []tls.Certificate{cert},
 			ClientAuth:            tls.RequireAnyClientCert,
 			VerifyPeerCertificate: VerifyClientCertificate(),
 		}
 	}
-	return server.Listen(addr, config)
+	return serveLimited(server, addr, tlsConfig)
+}
+
+// serveLimited applies the connection limits below TLS, so refused peers cost
+// no handshake.
+func serveLimited(server *fiber.App, addr string, tlsConfig *tls.Config) error {
+	ln, err := listenLimited(addr)
+	if err != nil {
+		return fmt.Errorf("failed to listen: %w", err)
+	}
+	if tlsConfig != nil {
+		ln = tls.NewListener(ln, tlsConfig)
+	}
+	return server.Listener(ln, fiber.ListenConfig{DisableStartupMessage: true})
 }

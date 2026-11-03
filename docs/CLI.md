@@ -135,6 +135,10 @@ The CLI has two deliberately different LocalSend interoperability paths:
 The WebRTC path remains experimental in the native LocalSend app, but it is
 required to send to or receive from the separately shipped LocalSend Web client.
 
+Like native LocalSend, `recv` and `send --dapi` serve at most 64 connections at
+once and at most 8 from one peer address; loopback peers count only towards the
+total. A connection over a limit is closed without an HTTP response.
+
 ## Sending Files
 
 ```bash
