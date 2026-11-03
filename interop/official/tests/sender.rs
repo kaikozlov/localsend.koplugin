@@ -1,5 +1,6 @@
 use localsend::http::server::common::save::FileUploadTarget;
 use localsend::http::server::v2::{PrepareUploadDecisionV2, ServerEventV2};
+use localsend::http::server::web::WebConfig;
 use localsend::http::server::{start_with_port, ServerConfigV2};
 use localsend::http::state::ClientInfo;
 use std::time::Duration;
@@ -94,7 +95,7 @@ async fn go_sender_uploads_file_to_official_rust_server() {
             verify_checksums: true,
             event_tx,
         }),
-        None,
+        WebConfig::default(),
         stop_rx,
     )
     .await

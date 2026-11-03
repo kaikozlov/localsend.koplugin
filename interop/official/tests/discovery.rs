@@ -4,6 +4,7 @@ use common::start_receiver;
 use localsend::crypto::cert;
 use localsend::discovery::{self, DeviceIdentity, DiscoveryConfig};
 use localsend::http::server::v2::ServerEventV2;
+use localsend::http::server::web::WebConfig;
 use localsend::http::server::{start_with_port, ServerConfigV2};
 use localsend::http::state::ClientInfo;
 use localsend::model::discovery::{DeviceType, ProtocolType, PROTOCOL_VERSION_V2};
@@ -88,7 +89,7 @@ async fn go_and_official_rust_discover_each_other_over_multicast() {
             verify_checksums: true,
             event_tx: server_event_tx,
         }),
-        None,
+        WebConfig::default(),
         server_stop_rx,
     )
     .await

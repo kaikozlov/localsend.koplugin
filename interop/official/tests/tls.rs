@@ -5,6 +5,7 @@ use localsend::crypto::cert;
 use localsend::http::client::LsHttpClientV2;
 use localsend::http::server::common::save::FileUploadTarget;
 use localsend::http::server::v2::{PrepareUploadDecisionV2, ServerEventV2};
+use localsend::http::server::web::WebConfig;
 use localsend::http::server::{start_with_port, ServerConfigV2, TlsConfig};
 use localsend::http::state::ClientInfo;
 use localsend::model::discovery::ProtocolType;
@@ -103,7 +104,7 @@ async fn go_sender_uploads_over_mtls_to_official_tls_server() {
             verify_checksums: true,
             event_tx,
         }),
-        None,
+        WebConfig::default(),
         stop_rx,
     )
     .await

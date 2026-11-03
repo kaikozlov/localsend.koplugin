@@ -3,7 +3,7 @@
 These are black-box contract tests between this repository's Go executable and
 LocalSend's official Rust core. They adapt the externally observable assertions
 from the official `packages/core/tests/v2_server.rs` and
-`v2_web_send.rs` suites; they do not copy or reimplement the official client or
+`v2_web_download.rs` suites; they do not copy or reimplement the official client or
 server.
 
 Run them with Docker only:
@@ -19,8 +19,9 @@ directory, so the suite is self-contained and does not depend on anything under
 specific local checkout, or set `OFFICIAL_LOCALSEND_REF` while testing an
 upstream revision.
 
-The default native authority is LocalSend 1.18.2 at
-`af0416be50770a97760f7070684bc667b759a15c`.
+The default native authority is LocalSend `main` at
+`92e133aa43869e94d394fd04fa70c50a0f796a64` (2026-10-30), which is unreleased
+work after the 1.18.2 release; the app still declares version `1.18.2+64`.
 
 ## Coverage
 

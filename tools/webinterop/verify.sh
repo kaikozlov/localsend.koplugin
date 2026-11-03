@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-expected_ref="${OFFICIAL_LOCALSEND_WEB_REF:-ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8}"
+expected_ref="${OFFICIAL_LOCALSEND_WEB_REF:-8fd3e7f6522f2ddc7c4cb0d237bb995ed95313c0}"
 tmp_root=""
 
 cleanup() {
@@ -32,6 +32,7 @@ fi
 
 webrtc="$web_root/app/services/webrtc.ts"
 signaling="$web_root/app/services/signaling.ts"
+data_channel="$web_root/app/utils/dataChannel.ts"
 
 require_literal() {
   local file="$1"
@@ -45,7 +46,7 @@ require_literal() {
 require_literal "$webrtc" 'export const protocolVersion = "2.3";'
 require_literal "$webrtc" 'export const defaultStun = ["stun:stun.l.google.com:19302"];'
 require_literal "$webrtc" 'const CHUNK_SIZE = 16 * 1024; // 16 KiB'
-require_literal "$webrtc" 'const MAX_BUFFERED_AMOUNT = 1024 * 1024; // 1 MiB'
+require_literal "$data_channel" 'export const MAX_BUFFERED_AMOUNT = 1024 * 1024; // 1 MiB'
 require_literal "$webrtc" 'status: "PAIR_DECLINED"'
 require_literal "$webrtc" 'const fileStatus = await dataChannelStream.readNext();'
 require_literal "$signaling" '}, 120 * 1000);'

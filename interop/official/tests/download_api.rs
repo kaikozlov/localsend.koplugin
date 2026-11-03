@@ -10,7 +10,7 @@ async fn create_source_file(directory: &tempfile::TempDir) -> (std::path::PathBu
     (path, bytes)
 }
 
-// Ported from LocalSend packages/core/tests/v2_web_send.rs at OFFICIAL_LOCALSEND_REF.
+// Ported from LocalSend packages/core/tests/v2_web_download.rs at OFFICIAL_LOCALSEND_REF.
 #[tokio::test]
 async fn official_client_downloads_from_go_reverse_sender() {
     let directory = tempfile::tempdir().unwrap();

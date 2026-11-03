@@ -51,10 +51,10 @@ protocol.
 
 | Layer | Pin | What it establishes | Status |
 |---|---|---|---|
-| Official LocalSend 1.18.2 implementation | [`af0416be50770a97760f7070684bc667b759a15c`](https://github.com/localsend/localsend/tree/af0416be50770a97760f7070684bc667b759a15c) | Shipping app version constant, enabled routes, Rust DTOs, signaling server, recovery behavior, and dormant WebRTC code | **Protocol 2.2 ships; WebRTC is disabled** |
+| Official LocalSend implementation (`main` after the 1.18.2 release; app version `1.18.2+64`) | [`92e133aa43869e94d394fd04fa70c50a0f796a64`](https://github.com/localsend/localsend/tree/92e133aa43869e94d394fd04fa70c50a0f796a64) | App version constant, enabled routes, Rust DTOs, signaling server, recovery behavior, connection limits, and dormant WebRTC code | **Protocol 2.2 ships; WebRTC is disabled** |
 | Official protocol repository | [`62bd3406ec80d62f2ed46269cdc06c4dcc391083`](https://github.com/localsend/protocol/tree/62bd3406ec80d62f2ed46269cdc06c4dcc391083) | Normative prose for protocol v2.2 | **Current stable protocol text** |
 | Official v3 Mermaid addition | [`bf371abbc24e90fefa42f43e1fd02f007f11611e`](https://github.com/localsend/protocol/commit/bf371abbc24e90fefa42f43e1fd02f007f11611e) | Design diagrams using version `3.0` | **Draft; conflicts with implementation** |
-| Separate LocalSend web repository | [`ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8`](https://github.com/localsend/web/tree/ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8) | Nuxt/TypeScript WebRTC client | **Separate from native 1.18.2; normative WebRTC compatibility target for this plugin** |
+| Separate LocalSend web repository | [`8fd3e7f6522f2ddc7c4cb0d237bb995ed95313c0`](https://github.com/localsend/web/tree/8fd3e7f6522f2ddc7c4cb0d237bb995ed95313c0) | Nuxt/TypeScript WebRTC client | **Separate from native 1.18.2; normative WebRTC compatibility target for this plugin** |
 
 At the official implementation pin, the Flutter app declares:
 
@@ -67,7 +67,7 @@ protocol v2.2 over HTTP(S), with multicast/HTTP discovery. The Rust core and the
 signaling server contain experimental v3/WebRTC building blocks, but they are
 not an enabled, complete official-app transfer path.
 
-The LocalSend 1.18.2 monorepo at `af0416b` contains the Flutter app, Rust core, Rust signaling
+The LocalSend monorepo at `92e133a` contains the Flutter app, Rust core, Rust signaling
 server, CLI, and static browser upload/download assets. It does **not** contain a
 current `packages/web` Nuxt WebRTC client. The separate web repository is pinned
 independently in [§8](#8-separately-pinned-historical-web-implementation). It is
@@ -83,10 +83,10 @@ There is no single implemented “v3 version string.”
 
 | Context | Value | Meaning |
 |---|---|---|
-| Shipping app and Rust v2 constant at LocalSend 1.18.2 (`af0416b`) | `2.2` | Implemented LocalSend protocol version |
+| Shipping app and Rust v2 constant at `92e133a` (app `1.18.2+64`) | `2.2` | Implemented LocalSend protocol version |
 | Disabled app signaling path | `2.2` | It passes the same shipping `protocolVersion` into signaling identity |
 | Rust signaling unit-test fixtures | `2.3` | Test data; the DTO accepts any string |
-| Historical web repository at `ea5d55d` | `2.3` | That separate implementation's constant |
+| Web repository at `8fd3e7f` | `2.3` | That separate implementation's constant |
 | Official v3 HTTP Mermaid draft at `bf371ab` | `3.0` | Draft diagram examples |
 
 The signaling and v3 HTTP DTO fields are plain strings and do not enforce a
@@ -131,6 +131,14 @@ its listener has failed permanently, it emits `ServerEventV2::ListenerFailed`
 and the application recreates the server. Resource-exhaustion accept errors are
 backed off and retried, while repeated per-connection errors are bounded so a
 dead listener cannot masquerade as a healthy server indefinitely.
+
+The native HTTP server limits the connections it serves at once: 64 in total and
+8 per peer address, with IPv4-mapped IPv6 addresses counted as their IPv4 peer
+and loopback peers counted only towards the total. A connection over either
+limit is closed immediately, without an HTTP response. Accepted connections use
+TCP keepalive (60 s idle, 10 s interval) so vanished peers release their slots,
+and the server speaks HTTP/1.1 only so one connection carries one request at a
+time.
 
 A link-local peer such as `fe80::1%3` is unusable if its interface scope is
 lost. The Rust HTTP client maps scoped IPv6 addresses to an internal synthetic
@@ -426,7 +434,7 @@ or to the unimplemented Mermaid design in §7.
 
 ## 6. Dormant Rust signaling and WebRTC wire behavior
 
-Everything in this section describes code present in LocalSend 1.18.2 at `af0416b`, not an enabled
+Everything in this section describes code present in LocalSend at `92e133a`, not an enabled
 shipping feature.
 
 ### 6.1 Signaling service and peer visibility
@@ -446,6 +454,11 @@ derived from the source address:
 
 It does not provide arbitrary global peer discovery, and it relays SDP rather
 than file bytes.
+
+The server disconnects a client that sends nothing for 300 seconds; clients
+keep the connection alive with a message every 120 seconds. Each peer has a
+32-message outgoing buffer, and messages to a peer whose buffer is full are
+dropped rather than blocking the sender.
 
 ### 6.2 Signaling URL, identity, and messages
 
@@ -622,7 +635,7 @@ Pinned Rust values:
 | Layer | Value |
 |---|---:|
 | File-backed source read buffer | 512 KiB |
-| File-backed source channel capacity | 16 chunks |
+| File-backed source channel capacity | 4 chunks (2 MiB read-ahead) |
 | WebRTC output chunk size | 16 KiB |
 | Data-channel receive queue capacity | 16 messages |
 | Back-pressure polling | every 100 ms until `buffered_amount() == 0` |
@@ -655,7 +668,7 @@ The HTTP diagram uses version `3.0` and depicts:
 - `/api/localsend/v3/upload` and `/api/localsend/v3/cancel`;
 - session/token/IP validation and nonce cleanup.
 
-At LocalSend 1.18.2 (`af0416b`), only `/nonce` and `/register` are routed. Register uses the
+At `92e133a`, as in LocalSend 1.18.2, only `/nonce` and `/register` are routed. Register uses the
 `token`/`hasWebInterface` DTO from §5.2, performs no authentication, and returns
 ordinary identity data. The draft's authenticated Register response DTOs,
 `/pair`, transfer routes, statuses, and cleanup flow are unimplemented.
@@ -688,7 +701,7 @@ The draft's Pair flow is also not exposed end to end by the pinned official app.
 
 A real Nuxt/TypeScript WebRTC implementation exists in the separate
 [`localsend/web`](https://github.com/localsend/web) repository. The local
-reference is pinned at `ea5d55d34db2f21b84bf0ffe39d6342013b4ecd8`.
+reference is pinned at `8fd3e7f6522f2ddc7c4cb0d237bb995ed95313c0`.
 It is **not** an authority for the LocalSend 1.18.2 monorepo or shipping native
 LocalSend 1.18.x behavior. It **is**, however, a normative compatibility target
 for this plugin: interoperating with LocalSend Web requires the signaling and
@@ -696,7 +709,7 @@ WebRTC behavior documented in this section.
 
 Pin-specific historical behavior:
 
-| Area | Historical web behavior at `ea5d55d` |
+| Area | Web behavior at `8fd3e7f` |
 |---|---|
 | Version | `protocolVersion = "2.3"` |
 | Default STUN | `stun:stun.l.google.com:19302` |
@@ -706,7 +719,7 @@ Pin-specific historical behavior:
 | File token | `Math.random().toString()` |
 | Pair request | automatically sends `PAIR_DECLINED` |
 | Output chunk | 16 KiB |
-| Streaming back-pressure | while `bufferedAmount > 1 MiB`, sleep 50 ms |
+| Streaming back-pressure | when `bufferedAmount > 1 MiB`, wait for `bufferedamountlow` at 256 KiB |
 | Final flush polling | while buffered amount is nonzero, sleep 50 ms |
 
 The historical sender and receiver generate nonce-signed tokens but do not call
@@ -763,7 +776,7 @@ without first changing the project's compatibility target.
    compatibility defaults come from the pinned web client.
 8. **Pin web compatibility explicitly.** `2.3`, Google STUN, 120-second
    keep-alive, 30-minute token refresh, 16 KiB chunks, and 1 MiB back-pressure
-   are source-backed choices from `localsend/web@ea5d55d`, not native 1.18.x
+   are source-backed choices from `localsend/web@8fd3e7f`, not native 1.18.x
    facts.
 
 ---
@@ -886,7 +899,7 @@ round-trips rather than that external constant.
 All material claims above were checked against these pinned local references.
 Paths are relative to the named checkout.
 
-### B.1 Official implementation — LocalSend 1.18.2 (`af0416b`)
+### B.1 Official implementation — LocalSend `main` (`92e133a`, app `1.18.2+64`)
 
 - `app/lib/provider/network/webrtc/signaling_provider.dart` — WebRTC disabled,
   signaling URL, STUN default, and shipping version passed into signaling.
@@ -911,6 +924,8 @@ Paths are relative to the named checkout.
 - `packages/core/src/http/server/mod.rs` and `server/v3.rs` — actual route table,
   legacy `/v1/info`, listener failure classification/reporting, nonce caches,
   and unauthenticated Register handler.
+- `packages/core/src/http/server/connection_limit.rs` — total and per-peer
+  connection limits.
 - `packages/core/src/http/server/web.rs` and `server/common/pin.rs` — v2 Download
   sessions and PIN behavior.
 - `packages/core/src/webrtc/{signaling,webrtc}.rs` — signaling DTOs, SDP,
@@ -921,7 +936,8 @@ Paths are relative to the named checkout.
 - `app/lib/provider/network/server/server_provider.dart` — native HTTP listener
   probing and restart after listener failure.
 - `server/src/main.rs`, `server/src/util/ip.rs`, and
-  `server/src/controller/ws_controller.rs` — `/v1/ws`, grouping, and relay.
+  `server/src/controller/ws_controller.rs` — `/v1/ws`, grouping, relay, idle
+  timeout, and per-peer buffers.
 
 ### B.2 Official protocol — `62bd340` / v3 addition `bf371ab`
 
@@ -931,12 +947,13 @@ Paths are relative to the named checkout.
 - `v3/http-diagram.mermaid` — draft `3.0` HTTP flow and unimplemented routes.
 - `v3/webrtc-diagram.mermaid` — draft WebRTC flow and per-file delimiters.
 
-### B.3 Historical web — `ea5d55d`
+### B.3 Web — `8fd3e7f`
 
 - `app/services/signaling.ts` — connection URL construction, keep-alive, and
   identity refresh.
 - `app/services/webrtc.ts` — `2.3`, Google STUN, framing, per-file status drain,
-  Pair decline, identifiers, chunks, and buffering.
+  Pair decline, identifiers, chunks, and final flush.
+- `app/utils/dataChannel.ts` — streaming back-pressure thresholds.
 - `app/services/crypto.ts` — browser Ed25519/RSA-PSS generation and timestamp
   verification helper.
 - `app/services/store.ts` — signaling token refresh and default STUN use.
@@ -953,6 +970,7 @@ implementation authority.
 
 | Date | Change |
 |---|---|
+| 2026-11-03 | Advanced the native authority and official-core interop pin to unreleased LocalSend `main` at `92e133a` (no release follows 1.18.2), and the LocalSend Web pin to `8fd3e7f`. Documented native connection limits, the smaller file read-ahead, the signaling server's idle timeout and per-peer buffers, and the web client's event-driven back-pressure. Wire formats are unchanged. |
 | 2026-08-27 | Advanced the native authority and official-core interop pin to LocalSend 1.18.2 (`af0416b`); documented legacy `/v1/info` compatibility, native HTTP/multicast recovery, and the native dormant STUN change to `stun.localsend.org:3478`. The separate LocalSend Web pin and its Google STUN behavior remain unchanged. |
 | 2026-08-14 | Clarified that `localsend/web@ea5d55d` is separate/historical relative to native 1.18.x but remains a normative interoperability target for `localsend.koplugin`; documented the deliberate `2.3` signaling, Google STUN, per-file ACK, and 1 MiB back-pressure choices. |
 | 2026-08-14 | Rewrote the document around pinned authority layers; restored shipping v2.2/WebRTC-disabled status; separated dormant Rust wire behavior, the `bf371ab` official `3.0` Mermaid draft, and historical web pin `ea5d55d`; corrected nonce, STUN, token verification, DTO/routes/errors, signaling, pairing, file acknowledgements, optional error fields, buffers, ICE, appendices, and provenance while retaining valid v2.2 download/checksum material. |

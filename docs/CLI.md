@@ -130,7 +130,7 @@ JSON result fields:
 The CLI has two deliberately different LocalSend interoperability paths:
 
 - **Native LocalSend 1.18.x:** protocol v2.2 over HTTP(S) and LAN discovery.
-- **LocalSend Web (`localsend/web@ea5d55d`):** protocol 2.3 signaling plus WebRTC.
+- **LocalSend Web (`localsend/web@8fd3e7f`):** protocol 2.3 signaling plus WebRTC.
 
 The WebRTC path remains experimental in the native LocalSend app, but it is
 required to send to or receive from the separately shipped LocalSend Web client.
