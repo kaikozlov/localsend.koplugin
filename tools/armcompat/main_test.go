@@ -137,6 +137,25 @@ func NetlinkRIB(proto, family int) ([]byte, error) {
 	return nil, nil
 }
 `
+	atomicSourceFixture = `#include "textflag.h"
+
+TEXT kernelcas<>(SB),NOSPLIT,$0
+	MOVW	ptr+0(FP), R2
+	// trigger potential paging fault here,
+	// because we don't know how to traceback through __kuser_cmpxchg
+	MOVW    (R2), R0
+	MOVW	old+4(FP), R0
+	MOVW	new+8(FP), R1
+	BL	cas<>(SB)
+	BCC	ret0
+	MOVW	$1, R0
+	MOVB	R0, ret+12(FP)
+	RET
+ret0:
+	MOVW	$0, R0
+	MOVB	R0, ret+12(FP)
+	RET
+`
 )
 
 func writeRuntimeSource(t *testing.T, goroot, relativePath, source string) string {
@@ -159,6 +178,7 @@ func writeStandardLibrarySources(t *testing.T, goroot string) (pollPath, syscall
 	writeRuntimeSource(t, goroot, "src/syscall/exec_linux.go", execLinuxSourceFixture)
 	writeRuntimeSource(t, goroot, "src/net/sock_cloexec.go", netSocketSourceFixture)
 	writeRuntimeSource(t, goroot, "src/syscall/netlink_linux.go", netlinkSourceFixture)
+	writeRuntimeSource(t, goroot, "src/internal/runtime/atomic/sys_linux_arm.s", atomicSourceFixture)
 	return pollPath, syscallPath
 }
 
@@ -433,5 +453,17 @@ func TestGenerateOverlay_RejectsUnexpectedNetlinkSource(t *testing.T) {
 	_, err := generateOverlay(goroot, filepath.Join(t.TempDir(), "overlay"))
 	if err == nil || !strings.Contains(err.Error(), "NetlinkRIB") {
 		t.Fatalf("generateOverlay() error = %v, want missing NetlinkRIB rejection", err)
+	}
+}
+
+func TestGenerateOverlay_RejectsUnexpectedAtomicSource(t *testing.T) {
+	goroot := t.TempDir()
+	writeRuntimeSource(t, goroot, currentRuntimeSourcePath, runtimeSourceFixture)
+	writeStandardLibrarySources(t, goroot)
+	writeRuntimeSource(t, goroot, "src/internal/runtime/atomic/sys_linux_arm.s", "#include \"textflag.h\"\n")
+
+	_, err := generateOverlay(goroot, filepath.Join(t.TempDir(), "overlay"))
+	if err == nil || !strings.Contains(err.Error(), "kernelcas") {
+		t.Fatalf("generateOverlay() error = %v, want missing kernelcas rejection", err)
 	}
 }

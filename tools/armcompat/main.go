@@ -1,6 +1,7 @@
 // Command armcompat creates a Go build overlay for 32-bit ARM release
 // binaries. It restores the legacy epoll, eventfd, accept, pipe, dup, and
-// flagless socket paths required by older Kindle kernels.
+// flagless socket paths required by older Kindle kernels, and closes the
+// ARMv6 exclusive monitor after failed kernel compare-and-swap calls.
 package main
 
 import (
@@ -22,6 +23,7 @@ const (
 	execLinuxSourcePath        = "src/syscall/exec_linux.go"
 	netSocketSourcePath        = "src/net/sock_cloexec.go"
 	netlinkSourcePath          = "src/syscall/netlink_linux.go"
+	atomicSourcePath           = "src/internal/runtime/atomic/sys_linux_arm.s"
 	patchedRuntimeSourceName   = "runtime_syscall_linux.go.overlay"
 	patchedPollSourceName      = "sock_cloexec.go.overlay"
 	patchedSyscallSourceName   = "syscall_linux.go.overlay"
@@ -29,6 +31,7 @@ const (
 	patchedExecLinuxSourceName = "exec_linux.go.overlay"
 	patchedNetSocketSourceName = "net_sock_cloexec.go.overlay"
 	patchedNetlinkSourceName   = "netlink_linux.go.overlay"
+	patchedAtomicSourceName    = "sys_linux_arm.s.overlay"
 	patchedGuardSourceName     = "arm_only_guard.go.overlay"
 	guardVirtualSourceName     = "armcompat_overlay_guard.go"
 	overlayFileName            = "overlay.json"
@@ -469,6 +472,66 @@ func patchNetlinkSource(source []byte) ([]byte, error) {
 	return []byte(strings.Replace(text, currentNetlinkSocket, legacyNetlinkSocket, 1)), nil
 }
 
+const currentKernelCas = `TEXT kernelcas<>(SB),NOSPLIT,$0
+	MOVW	ptr+0(FP), R2
+	// trigger potential paging fault here,
+	// because we don't know how to traceback through __kuser_cmpxchg
+	MOVW    (R2), R0
+	MOVW	old+4(FP), R0
+	MOVW	new+8(FP), R1
+	BL	cas<>(SB)
+	BCC	ret0
+	MOVW	$1, R0
+	MOVB	R0, ret+12(FP)
+	RET
+ret0:
+	MOVW	$0, R0
+	MOVB	R0, ret+12(FP)
+	RET`
+
+const legacyKernelCas = `TEXT kernelcas<>(SB),NOSPLIT,$0
+retry:
+	MOVW	ptr+0(FP), R2
+	// trigger potential paging fault here,
+	// because we don't know how to traceback through __kuser_cmpxchg
+	MOVW    (R2), R0
+	MOVW	old+4(FP), R0
+	MOVW	new+8(FP), R1
+	BL	cas<>(SB)
+	BCC	ret0
+	MOVW	$1, R0
+	MOVB	R0, ret+12(FP)
+	RET
+ret0:
+	// A failed ARMv6 __kuser_cmpxchg skips its STREX and leaves the
+	// exclusive monitor open. The Kindle Keyboard 2.6.26 data-abort entry
+	// then completes a dummy STREX over the saved user R0, replacing it with
+	// a kernel stack address. Swapping the argument slot the caller has just
+	// written with its own value executes STREX without a page fault, which
+	// closes the monitor.
+	MOVW	$old+4(FP), R2
+	MOVW	old+4(FP), R0
+	MOVW	R0, R1
+	BL	cas<>(SB)
+	// The same abort entry also corrupts the helper's R0 when its STREX
+	// faults, which fails the swap spuriously. Fail only on a changed value.
+	MOVW	ptr+0(FP), R2
+	MOVW	(R2), R0
+	MOVW	old+4(FP), R1
+	CMP	R0, R1
+	BEQ	retry
+	MOVW	$0, R0
+	MOVB	R0, ret+12(FP)
+	RET`
+
+func patchAtomicSource(source []byte) ([]byte, error) {
+	text := string(source)
+	if strings.Count(text, currentKernelCas) != 1 {
+		return nil, errors.New("go atomic source does not contain exactly one expected kernelcas implementation")
+	}
+	return []byte(strings.Replace(text, currentKernelCas, legacyKernelCas, 1)), nil
+}
+
 func requiredSource(goroot, relativePath string) (string, error) {
 	path := filepath.Join(goroot, filepath.FromSlash(relativePath))
 	info, err := os.Stat(path)
@@ -522,6 +585,10 @@ func generateOverlay(goroot, outputDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	atomicPath, err := requiredSource(goroot, atomicSourcePath)
+	if err != nil {
+		return "", err
+	}
 
 	patchedRuntime, err := readAndPatch(runtimePath, "Go runtime", patchRuntimeSource)
 	if err != nil {
@@ -551,6 +618,10 @@ func generateOverlay(goroot, outputDir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	patchedAtomic, err := readAndPatch(atomicPath, "Go atomic", patchAtomicSource)
+	if err != nil {
+		return "", err
+	}
 
 	outputDir, err = filepath.Abs(outputDir)
 	if err != nil {
@@ -573,6 +644,7 @@ func generateOverlay(goroot, outputDir string) (string, error) {
 		{execLinuxPath, patchedExecLinuxSourceName, patchedExecLinux},
 		{netSocketPath, patchedNetSocketSourceName, patchedNetSocket},
 		{netlinkPath, patchedNetlinkSourceName, patchedNetlink},
+		{atomicPath, patchedAtomicSourceName, patchedAtomic},
 		{guardPath, patchedGuardSourceName, []byte(armOnlyGuardSource)},
 	}
 	replacements := make(map[string]string, len(patches))

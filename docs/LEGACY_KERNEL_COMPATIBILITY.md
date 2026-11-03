@@ -411,9 +411,10 @@ This was a latent compatibility problem, not a regression introduced by Go 1.26.
 `just release` generates a scoped Go build overlay through `tools/armcompat`.
 For 32-bit ARM release builds, it restores `epoll_wait`, legacy netpoll
 initialization, flagless socket creation, `accept`, and the process-creation
-fallbacks described below. ARM64 builds are unchanged. The generator targets the
+fallbacks described below. It also closes the exclusive monitor after failed
+kernel compare-and-swap calls. ARM64 builds are unchanged. The generator targets the
 pinned Go 1.26 runtime layout and deliberately fails if any expected runtime,
-poll, syscall, net, netlink, pipe, or exec source no longer matches. Other Go versions are unsupported until their
+poll, syscall, net, netlink, pipe, exec, or atomic source no longer matches. Other Go versions are unsupported until their
 actual source trees and a complete release build are validated.
 
 ## Confirmed `accept4` gap
@@ -471,6 +472,64 @@ sets close-on-exec while holding `ForkLock`, then sets nonblocking mode for
 `net` sockets. fasthttp's `tcplisten` already has the same `EINVAL` fallback.
 The packaged-binary audit forces every flagged host `socket` call to `EINVAL`
 and requires the flagless TCP, UDP, and netlink retries in the guest trace.
+
+## Confirmed Kindle Keyboard register corruption
+
+Issue #19 also shows a `SIGSEGV` in `runtime.funcMaxSPDelta` 2–3 seconds after
+startup, repeated on every launch. `r0` holds `0xc087ffac`, a kernel stack
+address, and the faulting load `ldr r4, [r0, #0x28]` reads `0xc087ffd4`. No
+instruction in the binary writes that value.
+
+The cause is the Kindle Keyboard kernel's ARMv6 data-abort entry,
+`v6_early_abort`. Linux 2.6.26 clears the exclusive monitor there with a dummy
+`strex r0, r1, [sp]`, which stores the saved user `r0` back over itself. Upstream
+later changed it to `sub r1, sp, #4; strex r0, r1, [r1]`, because the old form
+corrupted `r0` in `pt_regs` when the store succeeded. Lab126's 2.6.26 source
+([`arch/arm/mm/abort-ev6.S`](https://github.com/katadelos/linux-2.6.26-lab126/blob/master/arch/arm/mm/abort-ev6.S))
+and the 3.4 firmware kernel at `0xc00ac300` combine the two:
+
+```text
+sub     r1, sp, #4
+strex   r0, r1, [sp]
+```
+
+If the exclusive monitor is open when a user data abort is taken, the store
+succeeds and the saved user `r0` becomes `sp - 4`. For the crashing thread,
+`pt_regs` is at `0xc087ffb0`, so the value is exactly `0xc087ffac`.
+
+The `arm-legacy` build (GOARM=5) sends every 32-bit compare-and-swap through the
+kernel's `__kuser_cmpxchg` (`0xffff0fc0`). The 64-bit and byte atomics use
+native `LDREX`/`STREX` only when the CPU reports LPAE, which the ARM1136 lacks,
+so they fall back to Go code and spinlocks built on the same helper. When the comparison fails, the helper skips `strexeq` and returns with the
+monitor open. The next page fault in user code then corrupts `r0`. During
+startup, threads contend on runtime locks while stack growth reads cold pages of
+the binary's function tables, so the receiver crashes on every launch.
+
+The prefetch-abort and IRQ entry paths have no `strex`. `__switch_to`'s
+monitor-clearing `strex` writes the outgoing thread's saved context, not a user
+register. The DXG 2.5.8 kernel (also ARM1136) has the stock
+`strex r0, r1, [sp]`, so it is not affected. The PW 5.6.1.1 kernel was not
+checked.
+
+The overlay patches `kernelcas` in `internal/runtime/atomic/sys_linux_arm.s`.
+After a failed compare-and-swap, it calls the helper again on its own
+argument slot, swapping the value for itself. The caller has just written that
+slot, so the helper's `strex` cannot fault, and it closes the monitor. The same
+abort entry also corrupts the helper's own `r0` when its `strexeq` faults on a
+read-only page. That makes the helper report a failed swap even when the value
+matched, so the patched `kernelcas` reports failure only after rereading a
+different value, and otherwise retries. Only the
+GOARM=5 build calls `kernelcas`; the ARMv7 build uses `armcas`.
+
+Two limits remain. A failed exclusive operation inside the kernel can leave the
+monitor open before a later kernel-mode fault, and userspace cannot prevent
+that. A signal delivered while the monitor is open, inside the helper or in the
+few instructions before the closing swap, also starts its handler with the
+monitor open. QEMU's exclusive monitor also checks the address, and its user mode
+emulates the kuser helpers itself, so no QEMU environment reproduces the
+corruption. The overlay change was validated by running Go's atomic and runtime
+tests for GOARM=5 under QEMU. The fix itself needs confirmation on a Kindle
+Keyboard.
 
 ## Verified syscall gaps
 
