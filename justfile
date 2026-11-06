@@ -113,6 +113,7 @@ sync-shared:
 # Run after changing user-facing strings wrapped in _() / deps._() / N_() /
 # deps.N_(). Uses gettext from the pinned development image. Commit the result;
 # its standard POT header intentionally matches KOReader's workflow.
+# Source references retain filenames only, so line moves do not churn catalogues.
 # Regenerate the template and merge it into every translation catalogue.
 [group('build')]
 pot:
@@ -128,7 +129,7 @@ _pot:
     mkdir -p lua/locale
     xgettext --language=Lua --from-code=UTF-8 \
       --keyword=_ --keyword=deps._ --keyword=N_:1,2 --keyword=deps.N_:1,2 \
-      --add-comments=@translators \
+      --add-comments=@translators --add-location=file \
       --package-name=localsend --package-version="$version" \
       --msgid-bugs-address=https://github.com/kaikozlov/localsend.koplugin/issues \
       -o lua/locale/localsend.pot lua/*.lua
@@ -138,7 +139,7 @@ _pot:
     catalogues=(lua/locale/*.po)
     for catalogue in "${catalogues[@]}"; do
         echo "Merging lua/locale/localsend.pot into $catalogue"
-        msgmerge --quiet --update --backup=none "$catalogue" lua/locale/localsend.pot
+        msgmerge --quiet --add-location=file --update --backup=none "$catalogue" lua/locale/localsend.pot
     done
 
 # Validate syntax and compare each catalogue with a temporary deterministic
@@ -176,7 +177,7 @@ _i18n-check:
         msgfmt -o /dev/null "$catalogue"
 
         merged="$tmp/$(basename "$catalogue")"
-        msgmerge --quiet -o "$merged" "$catalogue" "$template"
+        msgmerge --quiet --add-location=file -o "$merged" "$catalogue" "$template"
         if ! diff -u --label "$catalogue" --label "$catalogue (merged with localsend.pot)" \
                 <(strip_volatile "$catalogue") <(strip_volatile "$merged"); then
             failed=1
@@ -210,7 +211,7 @@ _pot-check:
 
     xgettext --language=Lua --from-code=UTF-8 \
       --keyword=_ --keyword=deps._ --keyword=N_:1,2 --keyword=deps.N_:1,2 \
-      --add-comments=@translators \
+      --add-comments=@translators --add-location=file \
       --package-name=localsend --package-version="$version" \
       --msgid-bugs-address=https://github.com/kaikozlov/localsend.koplugin/issues \
       -o "$tmp/localsend.pot" lua/*.lua

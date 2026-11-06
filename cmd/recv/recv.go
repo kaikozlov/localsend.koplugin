@@ -7,11 +7,16 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"os"
+	"os/signal"
+	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"localsend-cli/internal/control"
 	"localsend-cli/internal/crypto"
 	lsrecv "localsend-cli/internal/localsend/recv"
 	lsutils "localsend-cli/internal/localsend/utils"
@@ -36,6 +41,8 @@ var (
 	requirePairing   bool
 	stunServers      []string
 	signalingIDFile  string
+	listenPort       int
+	controlSocket    string
 )
 
 const (
@@ -50,7 +57,19 @@ var Cmd = &cobra.Command{
 	Use:   "recv",
 	Short: "Receive files from localsend instance",
 	Long:  "Receive files from localsend instance",
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if listenPort < 1 || listenPort > 65535 {
+			return errors.New("port must be between 1 and 65535")
+		}
+		socketPath := controlSocket
+		if socketPath == "" {
+			socketPath = control.DefaultPath(listenPort)
+		}
+		owner, err := control.Listen(socketPath)
+		if err != nil {
+			return fmt.Errorf("reserve LocalSend backend: %w", err)
+		}
+		defer owner.Close()
 		var wg sync.WaitGroup
 
 		// Load extension routing config if provided
@@ -59,8 +78,7 @@ var Cmd = &cobra.Command{
 		if extRouting != "" {
 			router = lsrecv.NewExtensionRouter(savetodir)
 			if err := router.LoadFromFile(extRouting); err != nil {
-				slog.Error("Failed to load extension routing config", "error", err)
-				return
+				return fmt.Errorf("load extension routing config: %w", err)
 			}
 			if err := router.EnsureDirectories(); err != nil {
 				slog.Warn("Failed to create some routing directories", "error", err)
@@ -80,6 +98,7 @@ var Cmd = &cobra.Command{
 
 		// HTTP receiver (always start unless webrtc-only)
 		recver := lsrecv.NewFileReceiver(devname, savetodir, supportHttps)
+		recver.SetListenAddr(net.JoinHostPort("", strconv.Itoa(listenPort)))
 		recver.SetPIN(pin)
 		recver.SetTransferLog(logFile)
 		recver.SetOnTransferCmd(onTransferCmd)
@@ -97,17 +116,16 @@ var Cmd = &cobra.Command{
 		}
 
 		if err := recver.Init(); err != nil {
-			slog.Error("Failed to initialize receiver", "error", err)
-			return
+			return fmt.Errorf("initialize receiver: %w", err)
 		}
 
 		// All long-running components share one cancellation domain. A fatal HTTP
 		// listener exit cancels the process instead of leaving a live PID whose
 		// receive service has silently disappeared. Discovery and WebRTC handle
 		// their own transient network failures internally.
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 		defer cancel()
-		componentErr := make(chan error, 2)
+		componentErr := make(chan error, 3)
 
 		wg.Add(1)
 		go func() {
@@ -125,6 +143,22 @@ var Cmd = &cobra.Command{
 			}
 		}()
 
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			select {
+			case <-ctx.Done():
+				return
+			case <-recver.Ready():
+			}
+			if err := owner.Serve(ctx, recver.Scan); err != nil && ctx.Err() == nil {
+				select {
+				case componentErr <- fmt.Errorf("backend control stopped: %w", err):
+				default:
+				}
+			}
+		}()
+
 		if webrtcMode {
 			wg.Add(1)
 			go func() {
@@ -138,11 +172,11 @@ var Cmd = &cobra.Command{
 			}()
 		}
 
-		signals := utils.WaitForSignal()
+		var runErr error
 		select {
-		case <-signals:
-		case err := <-componentErr:
-			slog.Error("Receiver component failed", "error", err)
+		case <-ctx.Done():
+		case runErr = <-componentErr:
+			slog.Error("Receiver component failed", "error", runErr)
 		}
 		cancel()
 
@@ -159,6 +193,7 @@ var Cmd = &cobra.Command{
 		case <-time.After(shutdownTimeout):
 			slog.Warn("Shutdown timeout: some goroutines did not exit cleanly")
 		}
+		return runErr
 	},
 }
 
@@ -346,4 +381,6 @@ func init() {
 	Cmd.PersistentFlags().BoolVar(&requirePairing, "require-pairing", false, "Require PAIR before accepting WebRTC transfers from unknown devices")
 	Cmd.PersistentFlags().StringSliceVar(&stunServers, "stun-servers", nil, "Custom STUN servers for WebRTC (e.g., stun:stun.example.com:3478). Defaults to Google STUN servers if not set.")
 	Cmd.PersistentFlags().StringVar(&signalingIDFile, "signaling-id-file", "", "Write WebRTC signaling client ID to this file (for self-filtering in scan)")
+	Cmd.PersistentFlags().IntVar(&listenPort, "port", 53317, "LocalSend listener and discovery port")
+	Cmd.PersistentFlags().StringVar(&controlSocket, "control-socket", "", "private backend socket (defaults to a per-user, per-port temporary directory)")
 }

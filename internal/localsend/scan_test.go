@@ -111,7 +111,7 @@ func TestDiscovererListen_ProcessesDatagramsContinuously(t *testing.T) {
 		t.Helper()
 		deadline := time.Now().Add(500 * time.Millisecond)
 		for time.Now().Before(deadline) {
-			for _, announcement := range d.GetAllDiscovered() {
+			for _, announcement := range d.DiscoveredSince(time.Time{}) {
 				if announcement.Alias == want {
 					return
 				}
@@ -161,7 +161,7 @@ func TestDiscovererReadAndRegisterFrom_DropsIPv6FallbackResponse(t *testing.T) {
 	if err := d.readAndRegisterFrom(conn, make([]byte, 512)); err != nil {
 		t.Fatal(err)
 	}
-	if got := d.GetAllDiscovered(); len(got) != 0 {
+	if got := d.DiscoveredSince(time.Time{}); len(got) != 0 {
 		t.Fatalf("unauthenticated IPv6 fallback response was stored: %#v", got)
 	}
 }
@@ -347,7 +347,7 @@ func TestDiscovererListen_DoesNotExposeUnconfirmedAnnouncement(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("announcement was not answered with a register request")
 	}
-	if got := d.GetAllDiscovered(); len(got) != 0 {
+	if got := d.DiscoveredSince(time.Time{}); len(got) != 0 {
 		t.Fatalf("unconfirmed announcement entered discovery store: %#v", got)
 	}
 }
@@ -408,7 +408,7 @@ func TestDiscovererListen_StoresRegisterResponseAfterAnnouncement(t *testing.T) 
 
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if confirmed, ok := d.GetAllDiscovered()["127.0.0.1"]; ok {
+		if confirmed, ok := d.DiscoveredSince(time.Time{})["127.0.0.1"]; ok {
 			if confirmed.Alias != "Confirmed" {
 				t.Fatalf("stored alias = %q; want register response alias", confirmed.Alias)
 			}
@@ -446,7 +446,7 @@ func TestTryScanIP_RegistersSuccessfulResponse(t *testing.T) {
 		t.Fatal("tryScanIP() = false; want successful discovery")
 	}
 
-	discovered := d.GetAllDiscovered()["192.168.1.42"]
+	discovered := d.DiscoveredSince(time.Time{})["192.168.1.42"]
 	if discovered.Alias != "Phone" || discovered.Protocol != "http" {
 		t.Fatalf("discovered device = %#v; want Phone over HTTP", discovered)
 	}
@@ -559,7 +559,9 @@ func TestScanSubnet_CompletesBothProtocolAttemptsForEveryTarget(t *testing.T) {
 	})}
 
 	d := newTestDiscovererForSubnetScan(client, 10, []net.IP{net.ParseIP("192.168.1.20")})
-	d.ScanSubnet(context.Background())
+	if err := d.scanSubnet(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	const targets = 253
 	if got := httpAttempts.Load(); got != targets {
@@ -588,7 +590,9 @@ func TestScanSubnet_AttemptsEverySubnetBeforeSlowSubnetCanStarveIt(t *testing.T)
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	d.ScanSubnet(ctx)
+	if err := d.scanSubnet(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -616,7 +620,9 @@ func TestScanSubnet_BoundsConcurrentRequests(t *testing.T) {
 	d := newTestDiscovererForSubnetScan(client, 3, []net.IP{net.ParseIP("192.168.1.20")})
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	d.ScanSubnet(ctx)
+	if err := d.scanSubnet(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	if got := maximum.Load(); got > 3 {
 		t.Fatalf("maximum concurrent requests = %d; want at most 3", got)
@@ -641,10 +647,9 @@ func TestScanSubnet_CancelsActiveRequests(t *testing.T) {
 
 	d := newTestDiscovererForSubnetScan(client, 1, []net.IP{net.ParseIP("192.168.1.20")})
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
+	done := make(chan error, 1)
 	go func() {
-		d.ScanSubnet(ctx)
-		close(done)
+		done <- d.scanSubnet(ctx)
 	}()
 
 	select {
@@ -660,7 +665,10 @@ func TestScanSubnet_CancelsActiveRequests(t *testing.T) {
 		t.Fatal("active request did not observe scan cancellation")
 	}
 	select {
-	case <-done:
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("subnet scan did not return after cancellation")
 	}
@@ -732,7 +740,7 @@ func TestPutDiscovered_AcceptsIPv6Channel(t *testing.T) {
 		Alias: "IPv6 Device", Version: "2.2", Fingerprint: "peer",
 	}, Protocol: "https", Port: 53317}
 	mcs.PutDiscovered("2001:db8::1", anno)
-	got := mcs.GetAllDiscovered()
+	got := mcs.DiscoveredSince(time.Time{})
 	if peer, ok := got["2001:db8::1"]; !ok || peer.Alias != "IPv6 Device" {
 		t.Fatalf("IPv6 discovery missing: %#v", got)
 	}
@@ -1107,7 +1115,7 @@ func TestDiscovererPutDiscovered_DedupesChannelsByFingerprint(t *testing.T) {
 	d.PutDiscovered("192.168.1.20", base)
 	d.PutDiscovered("fe80::20%wlan0", base)
 
-	got := d.GetAllDiscovered()
+	got := d.DiscoveredSince(time.Time{})
 	if len(got) != 1 {
 		t.Fatalf("discovered targets = %d; want one fingerprint-deduped device: %#v", len(got), got)
 	}
@@ -1129,7 +1137,7 @@ func TestDiscovererPutDiscovered_RefreshesExistingChannel(t *testing.T) {
 	d.PutDiscovered("192.168.1.20", first)
 	d.PutDiscovered("192.168.1.20", second)
 
-	got := d.GetAllDiscovered()
+	got := d.DiscoveredSince(time.Time{})
 	peer, ok := got["192.168.1.20"]
 	if !ok {
 		t.Fatalf("refreshed channel missing: %#v", got)

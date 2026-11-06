@@ -23,7 +23,7 @@ describe("localsend_discovery", function()
 
     -- Load a fresh discovery module wired to real KOReader deps. json_dep lets a
     -- test substitute a controlled decoder without clobbering the real json module.
-    local function init_discovery(json_dep, on_activity_changed)
+    local function init_discovery(json_dep)
         package.loaded["localsend_discovery"] = nil
         local discovery = require("localsend_discovery")
         discovery.init({
@@ -36,7 +36,6 @@ describe("localsend_discovery", function()
             logger = logger,
             T = T,
             _ = _,
-            onActivityChanged = on_activity_changed,
         }, { binary_path = "/tmp/localsend" })
         return discovery
     end
@@ -213,45 +212,174 @@ describe("localsend_discovery", function()
         end)
     end)
 
-    describe("scan timeout behavior", function()
-        local discovery
-        local constants
+    describe("scan lifecycle", function()
+        local discovery, constants, s, files, running, queued, holds
+        local firewall, old_acquire, old_release, old_remove, old_execute
+        local result, failure, calls
 
         before_each(function()
-            package.loaded["localsend_constants"] = nil
-            discovery = init_discovery()
             constants = require("localsend_constants")
+            s = require("localsend_state").ServerState
+            files, running, queued = {}, {}, {}
+            holds = {}
+            result, failure, calls = nil, nil, 0
+            firewall = require("localsend_firewall")
+            old_acquire, old_release = firewall.acquire, firewall.release
+            firewall.acquire = function(owner)
+                holds[owner] = true
+                return { ok = true }
+            end
+            firewall.release = function(owner)
+                holds[owner] = nil
+            end
+            old_remove, old_execute = os.remove, os.execute
+            os.remove = function(path)
+                files[path] = nil
+                return true
+            end
+            os.execute = function(command)
+                if not command:find("kill", 1, true) then
+                    files[constants.SCAN_OUTPUT_FILE .. ".pid"] = "4242"
+                    files[constants.SCAN_OUTPUT_FILE .. ".supervisor"] = "4243"
+                    running[4242], running[4243] = true, true
+                end
+                return 0
+            end
+            package.loaded["localsend_discovery"] = nil
+            discovery = require("localsend_discovery")
+            discovery.init({
+                UIManager = {
+                    scheduleIn = function(_, _, fn)
+                        table.insert(queued, fn)
+                    end,
+                },
+                util = {
+                    readFromFile = function(path)
+                        local pid = tonumber(path:match("^/proc/(%d+)/cmdline$"))
+                        if pid and running[pid] then
+                            return "localsend\0scan\0"
+                        end
+                        return files[path]
+                    end,
+                    pathExists = function(path)
+                        local pid = tonumber(path:match("^/proc/(%d+)$"))
+                        return pid and running[pid] or files[path] ~= nil
+                    end,
+                    shell_escape = util.shell_escape,
+                },
+                json = json,
+                logger = logger,
+                _ = _,
+            }, { binary_path = "/tmp/localsend" })
         end)
 
-        it("SCAN_MAX_POLL_DURATION has reasonable value (5-120 seconds)", function()
-            assert.is_true(constants.SCAN_MAX_POLL_DURATION >= 5)
-            assert.is_true(constants.SCAN_MAX_POLL_DURATION <= 120)
+        after_each(function()
+            firewall.acquire, firewall.release = old_acquire, old_release
+            os.remove, os.execute = old_remove, old_execute
+            require("localsend_power").releaseAll()
         end)
 
-        it("allows enough time for the bounded legacy subnet scan", function()
-            assert.is_true(constants.LEGACY_SCAN_TIMEOUT_SECONDS >= 6)
-            assert.is_true(constants.SCAN_TIMEOUT_SECONDS < constants.LEGACY_SCAN_TIMEOUT_SECONDS)
-            assert.is_true(constants.LEGACY_SCAN_TIMEOUT_SECONDS < constants.SCAN_MAX_POLL_DURATION)
+        local function callback(devices, err)
+            calls = calls + 1
+            result, failure = devices, err
+        end
+
+        local function poll()
+            local fn = table.remove(queued, 1)
+            assert.is_not_nil(fn)
+            fn()
+        end
+
+        local function exited(status, output, log)
+            running[4242], running[4243] = nil, nil
+            files[constants.SCAN_OUTPUT_FILE .. ".exit"] = tostring(status)
+            files[constants.SCAN_OUTPUT_FILE] = output
+            files[constants.SCAN_LOG_FILE] = log
+        end
+
+        it("reports backend failure without replacing successful cached devices", function()
+            s.discovered_devices = { { alias = "Previous" } }
+            discovery.scanDevices(callback)
+            exited(1, "", "control socket permission denied")
+            poll()
+            assert.equals(1, calls)
+            assert.is_nil(result)
+            assert.equals("Previous", s.discovered_devices[1].alias)
         end)
 
-        it("notifies lifecycle registration when a scan starts", function()
-            local activity_changes = 0
-            discovery = init_discovery(nil, function()
-                activity_changes = activity_changes + 1
+        it("reports malformed successful output as an error", function()
+            discovery.scanDevices(callback)
+            exited(0, "not json")
+            poll()
+            assert.is_nil(result)
+            assert.is_not_nil(failure)
+        end)
+
+        it("retains firewall ownership until a cancelled child and waiter exit", function()
+            discovery.scanDevices(callback)
+            discovery.cancelScan()
+            poll()
+            assert.is_true(s.scan_in_progress)
+            assert.is_true(holds.scan)
+            running[4242] = nil
+            poll()
+            assert.is_true(s.scan_in_progress)
+            assert.is_true(holds.scan)
+            exited(143, "")
+            poll()
+            assert.is_false(s.scan_in_progress)
+            assert.is_nil(holds.scan)
+            assert.equals(0, calls)
+        end)
+
+        it("reports a timeout only after the process has actually exited", function()
+            discovery.scanDevices(callback)
+            s.scan_start_time = os.time() - constants.SCAN_MAX_POLL_DURATION
+            poll()
+            assert.equals(0, calls)
+            assert.is_true(holds.scan)
+            exited(143, "")
+            poll()
+            assert.equals(1, calls)
+            assert.is_nil(result)
+            assert.is_not_nil(failure)
+            assert.is_nil(holds.scan)
+        end)
+
+        it("synchronously waits for cancellation before releasing firewall ownership", function()
+            discovery.scanDevices(callback)
+            local sleeps = 0
+            local stopped = discovery.stopActiveScanSync(function()
+                sleeps = sleeps + 1
+                assert.is_true(holds.scan)
+                if sleeps == 3 then
+                    exited(143, "")
+                end
             end)
-
-            discovery.scanDevices(nil, { use_webrtc = false })
-
-            assert.equal(1, activity_changes)
+            assert.is_true(stopped)
+            assert.is_false(s.scan_in_progress)
+            assert.is_nil(holds.scan)
+            poll()
+            assert.equals(0, calls)
         end)
 
-        it("passes a separate legacy deadline and preserves the scan log", function()
-            discovery.scanDevices(nil, { use_webrtc = false })
-            local command = helper.find_execute_call("localsend")
-            assert.is_not_nil(command)
-            assert.truthy(command:match("%-%-legacy%-timeout"))
-            assert.truthy(command:match(tostring(constants.LEGACY_SCAN_TIMEOUT_SECONDS)))
-            assert.truthy(command:match(constants.SCAN_LOG_FILE))
+        it("retains ownership when the OS cannot terminate a child", function()
+            discovery.scanDevices(callback)
+            assert.is_false(discovery.stopActiveScanSync(function() end))
+            assert.is_true(s.scan_in_progress)
+            assert.is_true(holds.scan)
+        end)
+
+        it("rejects overlapping scans without affecting the active child", function()
+            discovery.scanDevices(callback)
+            local busy
+            assert.is_false(discovery.scanDevices(function(_, err)
+                busy = err
+            end))
+            assert.is_not_nil(busy)
+            assert.is_true(s.scan_in_progress)
+            assert.is_true(running[4242])
+            assert.is_true(holds.scan)
         end)
     end)
 end)

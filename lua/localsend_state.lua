@@ -20,11 +20,14 @@ M.ServerState = {
     discovered_devices = {}, -- Cached devices from last scan
     scan_in_progress = false, -- True while device scan is running
     scan_op_id = 0, -- Invalidates stale scheduled scan callbacks
+    scan_port = nil, -- Endpoint held until the scanner and its waiter have exited
     send_in_progress = false, -- True while file send is in progress
     send_op_id = 0, -- Invalidates stale scheduled send callbacks
+    send_port = nil, -- Configured endpoint held for the active sender
 
     -- Cancellation flags (checked by polling callbacks to avoid stale callbacks)
     scan_cancelled = false, -- True when scan was cancelled by user
+    scan_cancel_started_at = nil, -- Start of graceful scanner cancellation window
     send_cancelled = false, -- True when send was cancelled by user
     send_cancel_started_at = nil, -- Start of graceful sender cancellation window
 

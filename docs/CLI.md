@@ -74,21 +74,22 @@ architecture to flag a mismatched package.
 ./localsend scan -t 10
 ```
 
+LAN scans use `--port` (default 53317) without interrupting an active receiver.
+
 ## Diagnosing discovery (nettest)
 
 `nettest` checks whether this device can send and receive LocalSend multicast
 discovery packets, and whether other LocalSend devices are on the LAN. It
 announces itself to the multicast group and counts peers that respond either
 with a UDP announcement or with an HTTP register call to the discovery port
-(the official app's primary response path). The KOReader plugin's "Test
-discovery" troubleshooting action uses it to attribute a "device not
-discovered" problem to this device/network vs. the other device(s).
+(the official app's primary response path). Stop the receiver before running it;
+the plugin uses `scan` for its discovery test.
 
 ```bash
 # Human-readable output
 ./localsend nettest
 
-# JSON output (consumed by the plugin)
+# JSON output
 ./localsend nettest --json
 
 # Run for 5 seconds

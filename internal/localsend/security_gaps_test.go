@@ -50,7 +50,7 @@ func TestDiscovererReadAndRegisterFrom_DropsUnsolicitedFallbackResponse(t *testi
 	if err := d.readAndRegisterFrom(conn, make([]byte, 512)); err != nil {
 		t.Fatal(err)
 	}
-	if got := d.GetAllDiscovered(); len(got) != 0 {
+	if got := d.DiscoveredSince(time.Time{}); len(got) != 0 {
 		t.Fatalf("unsolicited announce:false device was accepted: %#v", got)
 	}
 }
@@ -71,11 +71,11 @@ func TestTryScanIP_HTTPSUsesCertificateFingerprint(t *testing.T) {
 			Request:    req,
 		}, nil
 	})}
-	d := &Discoverer{discovered: make(map[string]discoveryEntry), mu: &sync.RWMutex{}, scanHTTPClient: client}
+	d := newTestDiscovererForSubnetScan(client, 1, nil)
 	if !d.tryScanIP(context.Background(), "192.0.2.20", "https", []byte(`{}`)) {
 		t.Fatal("HTTPS scan did not register response")
 	}
-	got := d.GetAllDiscovered()["192.0.2.20"].Fingerprint
+	got := d.DiscoveredSince(time.Time{})["192.0.2.20"].Fingerprint
 	want := utils.SHA256ofCert(cert)
 	if got != want {
 		t.Fatalf("stored fingerprint = %q; want TLS certificate fingerprint %q", got, want)

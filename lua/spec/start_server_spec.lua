@@ -49,6 +49,25 @@ describe("start() function", function()
         end)
     end)
 
+    describe("receiver start during discovery", function()
+        it("keeps receiving disabled and the scanner running when startup is busy", function()
+            local instance = helper.create_instance()
+            local s = require("localsend_state").ServerState
+            s.scan_in_progress = true
+            s.user_stopped = true
+            s.server_intended_running = false
+            instance.isRunning = function()
+                return false
+            end
+            helper.reset_state()
+            instance:start()
+            assert.is_true(s.scan_in_progress)
+            assert.is_true(s.user_stopped)
+            assert.is_false(s.server_intended_running)
+            assert.equals(0, #helper.state.os_execute_calls)
+        end)
+    end)
+
     describe("with invalid save directory", function()
         it("should show warning and not start", function()
             local instance = helper.create_instance()

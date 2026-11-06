@@ -335,11 +335,14 @@ function M.reset_localsend_state()
     s.discovered_devices = {}
     s.scan_in_progress = false
     s.scan_op_id = 0
+    s.scan_port = nil
+    s.scan_cancel_started_at = nil
     s.send_in_progress = false
     s.send_op_id = 0
     s.scan_cancelled = false
     s.send_cancelled = false
     s.send_cancel_started_at = nil
+    s.send_port = nil
     s.server_op_id = 0
     s.stop_in_progress = false
     s.server_intended_running = false

@@ -17,9 +17,8 @@ the LocalSend receiver is running and provides these guided paths:
   cannot complete the HTTPS handshake, it falls back to confirming the receiver
   process is running and listening on TCP. It shows one plain-language conclusion and a
   relevant action. The full report remains available through **Technical details**.
-- **Can't find a device?** — explains how to prepare the other device, then tests
-  LocalSend discovery. If necessary, the receiver is restarted briefly and
-  restored automatically after the test.
+- **Can't find a device?** — runs the same discovery scan used by Send, without
+  restarting the receiver.
 - **Transfer failed?** — runs the same active receiver lifecycle test first, then
   uses recent LocalSend errors as supporting evidence for connection, storage,
   PIN, HTTPS, file-filter, checksum, and interrupted-transfer failures.
@@ -83,13 +82,12 @@ each other:
 
 | Direction | Protocol | Port  | Purpose                        |
 |-----------|----------|-------|--------------------------------|
-| Incoming  | TCP      | 53317 | File transfer (HTTP/HTTPS API) |
+| Incoming  | TCP      | 53317 | Discovery callbacks and file transfers (HTTP/HTTPS) |
 | Incoming  | UDP      | 53317 | Multicast device discovery     |
 | Outgoing  | TCP/UDP  | any   | Replies, discovery, WebRTC     |
 
-On the e-reader, the receiver binds these ports automatically. If `iptables` is
-available, the plugin also opens the LocalSend firewall rules on start. The most
-common remaining blocker is therefore the firewall on your **phone or computer**.
+On devices with `iptables`, the plugin opens its port rules while receiving,
+scanning, or sending. Check the firewall on your **phone or computer** too.
 
 ### Computer / phone firewall (the other device)
 

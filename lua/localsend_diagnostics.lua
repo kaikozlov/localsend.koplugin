@@ -2,9 +2,10 @@
 -- Troubleshooting and diagnostics helpers for LocalSend plugin
 
 local constants = require("localsend_constants")
+local discovery = require("localsend_discovery")
 -- localsend_state holds ServerState (persists across widget recreations); the sender
 -- records each send's outcome there so diagnostics can report send-side health.
-local has_state, state_module = pcall(require, "localsend_state")
+local state = require("localsend_state")
 
 local M = {}
 
@@ -46,10 +47,6 @@ local function networkFlag(method)
     return safeCall(function()
         return deps.NetworkMgr and deps.NetworkMgr[method] and deps.NetworkMgr[method](deps.NetworkMgr) or false
     end, false)
-end
-
-local function serverState()
-    return has_state and state_module and state_module.ServerState or nil
 end
 
 local function readFile(path)
@@ -307,7 +304,7 @@ local function captureEvidence()
 end
 
 local function lastSendEvidence()
-    local current = serverState() and serverState().last_send or nil
+    local current = state.ServerState.last_send
     if current then
         return current
     end
@@ -343,7 +340,18 @@ local function stopDiagnosticServer(instance)
 end
 
 local function buildDiagnosticRecvArgs(instance)
-    local args = { paths.binary_path, "recv", "-d", instance.save_dir, "-l", constants.TRANSFER_LOG_FILE }
+    local args = {
+        paths.binary_path,
+        "recv",
+        "-d",
+        instance.save_dir,
+        "-l",
+        constants.TRANSFER_LOG_FILE,
+        "--port",
+        tostring(instance.port or constants.DEFAULT_PORT),
+        "--control-socket",
+        constants.CONTROL_SOCKET_FILE,
+    }
     table.insert(args, "-n")
     table.insert(args, instance.device_name ~= "" and instance.device_name or "KOReader")
     if instance.pin ~= "" then
@@ -404,6 +412,9 @@ end
 local function activeServerProbe(instance)
     if M._serverProbeOverride then
         return M._serverProbeOverride(instance)
+    end
+    if state.ServerState.scan_in_progress then
+        return { ok = false, detail = "device discovery is still running; retry after it finishes", log_path = constants.SCAN_LOG_FILE }
     end
     if not deps.util.pathExists(paths.binary_path or "") then
         return { ok = false, detail = "binary missing", log_path = DIAG_SERVER_OUTPUT_FILE }
@@ -1149,14 +1160,10 @@ function M.formatReport(report)
     addSection(lines, "Latest discovery test")
     if report.discovery then
         table.insert(lines, "Performed: " .. tostring(report.discovery.recorded_at or "unknown"))
-        table.insert(lines, "Multicast loopback: " .. boolLabel(report.discovery.loopback))
+        table.insert(lines, "Outcome: " .. (report.discovery.error and "failed" or "completed"))
         table.insert(lines, "Peers: " .. tostring(report.discovery.peers or 0))
-        table.insert(lines, "UDP peers: " .. tostring(report.discovery.udp_peers or 0))
-        table.insert(lines, "HTTP register peers: " .. tostring(report.discovery.register_peers or 0))
-        table.insert(lines, "Local IPs: " .. table.concat(report.discovery.local_ips or {}, ", "))
         table.insert(lines, "Seen devices: " .. table.concat(report.discovery.seen_aliases or {}, ", "))
-        table.insert(lines, "Bind error: " .. tostring(report.discovery.bind_error or "none"))
-        table.insert(lines, "Register bind error: " .. tostring(report.discovery.register_bind_error or "none"))
+        table.insert(lines, "Error: " .. tostring(report.discovery.error or "none"))
     else
         table.insert(lines, "No discovery test has been run in this KOReader session.")
     end
@@ -1681,8 +1688,8 @@ function M.showDiscoveryHelp(instance)
     deps.UIManager:show(ConfirmBox:new({
         text = deps._(
             "Open LocalSend on your phone or computer and keep it visible during the test. "
-                .. "Both devices should be connected to the same Wi-Fi network.\n\n"
-                .. "The LocalSend receiver may restart briefly."
+                .. "Both devices should be connected to the same Wi-Fi network. "
+                .. "The receiver will keep running if it is enabled."
         ),
         ok_text = deps._("Start test"),
         ok_callback = function()
@@ -1703,117 +1710,45 @@ function M.runChecks(instance)
     return checksFromReport(instance, report)
 end
 
--- =============================================================================
--- Discovery self-test (multicast loopback + peer attribution)
--- =============================================================================
--- Runs the Go `nettest` subcommand, which reports whether this device can send/receive its own
--- multicast discovery probe (loopback) and how many other LocalSend devices are advertising.
--- Those two signals attribute a "device not discovered" problem to this
--- device/network vs. the other device(s), instead of a vague "doesn't work".
-
--- Pure formatter (testable): turn a nettest result table into a human-readable diagnosis.
+-- Discovery diagnostics uses exactly the same backend and completion path as Send.
 function M.formatDiscoveryResult(instance, r)
     r = r or {}
-    local port = tostring(instance.port or constants.DEFAULT_PORT)
-    local lines = {}
-    table.insert(lines, "LocalSend Discovery Test")
-    table.insert(lines, "")
-    if (r.peers or 0) > 0 and not r.loopback then
-        table.insert(lines, "Multicast reception: OK (another device responded)")
-        table.insert(lines, "Self-loopback: inconclusive")
-    else
-        table.insert(lines, "Multicast self-test: " .. (r.loopback and "OK" or "FAILED"))
+    local lines = {
+        "LocalSend Discovery Test",
+        "Port: " .. tostring(instance.port or constants.DEFAULT_PORT),
+        "Outcome: " .. (r.error and "failed" or "completed"),
+        "Other devices seen: " .. tostring(r.peers or 0),
+        "Devices that responded: " .. table.concat(r.seen_aliases or {}, ", "),
+    }
+    if r.error then
+        table.insert(lines, "Error: " .. tostring(r.error))
+    elseif (r.peers or 0) == 0 then
+        table.insert(lines, "No peers responded during this scan. This does not establish a network failure.")
     end
-    table.insert(
-        lines,
-        "Other devices seen: "
-            .. tostring(r.peers or 0)
-            .. " (UDP announce: "
-            .. tostring(r.udp_peers or 0)
-            .. ", HTTP register: "
-            .. tostring(r.register_peers or 0)
-            .. ")"
-    )
-    if type(r.seen_aliases) == "table" and #r.seen_aliases > 0 then
-        table.insert(lines, "Devices that responded: " .. table.concat(r.seen_aliases, ", "))
+    table.insert(lines, "Scan log: " .. constants.SCAN_LOG_FILE)
+    if r.log and r.log ~= "" then
+        table.insert(lines, r.log)
     end
-    if type(r.local_ips) == "table" and #r.local_ips > 0 then
-        table.insert(lines, "This device's IP: " .. table.concat(r.local_ips, ", "))
-    end
-    if r.bind_error and r.bind_error ~= "" then
-        table.insert(lines, "Bind error: " .. tostring(r.bind_error))
-    end
-    if r.register_bind_error and r.register_bind_error ~= "" then
-        table.insert(lines, "Register listener: could not bind (" .. tostring(r.register_bind_error) .. ");")
-        table.insert(lines, "  devices answering only via HTTP register were not counted.")
-    end
-    table.insert(lines, "")
-
-    table.insert(lines, "Diagnosis")
-    local diag_lines
-    if r.bind_error and r.bind_error ~= "" then
-        diag_lines = {
-            "Could not bind the LocalSend discovery port (" .. port .. ").",
-            "Another process may be using it, or the OS blocked it.",
-            "Try restarting KOReader.",
-        }
-    elseif (r.peers or 0) > 0 then
-        -- Receiving another device's announcement proves multicast RX works on this
-        -- device, regardless of whether our own probe looped back.
-        diag_lines = {
-            "Discovery is healthy: multicast works and " .. tostring(r.peers) .. " other",
-            "device(s) were seen. If transfers still fail, the problem is the transfer",
-            "itself (HTTPS, PIN, sender app), not discovery.",
-        }
-    elseif not r.loopback then
-        diag_lines = {
-            "Multicast discovery is NOT working on this device/network. Likely causes:",
-            "  • Router AP/client isolation or a guest network",
-            "  • Switch IGMP/multicast snooping blocking the group",
-            "  • A firewall on this device blocking UDP " .. port,
-            "Try a different Wi-Fi network or disable AP isolation on the router.",
-        }
-    else
-        diag_lines = {
-            "Multicast works on this device, but no other LocalSend devices responded.",
-            "Either no other device is running LocalSend right now, or the OTHER",
-            "devices' firewalls block discovery. Open LocalSend on another device to check.",
-        }
-    end
-    for _, dl in ipairs(diag_lines) do
-        table.insert(lines, dl)
-    end
-    table.insert(lines, "")
-    table.insert(lines, "Note: the firewall on the other device must also allow LocalSend on")
-    table.insert(lines, "port " .. port .. " (TCP + UDP). See the Troubleshooting guide.")
-
     return table.concat(lines, "\n")
 end
 
 local function classifyDiscoveryResult(r)
-    r = r or {}
-    if r.bind_error and r.bind_error ~= "" then
+    if r.error then
         return {
-            title = deps._("LocalSend could not use its discovery port"),
-            text = deps._("Another process may be using the LocalSend network port. Restart KOReader and try again."),
+            title = deps._("Device discovery failed"),
+            text = tostring(r.error),
         }
     elseif (r.peers or 0) > 0 then
-        local aliases = type(r.seen_aliases) == "table" and #r.seen_aliases > 0 and table.concat(r.seen_aliases, ", ") or nil
         return {
             title = deps._("Another LocalSend device was found"),
-            text = aliases and deps.T(deps._("Device discovery is working. Found: %1"), aliases)
-                or deps._("Device discovery is working on this network."),
-        }
-    elseif not r.loopback then
-        return {
-            title = deps._("This network is blocking device discovery"),
-            text = deps._("Try a non-guest Wi-Fi network and disable AP or client isolation in the router settings."),
+            text = deps.T(deps._("Device discovery is working. Found: %1"), table.concat(r.seen_aliases, ", ")),
         }
     end
     return {
         title = deps._("No other LocalSend device answered"),
         text = deps._(
-            "This device's network test passed. Keep LocalSend open on the other device and check its firewall or Local Network permission."
+            "No devices responded during this scan. Keep LocalSend open on the other device "
+                .. "and check its firewall or Local Network permission. This result alone does not show a network failure."
         ),
     }
 end
@@ -1851,89 +1786,6 @@ local function showDiscoveryResult(instance, result)
     deps.UIManager:show(dialog)
 end
 
-local function readNetTestResult()
-    local content = readFile(constants.NETTEST_OUTPUT_FILE)
-    if not content or content == "" then
-        return nil
-    end
-    if not deps.json then
-        return nil
-    end
-    local decode_ok, result = pcall(deps.json.decode, content)
-    if not decode_ok or type(result) ~= "table" then
-        return nil
-    end
-    return result
-end
-
--- Kill a nettest probe that outlived the poll window so it does not hold the
--- discovery port after the troubleshooting test is abandoned.
-local function killStaleNetTest()
-    local pid = tonumber(readFirstLine(constants.NETTEST_PID_FILE) or "")
-    if pid then
-        os.execute("kill " .. tostring(pid) .. " 2>/dev/null")
-    end
-    os.remove(constants.NETTEST_PID_FILE)
-end
-
-local function finishDiscoveryTest(instance, restart_after)
-    instance:closeFirewall()
-    if restart_after then
-        instance:start(true, { keep_history = true })
-    end
-end
-
-function M._pollDiscoveryTest(instance, attempts, deadline, restart_after)
-    local result = readNetTestResult()
-    if result then
-        result.recorded_at = os.date("%Y-%m-%dT%H:%M:%S%z")
-        M._last_discovery_result = result
-        os.remove(constants.NETTEST_OUTPUT_FILE)
-        os.remove(constants.NETTEST_PID_FILE)
-        local text = M.formatDiscoveryResult(instance, result)
-        M._last_discovery_text = text
-        finishDiscoveryTest(instance, restart_after)
-        showDiscoveryResult(instance, classifyDiscoveryResult(result))
-        return
-    end
-    if os.time() > deadline or attempts > 30 then
-        killStaleNetTest()
-        os.remove(constants.NETTEST_OUTPUT_FILE)
-        deps.UIManager:show(deps.InfoMessage:new({
-            icon = "notice-warning",
-            text = deps._("The discovery test timed out. Use Check LocalSend, then try again."),
-            timeout = 4,
-        }))
-        finishDiscoveryTest(instance, restart_after)
-        return
-    end
-    deps.UIManager:scheduleIn(0.5, function()
-        M._pollDiscoveryTest(instance, attempts + 1, deadline, restart_after)
-    end)
-end
-
-function M._launchNetTest(instance, restart_after)
-    os.remove(constants.NETTEST_OUTPUT_FILE)
-    -- Ensure UDP 53317 is reachable for the probe on Kindle. Troubleshooting is
-    -- only reachable while the normal server is stopped, so nettest can own the port.
-    instance:openFirewall()
-    -- Record the probe's PID so a timed-out test can be killed before the firewall closes.
-    local cmd = string.format(
-        "%s nettest --json -d %d > %s 2>/dev/null & echo $! > %s",
-        deps.util.shell_escape({ paths.binary_path }),
-        constants.NETTEST_DURATION,
-        deps.util.shell_escape({ constants.NETTEST_OUTPUT_FILE }),
-        deps.util.shell_escape({ constants.NETTEST_PID_FILE })
-    )
-    deps.logger.dbg("[LocalSend] Running discovery test:", cmd)
-    os.execute(cmd)
-    deps.UIManager:show(deps.InfoMessage:new({
-        text = deps._("Running discovery test… this takes a few seconds."),
-        timeout = 3,
-    }))
-    M._pollDiscoveryTest(instance, 0, os.time() + constants.NETTEST_DURATION + 5, restart_after)
-end
-
 function M.showDiscoveryTest(instance)
     if not deps.util.pathExists(paths.binary_path or "") then
         deps.UIManager:show(deps.InfoMessage:new({
@@ -1942,30 +1794,30 @@ function M.showDiscoveryTest(instance)
         }))
         return
     end
-    -- nettest needs the receiver's port. If the normal server is active, stop it
-    -- briefly and restore it after the result or timeout.
-    if instance.isRunning and instance:isRunning() then
-        local progress = deps.InfoMessage:new({
-            text = deps._("Restarting LocalSend briefly for the discovery test…"),
-            dismissable = false,
-        })
-        deps.UIManager:show(progress)
-        instance:stopServer({
-            callback = function(success)
-                deps.UIManager:close(progress)
-                if success then
-                    M._launchNetTest(instance, true)
-                else
-                    deps.UIManager:show(deps.InfoMessage:new({
-                        icon = "notice-warning",
-                        text = deps._("LocalSend could not be stopped for the discovery test."),
-                    }))
-                end
-            end,
-        })
-    else
-        M._launchNetTest(instance, false)
-    end
+    local progress = discovery.showScanningDialog(function()
+        discovery.cancelScan()
+    end)
+    discovery.scanDevices(function(devices, err)
+        deps.UIManager:close(progress)
+        local result = {
+            error = err,
+            peers = devices and #devices or 0,
+            seen_aliases = {},
+            recorded_at = os.date("%Y-%m-%dT%H:%M:%S%z"),
+            log = readTail(constants.SCAN_LOG_FILE, REPORT_TAIL_BYTES),
+        }
+        for _, device in ipairs(devices or {}) do
+            table.insert(result.seen_aliases, device.alias)
+        end
+        M._last_discovery_result = result
+        M._last_discovery_text = M.formatDiscoveryResult(instance, result)
+        showDiscoveryResult(instance, classifyDiscoveryResult(result))
+    end, {
+        port = instance.port,
+        use_https = instance.use_https,
+        use_webrtc = instance.use_webrtc,
+        device_name = instance.device_name,
+    })
 end
 
 return M

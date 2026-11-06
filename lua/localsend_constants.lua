@@ -20,10 +20,8 @@ M.LAST_SEND_EVIDENCE_FILE = "/tmp/localsend_last_send.json"
 M.SCAN_OUTPUT_FILE = "/tmp/localsend_scan.json"
 M.SCAN_LOG_FILE = "/tmp/localsend_scan.log"
 
--- Diagnostics: nettest (multicast discovery self-test) output
-M.NETTEST_OUTPUT_FILE = "/tmp/localsend_nettest.json"
-M.NETTEST_PID_FILE = "/tmp/localsend_nettest.pid"
-M.NETTEST_DURATION = 3 -- seconds the Go nettest probe listens
+-- Receiver and temporary discovery backend share one private local endpoint.
+M.CONTROL_SOCKET_FILE = "/tmp/localsend-control/control.sock"
 
 -- Polling intervals (seconds)
 M.RECEIVER_POLL_INTERVAL = 2
@@ -43,7 +41,7 @@ M.WEBRTC_PORT_RANGE = "50000:50100"
 -- Scan defaults
 M.SCAN_TIMEOUT_SECONDS = 4 -- Multicast and WebRTC collection window
 M.LEGACY_SCAN_TIMEOUT_SECONDS = 12 -- Bounded dual-protocol subnet scan deadline
-M.SCAN_MAX_POLL_DURATION = 15 -- Maximum seconds to poll before giving up (guard against hung processes)
+M.SCAN_MAX_POLL_DURATION = 20 -- Includes bounded backend startup grace plus legacy discovery
 
 -- Update check defaults
 M.DEFAULT_UPDATE_CHECK_INTERVAL_HOURS = 168 -- Weekly

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
-	"net"
 	"net/http"
 	"path/filepath"
 	"testing"
@@ -23,21 +22,16 @@ func TestFileReceiver_HTTPSRequiresClientCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	probe, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
+	fr := NewFileReceiver("Test Device", tmp, false)
+	if err := fr.Init(); err != nil {
 		t.Fatal(err)
 	}
-	addr := probe.Addr().String()
-	_ = probe.Close()
-
-	fr := newTestReceiver()
 	fr.supportHttps = true
 	fr.cert = serverCert
-	fr.listenAddr = addr
+	fr.SetListenAddr("127.0.0.1:0")
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- fr.Start(ctx) }()
-	waitForTCPListener(t, addr)
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -49,6 +43,12 @@ func TestFileReceiver_HTTPSRequiresClientCertificate(t *testing.T) {
 			t.Error("receiver did not stop")
 		}
 	})
+	select {
+	case <-fr.Ready():
+	case <-time.After(3 * time.Second):
+		t.Fatal("receiver did not become ready")
+	}
+	addr := fr.ListenAddr()
 
 	withoutCert := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
 	if resp, err := withoutCert.Get(fmt.Sprintf("https://%s/api/localsend/v2/info", addr)); err == nil {
@@ -68,18 +68,4 @@ func TestFileReceiver_HTTPSRequiresClientCertificate(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d; want 200", resp.StatusCode)
 	}
-}
-
-func waitForTCPListener(t *testing.T, addr string) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 20*time.Millisecond)
-		if err == nil {
-			_ = conn.Close()
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatalf("listener %s did not start", addr)
 }

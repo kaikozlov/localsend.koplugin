@@ -152,6 +152,9 @@ func (fr *FileReceiver) filterFilesByExtension(files models.FileMetas, remoteIP 
 }
 
 func (fr *FileReceiver) preUploadHandler(c fiber.Ctx) error {
+	if fr.isDiscoveryOnly() {
+		return c.SendStatus(fiber.StatusForbidden)
+	}
 	// Check PIN authentication and rate limiting
 	if status := fr.validatePIN(c); status != 0 {
 		return c.SendStatus(status)
@@ -235,6 +238,9 @@ func (fr *FileReceiver) preUploadHandler(c fiber.Ctx) error {
 }
 
 func (fr *FileReceiver) uploadHandler(c fiber.Ctx) error {
+	if fr.isDiscoveryOnly() {
+		return c.SendStatus(fiber.StatusForbidden)
+	}
 	sessionId := c.Query("sessionId")
 	fileId := c.Query("fileId")
 	token := c.Query("token")
@@ -336,13 +342,14 @@ func (fr *FileReceiver) registerHandler(c fiber.Ctx) error {
 	}
 	if fingerprint, ok := tlsPeerFingerprint(c); ok {
 		announcement.Fingerprint = fingerprint
+		if announcement.Protocol == "" {
+			announcement.Protocol = "https"
+		}
 	}
 
 	// Register the discovered device
 	announcement.IP = c.IP()
-	if discoverer := fr.currentDiscoverer(); discoverer != nil {
-		discoverer.RegisterDevice(announcement)
-	}
+	fr.registerDiscoveredDevice(announcement)
 
 	// Respond with our device info
 	return c.JSON(&fr.identity)

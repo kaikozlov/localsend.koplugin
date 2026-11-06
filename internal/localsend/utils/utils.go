@@ -304,10 +304,9 @@ func ListenWithTLS(server *fiber.App, addr string, cert tls.Certificate, useHTTP
 	return serveLimited(server, addr, tlsConfig)
 }
 
-// ListenWithMutualTLS serves a non-web LocalSend endpoint. Unlike ListenWithTLS,
-// which is also used by the browser-facing reverse sender, HTTPS here requires
-// every peer to present a valid self-signed LocalSend certificate.
-func ListenWithMutualTLS(server *fiber.App, addr string, cert tls.Certificate, useHTTPS bool) error {
+// BindWithMutualTLS binds the limited HTTP listener before discovery advertises.
+// The caller owns the returned listener and must close it when serving ends.
+func BindWithMutualTLS(addr string, cert tls.Certificate, useHTTPS bool) (net.Listener, error) {
 	var tlsConfig *tls.Config
 	if useHTTPS {
 		tlsConfig = &tls.Config{
@@ -316,7 +315,14 @@ func ListenWithMutualTLS(server *fiber.App, addr string, cert tls.Certificate, u
 			VerifyPeerCertificate: VerifyClientCertificate(),
 		}
 	}
-	return serveLimited(server, addr, tlsConfig)
+	ln, err := listenLimited(addr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen: %w", err)
+	}
+	if tlsConfig != nil {
+		ln = tls.NewListener(ln, tlsConfig)
+	}
+	return ln, nil
 }
 
 // serveLimited applies the connection limits below TLS, so refused peers cost

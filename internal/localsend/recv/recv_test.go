@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"localsend-cli/internal/localsend"
 	"localsend-cli/internal/models"
 )
 
@@ -37,6 +38,12 @@ func (d *supervisedDiscoverer) Shutdown() error {
 }
 
 func (d *supervisedDiscoverer) RegisterDevice(models.Announcement) {}
+
+func (d *supervisedDiscoverer) Scan(context.Context, localsend.ScanOptions) (map[string]models.Announcement, error) {
+	return nil, nil
+}
+
+func (d *supervisedDiscoverer) DiscoveredSince(time.Time) map[string]models.Announcement { return nil }
 
 // =============================================================================
 // Race Condition Tests

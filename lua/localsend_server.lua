@@ -98,6 +98,13 @@ local function recoveryAllowed(instance)
     return instance._canRecoverServer and instance:_canRecoverServer() and not state.ServerState.server_restart_exhausted
 end
 
+local function showDiscoveryBusy()
+    deps.UIManager:show(deps.InfoMessage:new({
+        text = deps._("Device discovery is still running. Wait for it to finish, then start receiving."),
+        timeout = 4,
+    }))
+end
+
 function M.cancelUnexpectedRestart(instance, clear_intent)
     local ServerState = state.ServerState
     if instance and instance.server_restart_task then
@@ -367,6 +374,18 @@ function M.start(instance, silent, options)
         return
     end
 
+    -- A scan may own the temporary backend. Do not race it for the shared port
+    -- or change receiver intent when this start request cannot be accepted.
+    if ServerState.scan_in_progress and not instance:isRunning() then
+        if options.recovery then
+            ServerState.server_recovery_start = false
+            M.scheduleUnexpectedRestart(instance, "discovery scan still active")
+        else
+            showDiscoveryBusy()
+        end
+        return
+    end
+
     if options.recovery then
         ServerState.server_recovery_start = true
     else
@@ -418,7 +437,18 @@ function M.start(instance, silent, options)
     end
 
     -- Build command arguments table
-    local args = { binary_path, "recv", "-d", instance.save_dir, "-l", constants.TRANSFER_LOG_FILE }
+    local args = {
+        binary_path,
+        "recv",
+        "-d",
+        instance.save_dir,
+        "-l",
+        constants.TRANSFER_LOG_FILE,
+        "--port",
+        tostring(instance.port or constants.DEFAULT_PORT),
+        "--control-socket",
+        constants.CONTROL_SOCKET_FILE,
+    }
 
     -- Always pass device name (default to "KOReader" if not set)
     local effective_name = instance.device_name ~= "" and instance.device_name or "KOReader"
@@ -667,7 +697,9 @@ end
 -- Clean up server state after stopping (PluginShare, cache, events)
 -- @param instance table LocalSend instance
 function M.cleanupServerState(instance)
-    M.reconcileServerState(instance)
+    if not M.reconcileServerState(instance) then
+        instance:closeFirewall()
+    end
 end
 
 -- User-initiated stop with notification
@@ -700,6 +732,10 @@ end
 -- @param instance table LocalSend instance
 function M.restart(instance)
     local ServerState = state.ServerState
+    if ServerState.scan_in_progress then
+        showDiscoveryBusy()
+        return
+    end
     ServerState.user_stopped = false
     M.cancelUnexpectedRestart(instance, true)
     ServerState.server_intended_running = true
@@ -735,6 +771,10 @@ function M.toggle(instance)
     if instance:isRunning() then
         instance:stop()
     else
+        if ServerState.scan_in_progress then
+            showDiscoveryBusy()
+            return
+        end
         -- User is explicitly starting the server, clear the stopped flag
         -- so autostart can work again if they open another document
         ServerState.user_stopped = false

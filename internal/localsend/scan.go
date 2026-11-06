@@ -134,6 +134,9 @@ type Discoverer struct {
 	responseSem       chan struct{}
 	responseMu        sync.Mutex
 	responsesInFlight map[string]struct{}
+	advertiseRequests chan struct{}
+	multicastAddr     *net.UDPAddr
+	multicastAddrV6   *net.UDPAddr
 
 	// Injectable scan settings keep scheduling and cancellation testable without
 	// depending on the host's real network.
@@ -141,32 +144,15 @@ type Discoverer struct {
 	scanConcurrency int
 }
 
-func NewDiscoverer(devInfo models.DeviceInfo, supportHttps bool) (*Discoverer, error) {
-	if !supportHttps {
-		return newDiscoverer(devInfo, false, tls.Certificate{})
+// NewDiscovererWithCertificateAndPort binds discovery to the receiver's configured port.
+func NewDiscovererWithCertificateAndPort(devInfo models.DeviceInfo, supportHttps bool, cert tls.Certificate, port int) (*Discoverer, error) {
+	if port < 1 || port > 65535 {
+		return nil, fmt.Errorf("invalid discovery port: %d", port)
 	}
-	privateKeyFile, certFile, pathErr := lsutils.GetCertPaths()
-	if pathErr != nil {
-		if supportHttps {
-			return nil, pathErr
-		}
-		return newDiscoverer(devInfo, supportHttps, tls.Certificate{})
-	}
-	cert, certErr := lsutils.LoadOrGenTLScert(privateKeyFile, certFile)
-	if certErr != nil {
-		if supportHttps {
-			return nil, certErr
-		}
-		slog.Debug("HTTPS discovery disabled because device certificate is unavailable", "error", certErr)
-	}
-	return newDiscoverer(devInfo, supportHttps, cert)
-}
-
-func NewDiscovererWithCertificate(devInfo models.DeviceInfo, supportHttps bool, cert tls.Certificate) (*Discoverer, error) {
-	return newDiscoverer(devInfo, supportHttps, cert)
-}
-
-func newDiscoverer(devInfo models.DeviceInfo, supportHttps bool, cert tls.Certificate) (*Discoverer, error) {
+	target := *multicastDiscoveryAddr
+	target.Port = port
+	targetV6 := *multicastDiscoveryAddrV6
+	targetV6.Port = port
 	if supportHttps {
 		fingerprint, err := lsutils.CertificateFingerprint(cert)
 		if err != nil {
@@ -174,7 +160,7 @@ func newDiscoverer(devInfo models.DeviceInfo, supportHttps bool, cert tls.Certif
 		}
 		devInfo.Fingerprint = fingerprint
 	}
-	conn, err := net.ListenMulticastUDP("udp", nil, multicastDiscoveryAddr)
+	conn, err := net.ListenMulticastUDP("udp", nil, &target)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +179,7 @@ func newDiscoverer(devInfo models.DeviceInfo, supportHttps bool, cert tls.Certif
 	configured := make([]string, 0, len(interfaces))
 	for _, ifi := range interfaces {
 		configured = append(configured, ifi.Name)
-		if err := packetConn.JoinGroup(ifi, multicastDiscoveryAddr); err != nil {
+		if err := packetConn.JoinGroup(ifi, &target); err != nil {
 			// ListenMulticastUDP has already joined the system-selected interface,
 			// so a duplicate-membership error for that interface is harmless.
 			slog.Debug("Could not additionally join multicast interface", "interface", ifi.Name, "error", err)
@@ -203,7 +189,7 @@ func newDiscoverer(devInfo models.DeviceInfo, supportHttps bool, cert tls.Certif
 	if len(configured) > 0 {
 		slog.Info("Configured LocalSend multicast interfaces", "interfaces", configured)
 	}
-	connV6, packetConnV6, interfacesV6 := newIPv6MulticastListener()
+	connV6, packetConnV6, interfacesV6 := newIPv6MulticastListenerOn(&targetV6)
 
 	return &Discoverer{
 		mcastConn:         conn,
@@ -215,7 +201,7 @@ func newDiscoverer(devInfo models.DeviceInfo, supportHttps bool, cert tls.Certif
 		cert:              cert,
 		selfAnno: &models.Announcement{
 			DeviceInfo: devInfo,
-			Port:       constants.DefaultPort,
+			Port:       port,
 			Protocol:   protocol,
 			Announce:   true,
 		},
@@ -228,22 +214,13 @@ func newDiscoverer(devInfo models.DeviceInfo, supportHttps bool, cert tls.Certif
 		responsesInFlight: make(map[string]struct{}),
 		scanHTTPClient:    nil,
 		scanConcurrency:   maxConcurrentScans,
+		advertiseRequests: make(chan struct{}, 1),
+		multicastAddr:     &target,
+		multicastAddrV6:   &targetV6,
 	}, nil
 }
 
-// SetAdvertisedEndpoint updates the HTTP endpoint carried in multicast/register
-// discovery messages. Call it before Listen when a short-lived scanner uses an
-// ephemeral callback listener instead of the default receiver port.
-func (mcs *Discoverer) SetAdvertisedEndpoint(port int, protocol string) {
-	if port > 0 {
-		mcs.selfAnno.Port = port
-	}
-	if protocol != "" {
-		mcs.selfAnno.Protocol = protocol
-	}
-}
-
-func newIPv6MulticastListener() (*net.UDPConn, *ipv6.PacketConn, []*net.Interface) {
+func newIPv6MulticastListenerOn(target *net.UDPAddr) (*net.UDPConn, *ipv6.PacketConn, []*net.Interface) {
 	interfaces, err := eligibleIPv6MulticastInterfaces()
 	if err != nil {
 		slog.Debug("Failed to enumerate IPv6 multicast interfaces", "error", err)
@@ -256,7 +233,7 @@ func newIPv6MulticastListener() (*net.UDPConn, *ipv6.PacketConn, []*net.Interfac
 	var conn *net.UDPConn
 	var first *net.Interface
 	for _, ifi := range interfaces {
-		firstTarget := *multicastDiscoveryAddrV6
+		firstTarget := *target
 		firstTarget.Zone = ifi.Name
 		candidate, listenErr := net.ListenMulticastUDP("udp6", ifi, &firstTarget)
 		if listenErr != nil {
@@ -279,7 +256,7 @@ func newIPv6MulticastListener() (*net.UDPConn, *ipv6.PacketConn, []*net.Interfac
 		if ifi.Index == first.Index {
 			continue
 		}
-		if err := packetConn.JoinGroup(ifi, multicastDiscoveryAddrV6); err != nil {
+		if err := packetConn.JoinGroup(ifi, target); err != nil {
 			slog.Debug("Could not join IPv6 multicast interface", "interface", ifi.Name, "error", err)
 			continue
 		}
@@ -415,34 +392,25 @@ func (ma *Discoverer) listenOn(conn *net.UDPConn, readBuf []byte) error {
 }
 
 func (ma *Discoverer) announcementTask() {
-	// Repeat quickly so a sleeping Wi-Fi peer has several chances to receive a
-	// short scan, then continue at the normal receiver advertisement interval.
-	delays := []time.Duration{0, 100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
-	for _, delay := range delays {
-		if delay > 0 {
-			timer := time.NewTimer(delay)
-			select {
-			case <-ma.stop:
-				timer.Stop()
-				return
-			case <-timer.C:
-			}
-		}
-		if err := ma.advertise(); err != nil && !isClosedConnError(err) {
-			slog.Warn("Failed to send multicast announcement", "error", err)
-		}
-	}
-
-	ticker := time.NewTicker(advInterval)
-	defer ticker.Stop()
+	delays := []time.Duration{100 * time.Millisecond, 500 * time.Millisecond, 2 * time.Second}
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	next := 0
 	for {
 		select {
 		case <-ma.stop:
 			return
-		case <-ticker.C:
-			if err := ma.advertise(); err != nil && !isClosedConnError(err) {
-				slog.Warn("Failed to send multicast announcement", "error", err)
+		case <-ma.advertiseRequests:
+		case <-timer.C:
+			delay := advInterval
+			if next < len(delays) {
+				delay = delays[next]
+				next++
 			}
+			timer.Reset(delay)
+		}
+		if err := ma.advertise(); err != nil && !isClosedConnError(err) {
+			slog.Warn("Failed to send multicast announcement", "error", err)
 		}
 	}
 }
@@ -521,8 +489,12 @@ func (ma *Discoverer) advertise() error {
 }
 
 func (ma *Discoverer) advertiseV4(b []byte) error {
+	target := ma.multicastAddr
+	if target == nil {
+		target = multicastDiscoveryAddr
+	}
 	if ma.mcastPacketConn == nil || len(ma.mcastInterfaces) == 0 {
-		_, err := ma.mcastConn.WriteToUDP(b, multicastDiscoveryAddr)
+		_, err := ma.mcastConn.WriteToUDP(b, target)
 		return err
 	}
 
@@ -533,7 +505,7 @@ func (ma *Discoverer) advertiseV4(b []byte) error {
 			lastErr = err
 			continue
 		}
-		if _, err := ma.mcastConn.WriteToUDP(b, multicastDiscoveryAddr); err != nil {
+		if _, err := ma.mcastConn.WriteToUDP(b, target); err != nil {
 			lastErr = err
 			continue
 		}
@@ -554,6 +526,9 @@ func (ma *Discoverer) advertiseV6(b []byte) error {
 			continue
 		}
 		target := *multicastDiscoveryAddrV6
+		if ma.multicastAddrV6 != nil {
+			target = *ma.multicastAddrV6
+		}
 		target.Zone = ifi.Name
 		if _, err := ma.mcastConnV6.WriteToUDP(b, &target); err != nil {
 			lastErr = err
@@ -574,7 +549,9 @@ func (ma *Discoverer) Shutdown() error {
 	ma.stopOnce.Do(func() {
 		// Close connections first to unblock pending multicast reads,
 		// allowing Listen() to return to the select and receive the stop signal
-		_ = ma.mcastConn.Close()
+		if ma.mcastConn != nil {
+			_ = ma.mcastConn.Close()
+		}
 		if ma.mcastConnV6 != nil {
 			_ = ma.mcastConnV6.Close()
 		}
@@ -820,10 +797,13 @@ func discoveryChannelKey(host, protocol string, port int) string {
 	return host + "|" + protocol + "|" + strconv.Itoa(port)
 }
 
-func bestDiscoveryChannel(channels map[string]discoveryChannel) (discoveryChannel, bool) {
+func bestDiscoveryChannel(channels map[string]discoveryChannel, since time.Time) (discoveryChannel, bool) {
 	var best discoveryChannel
 	found := false
 	for _, channel := range channels {
+		if channel.lastSeen.Before(since) {
+			continue
+		}
 		if !found {
 			best, found = channel, true
 			continue
@@ -845,25 +825,16 @@ func bestDiscoveryChannel(channels map[string]discoveryChannel) (discoveryChanne
 	return best, found
 }
 
-func (mcs *Discoverer) GetAllDiscovered() map[string]models.Announcement {
-	mcs.mu.RLock()
-	defer mcs.mu.RUnlock()
-
-	result := make(map[string]models.Announcement, len(mcs.discovered))
-	for _, entry := range mcs.discovered {
-		channel, ok := bestDiscoveryChannel(entry.channels)
-		if !ok {
-			continue
-		}
-		anno := entry.anno
-		anno.Protocol = channel.protocol
-		anno.Port = channel.port
-		result[channel.host] = anno
-	}
-	return result
-}
-
 func (mcs *Discoverer) PutDiscovered(ip string, anno models.Announcement) {
+	if mcs.selfAnno != nil && anno.Fingerprint != "" && strings.EqualFold(anno.Fingerprint, mcs.selfAnno.Fingerprint) {
+		return
+	}
+	if anno.Port == 0 {
+		anno.Port = constants.DefaultPort
+	}
+	if anno.Protocol == "" {
+		anno.Protocol = "http"
+	}
 	mcs.mu.Lock()
 	defer mcs.mu.Unlock()
 
@@ -947,14 +918,12 @@ func buildSubnetTargets(ips []net.IP) []string {
 	return targets
 }
 
-// ScanSubnet performs legacy HTTP discovery by scanning the /24 of all usable IPv4 interfaces
-// per protocol spec Section 3.2.
-func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
+// scanSubnet probes the /24 of all usable IPv4 interfaces (protocol section 3.2).
+func (mcs *Discoverer) scanSubnet(ctx context.Context) error {
 	started := time.Now()
 	ips, err := mcs.getCachedIPs()
 	if err != nil {
-		slog.Error("Failed to get local IPs for subnet scan", "error", err)
-		return
+		return fmt.Errorf("get local IPs for subnet scan: %w", err)
 	}
 
 	regBody := models.Announcement{
@@ -965,18 +934,7 @@ func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
 	}
 	bodyBytes, err := json.Marshal(regBody)
 	if err != nil {
-		slog.Error("Failed to marshal registration body", "error", err)
-		return
-	}
-	httpsRegBody := regBody
-	httpsRegBody.Protocol = "https"
-	if fingerprint, fingerprintErr := lsutils.CertificateFingerprint(mcs.cert); fingerprintErr == nil {
-		httpsRegBody.Fingerprint = fingerprint
-	}
-	httpsBodyBytes, err := json.Marshal(httpsRegBody)
-	if err != nil {
-		slog.Error("Failed to marshal HTTPS registration body", "error", err)
-		return
+		return fmt.Errorf("marshal registration body: %w", err)
 	}
 
 	targets := buildSubnetTargets(ips)
@@ -988,7 +946,6 @@ func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
 	type scanJob struct {
 		ip     string
 		scheme string
-		body   []byte
 	}
 	jobs := make(chan scanJob)
 	var wg sync.WaitGroup
@@ -1001,7 +958,7 @@ func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
 			defer wg.Done()
 			for job := range jobs {
 				attempted.Add(1)
-				if mcs.tryScanIP(ctx, job.ip, job.scheme, job.body) {
+				if mcs.tryScanIP(ctx, job.ip, job.scheme, bodyBytes) {
 					found.Add(1)
 				}
 			}
@@ -1011,14 +968,10 @@ func (mcs *Discoverer) ScanSubnet(ctx context.Context) {
 enqueue:
 	for _, target := range targets {
 		for _, scheme := range []string{"https", "http"} {
-			jobBody := bodyBytes
-			if scheme == "https" {
-				jobBody = httpsBodyBytes
-			}
 			select {
 			case <-ctx.Done():
 				break enqueue
-			case jobs <- scanJob{ip: target, scheme: scheme, body: jobBody}:
+			case jobs <- scanJob{ip: target, scheme: scheme}:
 			}
 		}
 	}
@@ -1033,6 +986,7 @@ enqueue:
 		"canceled", ctx.Err() != nil,
 		"duration", time.Since(started),
 	)
+	return nil
 }
 
 // httpClientForScan is a shared HTTP client for subnet scanning.
@@ -1061,7 +1015,11 @@ var httpClientForScan = &http.Client{
 // tryScanIP attempts to discover a device at the given IP using the specified protocol.
 // Returns true if a device was found and registered.
 func (mcs *Discoverer) tryScanIP(ctx context.Context, ip, scheme string, bodyBytes []byte) bool {
-	remoteAddr := net.JoinHostPort(ip, constants.DefaultPortStr)
+	port := mcs.selfAnno.Port
+	if port == 0 {
+		port = constants.DefaultPort
+	}
+	remoteAddr := net.JoinHostPort(ip, strconv.Itoa(port))
 	endpoint := url.URL{Scheme: scheme, Host: remoteAddr, Path: constants.RegisterPath}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(bodyBytes))
@@ -1109,7 +1067,7 @@ func (mcs *Discoverer) tryScanIP(ctx context.Context, ip, scheme string, bodyByt
 	mcs.PutDiscovered(ip, models.Announcement{
 		DeviceInfo: deviceInfo,
 		Protocol:   scheme,
-		Port:       constants.DefaultPort,
+		Port:       port,
 		Announce:   false,
 	})
 	return true

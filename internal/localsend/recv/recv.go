@@ -5,11 +5,14 @@ import (
 	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"sync"
 	"time"
 
@@ -59,19 +62,63 @@ type FileReceiver struct {
 	cmdWg    sync.WaitGroup
 	cmdSlots chan struct{}
 	stopped  bool
+
+	lifecycleMu       sync.Mutex
+	initialized       bool
+	started           bool
+	discoveryOnly     bool
+	ready             chan struct{}
+	done              chan struct{}
+	stopOnce          sync.Once
+	stopErr           error
+	runtimeCancel     context.CancelFunc
+	listener          net.Listener
+	discoveryWG       sync.WaitGroup
+	discoveryChanged  chan struct{}
+	previousDiscovery *localsend.Discoverer
+	lastDiscoveryErr  error
+	scanMu            sync.Mutex
 }
 
 type receiverDiscoverer interface {
 	Listen() error
 	Shutdown() error
 	RegisterDevice(models.Announcement)
+	Scan(context.Context, localsend.ScanOptions) (map[string]models.Announcement, error)
+	DiscoveredSince(time.Time) map[string]models.Announcement
 }
 
 func (fr *FileReceiver) createDiscoverer() (receiverDiscoverer, error) {
+	var discoverer receiverDiscoverer
+	var err error
 	if fr.newDiscoverer != nil {
-		return fr.newDiscoverer()
+		discoverer, err = fr.newDiscoverer()
+	} else {
+		_, portText, splitErr := net.SplitHostPort(fr.ListenAddr())
+		if splitErr != nil {
+			return nil, splitErr
+		}
+		port, parseErr := strconv.Atoi(portText)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		discoverer, err = localsend.NewDiscovererWithCertificateAndPort(fr.identity, fr.supportHttps, fr.cert, port)
 	}
-	return localsend.NewDiscovererWithCertificate(fr.identity, fr.supportHttps, fr.cert)
+	if err != nil {
+		fr.discoveryMu.Lock()
+		fr.lastDiscoveryErr = err
+		fr.discoveryMu.Unlock()
+		return nil, err
+	}
+	if native, ok := discoverer.(*localsend.Discoverer); ok {
+		fr.discoveryMu.Lock()
+		if fr.previousDiscovery != nil {
+			native.ShareDiscoveries(fr.previousDiscovery)
+		}
+		fr.previousDiscovery = native
+		fr.discoveryMu.Unlock()
+	}
+	return discoverer, nil
 }
 
 // PIN rate limiting constants - use shared constants from constants package
@@ -103,9 +150,9 @@ func NewFileReceiver(devname string, saveToDir string, supportHttps bool) *FileR
 		generatedNonceCache: localsend.NewNonceCache(200),
 		cmdSlots:            make(chan struct{}, 4),
 		discoveryRetryDelay: 2 * time.Second,
-	}
-	fr.newDiscoverer = func() (receiverDiscoverer, error) {
-		return localsend.NewDiscovererWithCertificate(fr.identity, fr.supportHttps, fr.cert)
+		ready:               make(chan struct{}),
+		done:                make(chan struct{}),
+		discoveryChanged:    make(chan struct{}),
 	}
 	return fr
 }
@@ -129,6 +176,25 @@ func (fr *FileReceiver) ListenAddr() string {
 	fr.configMu.RLock()
 	defer fr.configMu.RUnlock()
 	return fr.listenAddr
+}
+
+// SetDiscoveryOnly disables transfer acceptance. Call before Init.
+func (fr *FileReceiver) SetDiscoveryOnly(discoveryOnly bool) {
+	fr.configMu.Lock()
+	defer fr.configMu.Unlock()
+	fr.discoveryOnly = discoveryOnly
+}
+
+func (fr *FileReceiver) isDiscoveryOnly() bool {
+	fr.configMu.RLock()
+	defer fr.configMu.RUnlock()
+	return fr.discoveryOnly
+}
+
+// Ready closes once the HTTP listener is bound and its endpoint is advertised.
+// Startup failure or Stop before Start leaves Ready open; Start returns the error.
+func (fr *FileReceiver) Ready() <-chan struct{} {
+	return fr.ready
 }
 
 func (fr *FileReceiver) SetTransferLog(path string) {
@@ -362,10 +428,22 @@ func (fr *FileReceiver) hasExtensionRouter() bool {
 }
 
 func (fr *FileReceiver) Init() error {
-	// ensure save directory exists
-	err := os.MkdirAll(fr.saveToDir, fs.ModePerm)
-	if err != nil {
-		return fmt.Errorf("failed to create save directory: %w", err)
+	fr.lifecycleMu.Lock()
+	defer fr.lifecycleMu.Unlock()
+	if fr.initialized {
+		return errors.New("receiver already initialized")
+	}
+	fr.configMu.RLock()
+	stopped := fr.stopped
+	fr.configMu.RUnlock()
+	if stopped {
+		return errors.New("receiver stopped")
+	}
+	var err error
+	if !fr.isDiscoveryOnly() {
+		if err = os.MkdirAll(fr.saveToDir, fs.ModePerm); err != nil {
+			return fmt.Errorf("failed to create save directory: %w", err)
+		}
 	}
 
 	if fr.supportHttps {
@@ -396,42 +474,61 @@ func (fr *FileReceiver) Init() error {
 		}
 	}
 
-	// Create the initial discovery instance. Failure is non-fatal: the runtime
-	// supervisor below retries when a network interface becomes available.
-	discoverer, discoveryErr := fr.createDiscoverer()
-	if discoveryErr != nil {
-		slog.Warn("Failed to create discoverer; will retry", "error", discoveryErr)
-	} else {
-		fr.discoveryMu.Lock()
-		fr.discoverier = discoverer
-		fr.discoveryMu.Unlock()
+	if !fr.isDiscoveryOnly() {
+		fr.sessman.Start()
 	}
-
-	// start session cleanup task
-	fr.sessman.Start()
+	fr.initialized = true
 
 	return nil
 }
 
 func (fr *FileReceiver) Start(ctx context.Context) error {
-	server := fr.webServer
-	fr.registerRoutes(server)
-
-	slog.Info("Waiting for files (Ctrl-C to terminate)")
-
-	// Start PIN attempts cleanup goroutine (prevents unbounded memory growth)
-	go fr.pinCleanupTask(ctx)
-
-	// Start discovery/advertisement (with retry if network wasn't available at init)
-	go fr.startDiscoveryWithRetry(ctx)
-
-	// Listen for context cancellation to trigger graceful shutdown
-	go func() {
-		<-ctx.Done()
+	fr.lifecycleMu.Lock()
+	fr.configMu.RLock()
+	stopped := fr.stopped
+	fr.configMu.RUnlock()
+	if !fr.initialized || fr.started || stopped {
+		fr.lifecycleMu.Unlock()
+		return errors.New("receiver is not initialized, already started, or stopped")
+	}
+	if err := ctx.Err(); err != nil {
+		fr.lifecycleMu.Unlock()
 		_ = fr.Stop()
+		return err
+	}
+	fr.started = true
+	fr.registerRoutes(fr.webServer)
+	listener, err := lsutils.BindWithMutualTLS(fr.ListenAddr(), fr.cert, fr.supportHttps)
+	if err != nil {
+		fr.lifecycleMu.Unlock()
+		_ = fr.Stop()
+		return err
+	}
+	fr.listener = listener
+	fr.SetListenAddr(listener.Addr().String())
+	runtimeCtx, cancel := context.WithCancel(ctx)
+	fr.runtimeCancel = cancel
+	if discoverer, discoveryErr := fr.createDiscoverer(); discoveryErr != nil {
+		slog.Warn("Failed to create discoverer; will retry", "error", discoveryErr)
+	} else {
+		fr.installDiscoverer(discoverer)
+	}
+	fr.discoveryWG.Add(1)
+	close(fr.ready)
+	go func() {
+		defer fr.discoveryWG.Done()
+		fr.startDiscoveryWithRetry(runtimeCtx)
 	}()
-
-	return lsutils.ListenWithMutualTLS(fr.webServer, fr.listenAddr, fr.cert, fr.supportHttps)
+	go fr.pinCleanupTask(runtimeCtx)
+	fr.lifecycleMu.Unlock()
+	stopShutdown := context.AfterFunc(runtimeCtx, func() { _ = fr.Stop() })
+	defer stopShutdown()
+	defer func() { _ = fr.Stop() }()
+	err = fr.webServer.Listener(listener, fiber.ListenConfig{DisableStartupMessage: true})
+	if runtimeCtx.Err() != nil || errors.Is(err, net.ErrClosed) {
+		return nil
+	}
+	return err
 }
 
 func (fr *FileReceiver) registerRoutes(server *fiber.App) {
@@ -458,9 +555,35 @@ func (fr *FileReceiver) currentDiscoverer() receiverDiscoverer {
 	return fr.discoverier
 }
 
+func (fr *FileReceiver) discoveryUnavailableError() error {
+	fr.discoveryMu.Lock()
+	defer fr.discoveryMu.Unlock()
+	if fr.lastDiscoveryErr != nil {
+		return fmt.Errorf("discovery unavailable before scan deadline: %w", fr.lastDiscoveryErr)
+	}
+	return errors.New("discovery unavailable before scan deadline")
+}
+
+func (fr *FileReceiver) registerDiscoveredDevice(announcement models.Announcement) {
+	fr.discoveryMu.Lock()
+	discoverer := fr.discoverier
+	if discoverer == nil && fr.previousDiscovery != nil {
+		discoverer = fr.previousDiscovery
+	}
+	fr.discoveryMu.Unlock()
+	if discoverer != nil {
+		discoverer.RegisterDevice(announcement)
+	}
+}
+
 func (fr *FileReceiver) installDiscoverer(discoverer receiverDiscoverer) {
 	fr.discoveryMu.Lock()
 	fr.discoverier = discoverer
+	fr.lastDiscoveryErr = nil
+	if fr.discoveryChanged != nil {
+		close(fr.discoveryChanged)
+		fr.discoveryChanged = make(chan struct{})
+	}
 	fr.discoveryMu.Unlock()
 }
 
@@ -468,6 +591,10 @@ func (fr *FileReceiver) clearDiscoverer(discoverer receiverDiscoverer) {
 	fr.discoveryMu.Lock()
 	if fr.discoverier == discoverer {
 		fr.discoverier = nil
+		if fr.discoveryChanged != nil {
+			close(fr.discoveryChanged)
+			fr.discoveryChanged = make(chan struct{})
+		}
 	}
 	fr.discoveryMu.Unlock()
 }
@@ -525,38 +652,47 @@ func (fr *FileReceiver) startDiscoveryWithRetry(ctx context.Context) {
 }
 
 func (fr *FileReceiver) Stop() error {
-	slog.Info("Stop receiving")
-	fr.configMu.Lock()
-	fr.stopped = true
-	fr.configMu.Unlock()
-
-	fr.sessman.Stop()
-	fr.discoveryMu.Lock()
-	discoverer := fr.discoverier
-	fr.discoveryMu.Unlock()
-	if discoverer != nil {
-		_ = discoverer.Shutdown()
-	}
-	fr.closeTransferLog()
-
-	// Wait for transfer command goroutines to finish (with timeout)
-	done := make(chan struct{})
-	go func() {
-		fr.cmdWg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		// All commands finished
-	case <-time.After(5 * time.Second):
-		slog.Warn("Transfer commands still running at shutdown")
-	}
-
-	// Graceful shutdown with 5 second timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	return fr.webServer.ShutdownWithContext(ctx)
+	fr.stopOnce.Do(func() {
+		fr.lifecycleMu.Lock()
+		fr.configMu.Lock()
+		fr.stopped = true
+		fr.configMu.Unlock()
+		if fr.done != nil {
+			close(fr.done)
+		}
+		if fr.runtimeCancel != nil {
+			fr.runtimeCancel()
+		}
+		if fr.listener != nil {
+			_ = fr.listener.Close()
+		}
+		fr.lifecycleMu.Unlock()
+		fr.sessman.Stop()
+		if discoverer := fr.currentDiscoverer(); discoverer != nil {
+			_ = discoverer.Shutdown()
+		}
+		fr.discoveryWG.Wait()
+		fr.closeTransferLog()
+		done := make(chan struct{})
+		go func() {
+			fr.cmdWg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			slog.Warn("Transfer commands still running at shutdown")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		fr.stopErr = fr.webServer.ShutdownWithContext(ctx)
+		// The listener was deliberately closed above to prevent new accepts
+		// before waiting for discovery and transfer callbacks to stop.
+		if errors.Is(fr.stopErr, net.ErrClosed) {
+			fr.stopErr = nil
+		}
+	})
+	return fr.stopErr
 }
 
 // pinCleanupTask periodically removes expired PIN attempt entries.

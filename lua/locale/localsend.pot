@@ -9,7 +9,7 @@ msgstr ""
 "Project-Id-Version: localsend v1.4.6\n"
 "Report-Msgid-Bugs-To: https://github.com/kaikozlov/localsend.koplugin/"
 "issues\n"
-"POT-Creation-Date: 2026-11-03 22:16+0000\n"
+"POT-Creation-Date: 2026-11-06 18:11+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -19,290 +19,285 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=INTEGER; plural=EXPRESSION;\n"
 
-#: lua/_meta.lua:3 lua/main.lua:1423
+#: lua/_meta.lua lua/main.lua
 msgid "LocalSend"
 msgstr ""
 
-#: lua/_meta.lua:4 lua/main.lua:1342
+#: lua/_meta.lua lua/main.lua
 msgid "Send and receive files using LocalSend protocol."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:582 lua/localsend_diagnostics.lua:586
+#: lua/localsend_diagnostics.lua
 msgid "LAN connected"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:587
+#: lua/localsend_diagnostics.lua
 msgid "Enable Wi-Fi and connect to the same network as your other devices."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:594
+#: lua/localsend_diagnostics.lua
 msgid "Receiver program present"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:595
+#: lua/localsend_diagnostics.lua
 msgid ""
 "The LocalSend receiver program is missing. Reinstall the plugin from Updates."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:600 lua/localsend_diagnostics.lua:615
+#: lua/localsend_diagnostics.lua
 msgid "Receiver program runs"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:602
+#: lua/localsend_diagnostics.lua
 msgid ""
 "The receiver is installed but cannot run. Reinstall the package matching "
 "this device and preserve executable permissions."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:608
+#: lua/localsend_diagnostics.lua
 msgid "Receiver package matches this device"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:609
+#: lua/localsend_diagnostics.lua
 msgid "package %1, device %2"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:610
+#: lua/localsend_diagnostics.lua
 msgid "Install the LocalSend package matching this device."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:620
+#: lua/localsend_diagnostics.lua
 msgid "not configured"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:622 lua/localsend_diagnostics.lua:626
+#: lua/localsend_diagnostics.lua
 msgid "Receive folder writable"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:628
+#: lua/localsend_diagnostics.lua
 msgid "Choose an existing folder that KOReader can write to."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:633 lua/localsend_diagnostics.lua:637
+#: lua/localsend_diagnostics.lua
 msgid "Receiver self-test"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:638 lua/localsend_diagnostics.lua:651
-#: lua/main.lua:1343
+#: lua/localsend_diagnostics.lua lua/main.lua
 msgid "unknown"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:639
+#: lua/localsend_diagnostics.lua
 msgid ""
 "The receiver did not start and answer on this device. Check the backend log "
 "below."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:644
+#: lua/localsend_diagnostics.lua
 msgid "Firewall"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:646 lua/localsend_diagnostics.lua:650
+#: lua/localsend_diagnostics.lua
 msgid "Firewall rules"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:652
+#: lua/localsend_diagnostics.lua
 msgid "The plugin could not open its firewall rules for port %1."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:658 lua/localsend_diagnostics.lua:662
+#: lua/localsend_diagnostics.lua
 msgid "Internet reachable (WebRTC)"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:658
+#: lua/localsend_diagnostics.lua
 msgid "online"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:663
+#: lua/localsend_diagnostics.lua
 msgid ""
 "WebRTC needs Internet access. Connect to the Internet or disable WebRTC for "
 "LAN-only transfers."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:671
+#: lua/localsend_diagnostics.lua
 msgid "just now"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:671
+#: lua/localsend_diagnostics.lua
 msgid "%1 min ago"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:675 lua/localsend_diagnostics.lua:681
-#: lua/localsend_diagnostics.lua:687
+#: lua/localsend_diagnostics.lua
 msgid "Last send"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:682 lua/localsend_sender.lua:794
+#: lua/localsend_diagnostics.lua lua/localsend_sender.lua
 msgid "OK"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:688
+#: lua/localsend_diagnostics.lua
 msgid "failed"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:689
+#: lua/localsend_diagnostics.lua
 msgid "A recent send failed. Use Transfer failed? for a focused explanation."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:710
+#: lua/localsend_diagnostics.lua
 msgid "Result: all %1 check passed"
 msgid_plural "Result: all %1 checks passed"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lua/localsend_diagnostics.lua:712
+#: lua/localsend_diagnostics.lua
 msgid "Result: %1 passed, %2 to fix"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:730
+#: lua/localsend_diagnostics.lua
 msgid ""
 "If another device still cannot find this one, choose “Can't find a device?”."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1192
+#: lua/localsend_diagnostics.lua
 msgid "Wi-Fi is not connected"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1193
+#: lua/localsend_diagnostics.lua
 msgid ""
 "Connect this device to the same Wi-Fi network as the phone or computer you "
 "want to use."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1195
+#: lua/localsend_diagnostics.lua
 msgid "Connect Wi-Fi"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1201
+#: lua/localsend_diagnostics.lua
 msgid "LocalSend needs to be reinstalled"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1202
+#: lua/localsend_diagnostics.lua
 msgid "The receiver program is missing from the plugin installation."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1204 lua/localsend_diagnostics.lua:1213
-#: lua/localsend_update.lua:801
+#: lua/localsend_diagnostics.lua lua/localsend_update.lua
 msgid "Reinstall"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1210
+#: lua/localsend_diagnostics.lua
 msgid "The installed package does not work on this device"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1211
+#: lua/localsend_diagnostics.lua
 msgid ""
 "Reinstall the LocalSend package that matches this device. Also preserve "
 "executable permissions when extracting it."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1219
+#: lua/localsend_diagnostics.lua
 msgid "Files cannot be saved to the selected folder"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1220
+#: lua/localsend_diagnostics.lua
 msgid ""
 "Choose an existing folder that KOReader can write to, then try the transfer "
 "again."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1222 lua/localsend_diagnostics.lua:1558
+#: lua/localsend_diagnostics.lua
 msgid "Choose folder"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1228
+#: lua/localsend_diagnostics.lua
 msgid "The LocalSend receiver could not start"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1229
+#: lua/localsend_diagnostics.lua
 msgid ""
 "The receiver did not answer on this device. The backend log may explain why."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1231
+#: lua/localsend_diagnostics.lua
 msgid "View log"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1237
+#: lua/localsend_diagnostics.lua
 msgid "LocalSend could not open its network port"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1238
+#: lua/localsend_diagnostics.lua
 msgid "This device could not allow LocalSend through its firewall on port %1."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1240 lua/localsend_diagnostics.lua:1574
+#: lua/localsend_diagnostics.lua
 msgid "View details"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1245
+#: lua/localsend_diagnostics.lua
 msgid "LocalSend is ready on this device"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1247
+#: lua/localsend_diagnostics.lua
 msgid ""
 "The receiver starts correctly and the save folder is writable. If another "
 "device still cannot find this one, test device discovery next."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1250
+#: lua/localsend_diagnostics.lua
 msgid "Test discovery"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1257
+#: lua/localsend_diagnostics.lua
 msgid ""
 "This disables encrypted LocalSend transfers until you turn HTTPS back on in "
 "Settings. The receiver will restart."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1258
+#: lua/localsend_diagnostics.lua
 msgid "Disable HTTPS"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1288
+#: lua/localsend_diagnostics.lua
 msgid ""
 "Open LocalSend Settings and review Allowed extensions and File type routing."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1302 lua/localsend_diagnostics.lua:1831
-#: lua/main.lua:1749
+#: lua/localsend_diagnostics.lua lua/main.lua
 msgid "Technical details"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1322 lua/localsend_diagnostics.lua:1490
-#: lua/localsend_diagnostics.lua:1843 lua/main.lua:1349
+#: lua/localsend_diagnostics.lua lua/main.lua
 msgid "Close"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1329 lua/localsend_diagnostics.lua:1353
+#: lua/localsend_diagnostics.lua
 msgid "LocalSend check"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1339
+#: lua/localsend_diagnostics.lua
 msgid "Checking LocalSend…"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1410
+#: lua/localsend_diagnostics.lua
 msgid "LocalSend diagnostics"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1416
+#: lua/localsend_diagnostics.lua
 msgid "Collecting technical details…"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1426
+#: lua/localsend_diagnostics.lua
 msgid "Could not retrieve network info."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1436
+#: lua/localsend_diagnostics.lua
 msgid "LocalSend backend log"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1437
+#: lua/localsend_diagnostics.lua
 msgid "No backend log found."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1453
+#: lua/localsend_diagnostics.lua
 msgid ""
 "When reporting a LocalSend issue, please include:\n"
 "\n"
@@ -320,587 +315,570 @@ msgid ""
 "%1"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1481
+#: lua/localsend_diagnostics.lua
 msgid "Copy report"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1485
+#: lua/localsend_diagnostics.lua
 msgid "Support report copied"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1498
+#: lua/localsend_diagnostics.lua
 msgid "LocalSend support report"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1507
+#: lua/localsend_diagnostics.lua
 msgid "Creating support report…"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1555
+#: lua/localsend_diagnostics.lua
 msgid "The receiving device could not save the file"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1556
+#: lua/localsend_diagnostics.lua
 msgid ""
 "Its storage may be full, unavailable, or read-only. Check free space or "
 "choose another receive folder."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1563
+#: lua/localsend_diagnostics.lua
 msgid "The receiving device rejected this file"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1564
+#: lua/localsend_diagnostics.lua
 msgid ""
 "Review Allowed extensions and File type routing on the receiving device."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1566
+#: lua/localsend_diagnostics.lua
 msgid "Review settings"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1571
+#: lua/localsend_diagnostics.lua
 msgid "The PIN was not accepted"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1572
+#: lua/localsend_diagnostics.lua
 msgid "Enter the PIN shown by the receiving device and try again."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1589
+#: lua/localsend_diagnostics.lua
 msgid "The secure connection failed"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1590
+#: lua/localsend_diagnostics.lua
 msgid ""
 "The devices could not establish an HTTPS connection. You can temporarily "
 "test without HTTPS."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1592
+#: lua/localsend_diagnostics.lua
 msgid "Try without HTTPS"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1604
+#: lua/localsend_diagnostics.lua
 msgid "The other device is not reachable"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1605
+#: lua/localsend_diagnostics.lua
 msgid ""
 "Make sure LocalSend is open on the other device and both devices are "
 "connected to the same Wi-Fi network."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1607
+#: lua/localsend_diagnostics.lua
 msgid "Find devices"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1618
+#: lua/localsend_diagnostics.lua
 msgid "The connection ended during the transfer"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1620
+#: lua/localsend_diagnostics.lua
 msgid ""
 "Keep both devices awake and connected to Wi-Fi, then retry. If it happens "
 "again, create a support report immediately afterward."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1623 lua/localsend_diagnostics.lua:1631
-#: lua/localsend_diagnostics.lua:1641 lua/localsend_diagnostics.lua:1650
+#: lua/localsend_diagnostics.lua
 msgid "Create report"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1628
+#: lua/localsend_diagnostics.lua
 msgid "The received file did not pass verification"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1629
+#: lua/localsend_diagnostics.lua
 msgid ""
 "The transfer was incomplete or corrupted. Retry it while both devices have a "
 "stable Wi-Fi connection."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1636
+#: lua/localsend_diagnostics.lua
 msgid "The receiving device rejected the transfer"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1638
+#: lua/localsend_diagnostics.lua
 msgid ""
 "The available logs do not identify a safe automatic fix. Create a support "
 "report immediately after reproducing the failure."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1647
+#: lua/localsend_diagnostics.lua
 msgid "No recent transfer error was recognized"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1648
+#: lua/localsend_diagnostics.lua
 msgid ""
 "Try the transfer once more, then return here immediately. A support report "
 "will include the newest LocalSend logs."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1659
+#: lua/localsend_diagnostics.lua
 msgid "Testing the LocalSend receiver…"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1671 lua/localsend_diagnostics.lua:1674
+#: lua/localsend_diagnostics.lua
 msgid "Transfer failed"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1683
+#: lua/localsend_diagnostics.lua
 msgid ""
 "Open LocalSend on your phone or computer and keep it visible during the "
-"test. Both devices should be connected to the same Wi-Fi network.\n"
-"\n"
-"The LocalSend receiver may restart briefly."
+"test. Both devices should be connected to the same Wi-Fi network. The "
+"receiver will keep running if it is enabled."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1687
+#: lua/localsend_diagnostics.lua
 msgid "Start test"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1797
-msgid "LocalSend could not use its discovery port"
+#: lua/localsend_diagnostics.lua
+msgid "Device discovery failed"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1798
-msgid ""
-"Another process may be using the LocalSend network port. Restart KOReader "
-"and try again."
-msgstr ""
-
-#: lua/localsend_diagnostics.lua:1803
+#: lua/localsend_diagnostics.lua
 msgid "Another LocalSend device was found"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1804
+#: lua/localsend_diagnostics.lua
 msgid "Device discovery is working. Found: %1"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1805
-msgid "Device discovery is working on this network."
-msgstr ""
-
-#: lua/localsend_diagnostics.lua:1809
-msgid "This network is blocking device discovery"
-msgstr ""
-
-#: lua/localsend_diagnostics.lua:1810
-msgid ""
-"Try a non-guest Wi-Fi network and disable AP or client isolation in the "
-"router settings."
-msgstr ""
-
-#: lua/localsend_diagnostics.lua:1814
+#: lua/localsend_diagnostics.lua
 msgid "No other LocalSend device answered"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1816
+#: lua/localsend_diagnostics.lua
 msgid ""
-"This device's network test passed. Keep LocalSend open on the other device "
-"and check its firewall or Local Network permission."
+"No devices responded during this scan. Keep LocalSend open on the other "
+"device and check its firewall or Local Network permission. This result alone "
+"does not show a network failure."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1825
+#: lua/localsend_diagnostics.lua
 msgid "Device discovery"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1835 lua/main.lua:1770
+#: lua/localsend_diagnostics.lua lua/main.lua
 msgid "Discovery details"
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1836
+#: lua/localsend_diagnostics.lua
 msgid "No discovery details are available."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1904
-msgid "The discovery test timed out. Use Check LocalSend, then try again."
-msgstr ""
-
-#: lua/localsend_diagnostics.lua:1931
-msgid "Running discovery test… this takes a few seconds."
-msgstr ""
-
-#: lua/localsend_diagnostics.lua:1941
+#: lua/localsend_diagnostics.lua
 msgid "The localsend binary is missing. Reinstall the plugin first."
 msgstr ""
 
-#: lua/localsend_diagnostics.lua:1949
-msgid "Restarting LocalSend briefly for the discovery test…"
-msgstr ""
-
-#: lua/localsend_diagnostics.lua:1961
-msgid "LocalSend could not be stopped for the discovery test."
-msgstr ""
-
-#: lua/localsend_dialogs.lua:21
+#: lua/localsend_dialogs.lua
 msgid "All files"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:22
+#: lua/localsend_dialogs.lua
 msgid "eBooks (epub, pdf, mobi, azw3)"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:23
+#: lua/localsend_dialogs.lua
 msgid "eBooks + CBZ (comics)"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:24
+#: lua/localsend_dialogs.lua
 msgid "PDF only"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:25
+#: lua/localsend_dialogs.lua
 msgid "EPUB only"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:26 lua/localsend_routing.lua:111
+#: lua/localsend_dialogs.lua lua/localsend_routing.lua
 msgid "Custom..."
 msgstr ""
 
-#: lua/localsend_dialogs.lua:97 lua/localsend_routing.lua:187
+#: lua/localsend_dialogs.lua lua/localsend_routing.lua
 msgid "Cannot use this directory: %1"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:111
+#: lua/localsend_dialogs.lua
 msgid "Device name"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:112
+#: lua/localsend_dialogs.lua
 msgid "Leave empty for default ('KOReader')"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:118 lua/localsend_dialogs.lua:163
-#: lua/localsend_dialogs.lua:199 lua/localsend_discovery.lua:333
-#: lua/localsend_discovery.lua:392 lua/localsend_discovery.lua:424
-#: lua/localsend_routing.lua:139 lua/localsend_sender.lua:288
-#: lua/localsend_sender.lua:784 lua/localsend_update.lua:802 lua/main.lua:1187
+#: lua/localsend_dialogs.lua lua/localsend_discovery.lua
+#: lua/localsend_routing.lua lua/localsend_sender.lua lua/localsend_update.lua
+#: lua/main.lua
 msgid "Cancel"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:125 lua/localsend_dialogs.lua:170
-#: lua/localsend_dialogs.lua:206
+#: lua/localsend_dialogs.lua
 msgid "Save"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:156 lua/localsend_sender.lua:780
+#: lua/localsend_dialogs.lua lua/localsend_sender.lua
 msgid "PIN code"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:157
+#: lua/localsend_dialogs.lua
 msgid "Leave empty to disable PIN protection"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:192
+#: lua/localsend_dialogs.lua
 msgid "Custom extensions"
 msgstr ""
 
-#: lua/localsend_dialogs.lua:193
+#: lua/localsend_dialogs.lua
 msgid "Comma-separated list (e.g., 'epub,pdf,mobi')"
 msgstr ""
 
-#: lua/localsend_discovery.lua:321
+#: lua/localsend_discovery.lua
+msgid "Another discovery scan is in progress."
+msgstr ""
+
+#: lua/localsend_discovery.lua
+msgid "Failed to launch device discovery."
+msgstr ""
+
+#: lua/localsend_discovery.lua
+msgid "Device discovery timed out."
+msgstr ""
+
+#: lua/localsend_discovery.lua
+msgid "Device discovery failed."
+msgstr ""
+
+#: lua/localsend_discovery.lua
 msgid "No devices found"
 msgstr ""
 
-#: lua/localsend_discovery.lua:322
+#: lua/localsend_discovery.lua
 msgid "Make sure LocalSend is running on the target device."
 msgstr ""
 
-#: lua/localsend_discovery.lua:326 lua/localsend_discovery.lua:383
-#: lua/localsend_sender.lua:591
+#: lua/localsend_discovery.lua lua/localsend_sender.lua
 msgid "Scan again"
 msgstr ""
 
-#: lua/localsend_discovery.lua:348
+#: lua/localsend_discovery.lua
 msgid "No devices found. Make sure LocalSend is running on the target device."
 msgstr ""
 
-#: lua/localsend_discovery.lua:404
+#: lua/localsend_discovery.lua
 msgid "Select target device"
 msgstr ""
 
-#: lua/localsend_discovery.lua:420
+#: lua/localsend_discovery.lua
 msgid "Scanning for devices..."
 msgstr ""
 
-#: lua/localsend_routing.lua:120
+#: lua/localsend_routing.lua
 msgid "Select extension to route"
 msgstr ""
 
-#: lua/localsend_routing.lua:132
+#: lua/localsend_routing.lua
 msgid "Extension to route"
 msgstr ""
 
-#: lua/localsend_routing.lua:133
+#: lua/localsend_routing.lua
 msgid "Enter file extension (without dot)"
 msgstr ""
 
-#: lua/localsend_routing.lua:146
+#: lua/localsend_routing.lua
 msgid "Next"
 msgstr ""
 
-#: lua/localsend_routing.lua:171
+#: lua/localsend_routing.lua
 msgid "Select directory for .%1 files"
 msgstr ""
 
-#: lua/localsend_routing.lua:181
+#: lua/localsend_routing.lua
 msgid ""
 ".%1 files will be saved to:\n"
 "%2"
 msgstr ""
 
-#: lua/localsend_routing.lua:231
+#: lua/localsend_routing.lua
 msgid "Enable file type routing"
 msgstr ""
 
-#: lua/localsend_routing.lua:240
+#: lua/localsend_routing.lua
 msgid ""
 "When enabled, files are routed to directories based on extension. When "
 "disabled, all files go to the main save directory."
 msgstr ""
 
-#: lua/localsend_routing.lua:250
+#: lua/localsend_routing.lua
 msgid ".%1 → %2"
 msgstr ""
 
-#: lua/localsend_routing.lua:257
+#: lua/localsend_routing.lua
 msgid "Route for .%1"
 msgstr ""
 
-#: lua/localsend_routing.lua:261
+#: lua/localsend_routing.lua
 msgid "Change directory"
 msgstr ""
 
-#: lua/localsend_routing.lua:270
+#: lua/localsend_routing.lua
 msgid "Remove route"
 msgstr ""
 
-#: lua/localsend_routing.lua:276
+#: lua/localsend_routing.lua
 msgid "Route for .%1 removed"
 msgstr ""
 
-#: lua/localsend_routing.lua:296
+#: lua/localsend_routing.lua
 msgid "Add extension route..."
 msgstr ""
 
-#: lua/localsend_routing.lua:306
+#: lua/localsend_routing.lua
 msgid "Accept other files → main directory"
 msgstr ""
 
-#: lua/localsend_routing.lua:315
+#: lua/localsend_routing.lua
 msgid ""
 "When enabled, files without a specific route are saved to the main save "
 "directory. When disabled, only routed file types are accepted."
 msgstr ""
 
-#: lua/localsend_sender.lua:157
+#: lua/localsend_sender.lua
 msgid "Another send operation is in progress"
 msgstr ""
 
-#: lua/localsend_sender.lua:165
+#: lua/localsend_sender.lua
 msgid "File does not exist"
 msgstr ""
 
-#: lua/localsend_sender.lua:240
+#: lua/localsend_sender.lua
 msgid "Failed to start send process"
 msgstr ""
 
-#: lua/localsend_sender.lua:268
+#: lua/localsend_sender.lua
 msgid "Send in progress"
 msgstr ""
 
-#: lua/localsend_sender.lua:283
+#: lua/localsend_sender.lua
 msgid "Sending %1 to %2..."
 msgstr ""
 
-#: lua/localsend_sender.lua:296
+#: lua/localsend_sender.lua
 msgid "Cancelling send..."
 msgstr ""
 
-#: lua/localsend_sender.lua:338 lua/localsend_sender.lua:350
-#: lua/localsend_sender.lua:477
+#: lua/localsend_sender.lua
 msgid "Cancelled"
 msgstr ""
 
-#: lua/localsend_sender.lua:346 lua/localsend_sender.lua:410
+#: lua/localsend_sender.lua
 msgid "Send cancelled"
 msgstr ""
 
-#: lua/localsend_sender.lua:390
+#: lua/localsend_sender.lua
 msgid "Sent %1 to %2"
 msgstr ""
 
-#: lua/localsend_sender.lua:399
+#: lua/localsend_sender.lua
 msgid "Transfer was rejected by the recipient"
 msgstr ""
 
-#: lua/localsend_sender.lua:401
+#: lua/localsend_sender.lua
 msgid "PIN required"
 msgstr ""
 
-#: lua/localsend_sender.lua:420
+#: lua/localsend_sender.lua
 msgid "Device is not running LocalSend"
 msgstr ""
 
-#: lua/localsend_sender.lua:422
+#: lua/localsend_sender.lua
 msgid "Too many failed attempts - try again later"
 msgstr ""
 
-#: lua/localsend_sender.lua:424
+#: lua/localsend_sender.lua
 msgid "Connection failed"
 msgstr ""
 
-#: lua/localsend_sender.lua:426
+#: lua/localsend_sender.lua
 msgid "Connection timed out"
 msgstr ""
 
-#: lua/localsend_sender.lua:428
+#: lua/localsend_sender.lua
 msgid "Send failed"
 msgstr ""
 
-#: lua/localsend_sender.lua:578
+#: lua/localsend_sender.lua
+msgid "Device discovery failed: %1"
+msgstr ""
+
+#: lua/localsend_sender.lua
 msgid "Send more files?"
 msgstr ""
 
-#: lua/localsend_sender.lua:582
+#: lua/localsend_sender.lua
 msgid "Yes"
 msgstr ""
 
-#: lua/localsend_sender.lua:600
+#: lua/localsend_sender.lua
 msgid "No"
 msgstr ""
 
-#: lua/localsend_sender.lua:620
+#: lua/localsend_sender.lua
 msgid "A send operation is already in progress"
 msgstr ""
 
-#: lua/localsend_sender.lua:778
+#: lua/localsend_sender.lua
 msgid "Enter PIN for %1"
 msgstr ""
 
-#: lua/localsend_server.lua:302
+#: lua/localsend_server.lua
+msgid ""
+"Device discovery is still running. Wait for it to finish, then start "
+"receiving."
+msgstr ""
+
+#: lua/localsend_server.lua
 msgid "PIN"
 msgstr ""
 
-#: lua/localsend_server.lua:317
+#: lua/localsend_server.lua
 msgid "LocalSend Ready"
 msgstr ""
 
-#: lua/localsend_server.lua:341
+#: lua/localsend_server.lua
 msgid ""
 "LocalSend process failed to start within 5 seconds. Check if the binary "
 "works."
 msgstr ""
 
-#: lua/localsend_server.lua:363
+#: lua/localsend_server.lua
 msgid "LocalSend is stopping. Please wait a moment and try again."
 msgstr ""
 
-#: lua/localsend_server.lua:404
+#: lua/localsend_server.lua
 msgid "Invalid save directory: %1"
 msgstr ""
 
-#: lua/localsend_server.lua:521
+#: lua/localsend_server.lua
 msgid "Failed to start LocalSend server."
 msgstr ""
 
-#: lua/localsend_server.lua:567 lua/localsend_server.lua:660
-#: lua/localsend_server.lua:691
+#: lua/localsend_server.lua
 msgid "Failed to stop LocalSend process."
 msgstr ""
 
-#: lua/localsend_server.lua:685
+#: lua/localsend_server.lua
 msgid "LocalSend stopped"
 msgstr ""
 
-#: lua/localsend_server.lua:729
+#: lua/localsend_server.lua
 msgid "LocalSend is stopping. Please wait."
 msgstr ""
 
-#: lua/localsend_transfers.lua:131
+#: lua/localsend_transfers.lua
 msgid "File received: %1"
 msgstr ""
 
-#: lua/localsend_transfers.lua:133
+#: lua/localsend_transfers.lua
 msgid "%1 files received. Latest: %2"
 msgstr ""
 
-#: lua/localsend_transfers.lua:192
+#: lua/localsend_transfers.lua
 msgid "No recent transfers."
 msgstr ""
 
-#: lua/localsend_transfers.lua:208
+#: lua/localsend_transfers.lua
 msgid ""
 "Recent transfers (%1 total):\n"
 "\n"
 "%2"
 msgstr ""
 
-#: lua/localsend_update.lua:345
+#: lua/localsend_update.lua
 msgid "Failed to execute download command."
 msgstr ""
 
-#: lua/localsend_update.lua:356
+#: lua/localsend_update.lua
 msgid "Download failed: read error."
 msgstr ""
 
-#: lua/localsend_update.lua:362
+#: lua/localsend_update.lua
 msgid ""
 "Download failed.\n"
 "HTTP status: %1"
 msgstr ""
 
-#: lua/localsend_update.lua:364 lua/localsend_update.lua:751
+#: lua/localsend_update.lua
 msgid "Details: %1"
 msgstr ""
 
-#: lua/localsend_update.lua:378
+#: lua/localsend_update.lua
 msgid "Download failed: file not saved."
 msgstr ""
 
-#: lua/localsend_update.lua:395
+#: lua/localsend_update.lua
 msgid "Invalid update package structure."
 msgstr ""
 
-#: lua/localsend_update.lua:491
+#: lua/localsend_update.lua
 msgid ""
 "Update partially failed. Some files could not be copied. Please reinstall "
 "the plugin."
 msgstr ""
 
-#: lua/localsend_update.lua:500
+#: lua/localsend_update.lua
 msgid ""
 "Update to %1 installed successfully!\n"
 "\n"
 "Please restart KOReader for changes to take effect."
 msgstr ""
 
-#: lua/localsend_update.lua:512
+#: lua/localsend_update.lua
 msgid "Downloading update..."
 msgstr ""
 
-#: lua/localsend_update.lua:531
+#: lua/localsend_update.lua
 msgid "Failed to stop LocalSend before update."
 msgstr ""
 
-#: lua/localsend_update.lua:663
+#: lua/localsend_update.lua
 msgid "LocalSend update available: %1"
 msgstr ""
 
-#: lua/localsend_update.lua:719 lua/localsend_update.lua:876
+#: lua/localsend_update.lua
 msgid "Checking for updates..."
 msgstr ""
 
-#: lua/localsend_update.lua:732 lua/localsend_update.lua:888
+#: lua/localsend_update.lua
 msgid "Failed to execute update check command."
 msgstr ""
 
-#: lua/localsend_update.lua:742
+#: lua/localsend_update.lua
 msgid "Failed to read update check response."
 msgstr ""
 
-#: lua/localsend_update.lua:749
+#: lua/localsend_update.lua
 msgid ""
 "Failed to check for updates.\n"
 "HTTP status: %1\n"
@@ -908,15 +886,15 @@ msgid ""
 "Please check your internet connection."
 msgstr ""
 
-#: lua/localsend_update.lua:767
+#: lua/localsend_update.lua
 msgid "Failed to read update information."
 msgstr ""
 
-#: lua/localsend_update.lua:776
+#: lua/localsend_update.lua
 msgid "Failed to parse update information."
 msgstr ""
 
-#: lua/localsend_update.lua:798
+#: lua/localsend_update.lua
 msgid ""
 "You're up to date!\n"
 "\n"
@@ -926,7 +904,7 @@ msgid ""
 "Reinstall anyway?"
 msgstr ""
 
-#: lua/localsend_update.lua:809
+#: lua/localsend_update.lua
 msgid ""
 "You're up to date!\n"
 "\n"
@@ -934,15 +912,15 @@ msgid ""
 "Latest version: %2"
 msgstr ""
 
-#: lua/localsend_update.lua:818
+#: lua/localsend_update.lua
 msgid "No release notes available."
 msgstr ""
 
-#: lua/localsend_update.lua:825
+#: lua/localsend_update.lua
 msgid "Update available!"
 msgstr ""
 
-#: lua/localsend_update.lua:826
+#: lua/localsend_update.lua
 msgid ""
 "Current: %1\n"
 "Latest: %2\n"
@@ -950,29 +928,29 @@ msgid ""
 "%3"
 msgstr ""
 
-#: lua/localsend_update.lua:830
+#: lua/localsend_update.lua
 msgid "Later"
 msgstr ""
 
-#: lua/localsend_update.lua:836
+#: lua/localsend_update.lua
 msgid "Install"
 msgstr ""
 
-#: lua/localsend_update.lua:851
+#: lua/localsend_update.lua
 msgid ""
 "\n"
 "\n"
 "Auto-update not available: unknown device architecture."
 msgstr ""
 
-#: lua/localsend_update.lua:853
+#: lua/localsend_update.lua
 msgid ""
 "\n"
 "\n"
 "Auto-update not available: no package for %1 architecture."
 msgstr ""
 
-#: lua/localsend_update.lua:858
+#: lua/localsend_update.lua
 msgid ""
 "Update available!\n"
 "\n"
@@ -984,44 +962,44 @@ msgid ""
 "Visit GitHub to download manually."
 msgstr ""
 
-#: lua/localsend_update.lua:913
+#: lua/localsend_update.lua
 msgid "Update check timed out."
 msgstr ""
 
-#: lua/main.lua:946
+#: lua/main.lua
 msgid "Device name is too long (max 64 characters)."
 msgstr ""
 
-#: lua/main.lua:948
+#: lua/main.lua
 msgid ""
 "Device name can only contain letters, numbers, spaces, hyphens, underscores, "
 "and apostrophes."
 msgstr ""
 
-#: lua/main.lua:958
+#: lua/main.lua
 msgid "Invalid path: must be an absolute path without special characters."
 msgstr ""
 
-#: lua/main.lua:967
+#: lua/main.lua
 msgid "Directory does not exist and could not be created."
 msgstr ""
 
-#: lua/main.lua:975
+#: lua/main.lua
 msgid "Directory is not writable."
 msgstr ""
 
-#: lua/main.lua:1017
+#: lua/main.lua
 msgid ""
 "Cannot start LocalSend: plugin reinstall required.\n"
 "\n"
 "Please use 'Check for updates' to reinstall."
 msgstr ""
 
-#: lua/main.lua:1162
+#: lua/main.lua
 msgid "No book is currently open."
 msgstr ""
 
-#: lua/main.lua:1185
+#: lua/main.lua
 msgid ""
 "This will delete the current TLS certificates.\n"
 "\n"
@@ -1030,25 +1008,25 @@ msgid ""
 "Continue?"
 msgstr ""
 
-#: lua/main.lua:1186
+#: lua/main.lua
 msgid "Delete"
 msgstr ""
 
-#: lua/main.lua:1195
+#: lua/main.lua
 msgid "Certificates cleared. New certificates will be generated on next start."
 msgstr ""
 
-#: lua/main.lua:1280
+#: lua/main.lua
 msgid "GitHub link copied to clipboard"
 msgstr ""
 
-#: lua/main.lua:1287
+#: lua/main.lua
 msgid ""
 "Project page:\n"
 "%1"
 msgstr ""
 
-#: lua/main.lua:1344
+#: lua/main.lua
 msgid ""
 "LocalSend for KOReader\n"
 "\n"
@@ -1060,315 +1038,315 @@ msgid ""
 "%4"
 msgstr ""
 
-#: lua/main.lua:1348
+#: lua/main.lua
 msgid "GitHub"
 msgstr ""
 
-#: lua/main.lua:1360
+#: lua/main.lua
 msgid "LocalSend (Recovery Mode)"
 msgstr ""
 
-#: lua/main.lua:1364
+#: lua/main.lua
 msgid "Plugin Error - Reinstall Required"
 msgstr ""
 
-#: lua/main.lua:1370
+#: lua/main.lua
 msgid "Missing modules:"
 msgstr ""
 
-#: lua/main.lua:1394
+#: lua/main.lua
 msgid "Reinstall plugin (%1)"
 msgstr ""
 
-#: lua/main.lua:1409
+#: lua/main.lua
 msgid "LocalSend (⚠ Reinstall Required)"
 msgstr ""
 
-#: lua/main.lua:1412
+#: lua/main.lua
 msgid "LocalSend (stopping...)"
 msgstr ""
 
-#: lua/main.lua:1416
+#: lua/main.lua
 msgid "LocalSend (%1 received)"
 msgstr ""
 
-#: lua/main.lua:1418
+#: lua/main.lua
 msgid "LocalSend (running)"
 msgstr ""
 
-#: lua/main.lua:1421
+#: lua/main.lua
 msgid "LocalSend (update available)"
 msgstr ""
 
-#: lua/main.lua:1446
+#: lua/main.lua
 msgid "⚠ Previous update failed - Reinstall required"
 msgstr ""
 
-#: lua/main.lua:1457
+#: lua/main.lua
 msgid "⬆ Update available: %1"
 msgstr ""
 
-#: lua/main.lua:1470
+#: lua/main.lua
 msgid "Stopping server..."
 msgstr ""
 
-#: lua/main.lua:1473
+#: lua/main.lua
 msgid "Stop server"
 msgstr ""
 
-#: lua/main.lua:1475
+#: lua/main.lua
 msgid "Start server"
 msgstr ""
 
-#: lua/main.lua:1500
+#: lua/main.lua
 msgid "Recent transfers (%1)"
 msgstr ""
 
-#: lua/main.lua:1502
+#: lua/main.lua
 msgid "Recent transfers"
 msgstr ""
 
-#: lua/main.lua:1516
+#: lua/main.lua
 msgid "Save directory (%1)"
 msgstr ""
 
-#: lua/main.lua:1529
+#: lua/main.lua
 msgid "Settings"
 msgstr ""
 
-#: lua/main.lua:1537
+#: lua/main.lua
 msgid "Device name (%1)"
 msgstr ""
 
-#: lua/main.lua:1539
+#: lua/main.lua
 msgid "Device name (KOReader)"
 msgstr ""
 
-#: lua/main.lua:1550
+#: lua/main.lua
 msgid "Allowed extensions (using routing)"
 msgstr ""
 
-#: lua/main.lua:1552
+#: lua/main.lua
 msgid "Allowed extensions (%1)"
 msgstr ""
 
-#: lua/main.lua:1554
+#: lua/main.lua
 msgid "Allowed extensions (all)"
 msgstr ""
 
-#: lua/main.lua:1563
+#: lua/main.lua
 msgid ""
 "When file type routing is enabled, allowed extensions are determined by the "
 "routing rules."
 msgstr ""
 
-#: lua/main.lua:1573
+#: lua/main.lua
 msgid "File type routing (%1 rule)"
 msgid_plural "File type routing (%1 rules)"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lua/main.lua:1575
+#: lua/main.lua
 msgid "File type routing (disabled, %1 rule)"
 msgid_plural "File type routing (disabled, %1 rules)"
 msgstr[0] ""
 msgstr[1] ""
 
-#: lua/main.lua:1578
+#: lua/main.lua
 msgid "File type routing"
 msgstr ""
 
-#: lua/main.lua:1584
+#: lua/main.lua
 msgid ""
 "Route different file types to different directories (e.g., EPUBs to Books "
 "folder, PDFs to Documents)."
 msgstr ""
 
-#: lua/main.lua:1589
+#: lua/main.lua
 msgid "PIN code (enabled)"
 msgstr ""
 
-#: lua/main.lua:1591
+#: lua/main.lua
 msgid "PIN code (disabled)"
 msgstr ""
 
-#: lua/main.lua:1601
+#: lua/main.lua
 msgid "Use HTTPS"
 msgstr ""
 
-#: lua/main.lua:1609
+#: lua/main.lua
 msgid ""
 "HTTPS encrypts transfers for security. Disable only if you experience "
 "compatibility issues."
 msgstr ""
 
-#: lua/main.lua:1612
+#: lua/main.lua
 msgid "Start with KOReader"
 msgstr ""
 
-#: lua/main.lua:1620
+#: lua/main.lua
 msgid "Automatically start the LocalSend server when KOReader launches."
 msgstr ""
 
-#: lua/main.lua:1623
+#: lua/main.lua
 msgid "Enable WebRTC Support (Experimental)"
 msgstr ""
 
-#: lua/main.lua:1631
+#: lua/main.lua
 msgid ""
 "Connect to public signaling server for WebRTC transfers. Requires internet "
 "access."
 msgstr ""
 
-#: lua/main.lua:1634
+#: lua/main.lua
 msgid "Show 'Send with LocalSend' in file menu"
 msgstr ""
 
-#: lua/main.lua:1643
+#: lua/main.lua
 msgid ""
 "Add a 'Send with LocalSend' action to the long-press menu for files and "
 "folders in the file browser, History, and Collections."
 msgstr ""
 
-#: lua/main.lua:1647
+#: lua/main.lua
 msgid "Rotate certificates"
 msgstr ""
 
-#: lua/main.lua:1652
+#: lua/main.lua
 msgid ""
 "Generate new TLS certificates. Use if you experience connection issues or "
 "want to reset trusted device pairings."
 msgstr ""
 
-#: lua/main.lua:1660
+#: lua/main.lua
 msgid "Troubleshooting"
 msgstr ""
 
-#: lua/main.lua:1670
+#: lua/main.lua
 msgid "Send file..."
 msgstr ""
 
-#: lua/main.lua:1674
+#: lua/main.lua
 msgid "Send a file or folder to another LocalSend device on the network."
 msgstr ""
 
-#: lua/main.lua:1679
+#: lua/main.lua
 msgid "Send current book"
 msgstr ""
 
-#: lua/main.lua:1686
+#: lua/main.lua
 msgid "Send the currently open book to another LocalSend device."
 msgstr ""
 
-#: lua/main.lua:1693
+#: lua/main.lua
 msgid "Updates"
 msgstr ""
 
-#: lua/main.lua:1701
+#: lua/main.lua
 msgid "About LocalSend"
 msgstr ""
 
-#: lua/main.lua:1714
+#: lua/main.lua
 msgid "Check LocalSend"
 msgstr ""
 
-#: lua/main.lua:1719
+#: lua/main.lua
 msgid ""
 "Check Wi-Fi, the receiver, the save folder, and network access, then "
 "recommend the next step."
 msgstr ""
 
-#: lua/main.lua:1722
+#: lua/main.lua
 msgid "Can't find a device?"
 msgstr ""
 
-#: lua/main.lua:1727
+#: lua/main.lua
 msgid ""
 "Use this when a phone, computer, or e-reader does not appear in LocalSend."
 msgstr ""
 
-#: lua/main.lua:1730
+#: lua/main.lua
 msgid "Transfer failed?"
 msgstr ""
 
-#: lua/main.lua:1735
+#: lua/main.lua
 msgid ""
 "Explain the most recent send or receive failure and suggest a relevant "
 "action."
 msgstr ""
 
-#: lua/main.lua:1738
+#: lua/main.lua
 msgid "Create support report"
 msgstr ""
 
-#: lua/main.lua:1746
+#: lua/main.lua
 msgid "Advanced"
 msgstr ""
 
-#: lua/main.lua:1756
+#: lua/main.lua
 msgid "Network details"
 msgstr ""
 
-#: lua/main.lua:1763
+#: lua/main.lua
 msgid "Backend log"
 msgstr ""
 
-#: lua/main.lua:1777
+#: lua/main.lua
 msgid "Restart LocalSend server"
 msgstr ""
 
-#: lua/main.lua:1795
+#: lua/main.lua
 msgid "Auto-check for updates (%1)"
 msgstr ""
 
-#: lua/main.lua:1797
+#: lua/main.lua
 msgid "Auto-check for updates"
 msgstr ""
 
-#: lua/main.lua:1817
+#: lua/main.lua
 msgid "Every 12 hours"
 msgstr ""
 
-#: lua/main.lua:1818
+#: lua/main.lua
 msgid "Every 24 hours"
 msgstr ""
 
-#: lua/main.lua:1819
+#: lua/main.lua
 msgid "Every 3 days"
 msgstr ""
 
-#: lua/main.lua:1820
+#: lua/main.lua
 msgid "Weekly (default)"
 msgstr ""
 
-#: lua/main.lua:1824
+#: lua/main.lua
 msgid "Enable auto-check"
 msgstr ""
 
-#: lua/main.lua:1861
+#: lua/main.lua
 msgid "Update available: %1 → %2"
 msgstr ""
 
-#: lua/main.lua:1863
+#: lua/main.lua
 msgid "Installed version: %1"
 msgstr ""
 
-#: lua/main.lua:1871
+#: lua/main.lua
 msgid "Check for updates"
 msgstr ""
 
-#: lua/main.lua:1886
+#: lua/main.lua
 msgid "Toggle LocalSend server"
 msgstr ""
 
-#: lua/main.lua:1891
+#: lua/main.lua
 msgid "LocalSend: send file"
 msgstr ""
 
-#: lua/main.lua:1896
+#: lua/main.lua
 msgid "LocalSend: send current book"
 msgstr ""
 
-#: lua/main.lua:1937
+#: lua/main.lua
 msgid "Send with LocalSend"
 msgstr ""

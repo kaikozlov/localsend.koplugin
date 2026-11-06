@@ -20,6 +20,7 @@ local IPTABLES_CANDIDATES = {
 -- Cached resolution: nil = not probed, false = missing, string = binary path.
 local resolved_iptables = nil
 local resolved_check_support = nil
+local owners = {}
 
 -- Initialize module with dependencies
 -- @param d table Dependencies: { Device, util, logger }
@@ -328,20 +329,70 @@ function M.openFirewall(port, use_webrtc)
     return { managed = true, ok = true, detail = "iptables rules open" }
 end
 
+local function webRTCHeld()
+    for _, held in pairs(owners) do
+        for _, needs_webrtc in pairs(held) do
+            if needs_webrtc then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- Named holds are idempotent and survive widget recreation. Never remove rules
+-- while a receiver, scanner, or sender still needs this endpoint.
+function M.acquire(owner, port, use_webrtc)
+    port = tostring(port)
+    owners[port] = owners[port] or {}
+    owners[port][owner] = owners[port][owner] or use_webrtc == true
+    return M.openFirewall(port, use_webrtc)
+end
+
+function M.release(owner, port)
+    port = tostring(port)
+    local held = owners[port]
+    if held then
+        local released_webrtc = held[owner]
+        held[owner] = nil
+        if next(held) then
+            if released_webrtc and not webRTCHeld() and iptablesAvailable() then
+                local failures = {}
+                for _, rule in ipairs(allRules(port, true)) do
+                    if ruleArg(rule, "--dport") == constants.WEBRTC_PORT_RANGE or ruleArg(rule, "--sport") == constants.WEBRTC_PORT_RANGE then
+                        if not iptablesDelete(rule) then
+                            table.insert(failures, ruleLabel(rule))
+                        end
+                    end
+                end
+                if #failures > 0 then
+                    return { managed = true, ok = false, detail = "failed to delete " .. table.concat(failures, ", ") }
+                end
+            end
+            return { managed = false, ok = true, detail = "firewall retained for active operation" }
+        end
+        owners[port] = nil
+    end
+    return M.closeFirewall(port)
+end
+
 -- Close firewall ports for LocalSend.
 -- Missing rules are ignored; this is cleanup.
 -- @param port string|number The port to close
 -- @return table { managed = bool, ok = bool, detail = string }
 function M.closeFirewall(port)
+    if owners[tostring(port)] and next(owners[tostring(port)]) then
+        return { managed = false, ok = true, detail = "firewall retained for active operation" }
+    end
     if not iptablesAvailable() then
         return unmanagedResult()
     end
 
     port = tostring(port)
     local failures = {}
-    -- Always remove WebRTC rules during cleanup, even when WebRTC is currently off,
-    -- so old rules do not survive a setting change.
-    for _, rule in ipairs(allRules(port, true)) do
+    -- The WebRTC range is shared across ports; retain it for any live owner.
+    local close_webrtc = not webRTCHeld()
+    for _, rule in ipairs(allRules(port, close_webrtc)) do
         if not iptablesDelete(rule) then
             table.insert(failures, ruleLabel(rule))
         end
@@ -394,9 +445,9 @@ function M.selfTestFirewall(port, use_webrtc)
         return unmanagedResult("iptables not available; no plugin-managed firewall on this device")
     end
 
-    local open_result = M.openFirewall(port, use_webrtc)
+    local open_result = M.acquire("selftest", port, use_webrtc)
     local check_result = M.checkFirewall(port, use_webrtc)
-    local close_result = M.closeFirewall(port)
+    local close_result = M.release("selftest", port)
 
     local ok = open_result.ok and check_result.ok and close_result.ok
     local detail = "open: "

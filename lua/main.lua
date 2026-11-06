@@ -354,6 +354,7 @@ function LocalSend:init()
     local running = self:isRunning()
     if running then
         ServerState.server_intended_running = true
+        self:openFirewall()
     end
     local recovery_resumed = false
     if ServerState.server_intended_running and not running and self:_canRecoverServer() then
@@ -733,6 +734,10 @@ function LocalSend:deletePluginSettings()
         constants.SEND_OUTPUT_FILE,
         constants.LAST_SEND_EVIDENCE_FILE,
         constants.SCAN_OUTPUT_FILE,
+        constants.SCAN_OUTPUT_FILE .. ".pid",
+        constants.SCAN_OUTPUT_FILE .. ".supervisor",
+        constants.SCAN_OUTPUT_FILE .. ".exit",
+        constants.SCAN_LOG_FILE,
         constants.SERVER_OUTPUT_FILE,
         constants.LIFECYCLE_LOG_FILE,
     }
@@ -756,11 +761,14 @@ function LocalSend:deletePluginSettings()
         ServerState.discovered_devices = {}
         ServerState.scan_in_progress = false
         ServerState.scan_op_id = 0
+        ServerState.scan_port = nil
         ServerState.send_in_progress = false
         ServerState.send_op_id = 0
         ServerState.scan_cancelled = false
         ServerState.send_cancelled = false
         ServerState.send_cancel_started_at = nil
+        ServerState.scan_cancel_started_at = nil
+        ServerState.send_port = nil
         ServerState.server_op_id = 0
         ServerState.stop_in_progress = false
         ServerState.server_intended_running = false
@@ -898,7 +906,7 @@ function LocalSend:openFirewall()
     if not lsfirewall then
         return { managed = false, ok = true, detail = "firewall module unavailable" }
     end
-    return lsfirewall.openFirewall(self.port, self.use_webrtc)
+    return lsfirewall.acquire("receiver", self.port, self.use_webrtc)
 end
 
 function LocalSend:closeFirewall()
@@ -909,7 +917,7 @@ function LocalSend:closeFirewall()
     if not lsfirewall then
         return { managed = false, ok = true, detail = "firewall module unavailable" }
     end
-    return lsfirewall.closeFirewall(self.port)
+    return lsfirewall.release("receiver", self.port)
 end
 
 function LocalSend:testFirewall()
@@ -1139,13 +1147,6 @@ end
 -- @param preset_file string|nil Optional file path to send directly (skips picker)
 function LocalSend:showFileSendFlow(preset_file)
     if lssender then
-        -- Open firewall for scanning (needs UDP 53317 for multicast discovery)
-        -- Note: Firewall is opened temporarily; we don't close it after since:
-        -- 1. WebRTC sends also need ports open
-        -- 2. User may do multiple scans/sends
-        -- 3. If receiver is also running, ports are already open
-        -- 4. Ports are closed on KOReader exit anyway
-        self:openFirewall()
         lssender.showFileSendFlow(self, preset_file)
     end
 end
@@ -1165,8 +1166,6 @@ function LocalSend:sendCurrentBook()
         return
     end
 
-    -- Open firewall for scanning/sending
-    self:openFirewall()
     lssender.showFileSendFlow(self, doc_path)
 end
 

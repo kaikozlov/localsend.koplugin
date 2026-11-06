@@ -6,6 +6,7 @@ local state = require("localsend_state")
 local constants = require("localsend_constants")
 local discovery = require("localsend_discovery")
 local power = require("localsend_power")
+local firewall = require("localsend_firewall")
 
 local M = {}
 
@@ -64,6 +65,7 @@ function M.init(d, paths)
         Notification = d.Notification,
         ButtonDialog = d.ButtonDialog,
         util = d.util,
+        usleep = d.usleep,
         json = d.json,
         logger = d.logger,
         T = d.T,
@@ -173,6 +175,17 @@ function M.sendFile(device, filepath, pin, callback, options)
     ServerState.send_cancelled = false -- Reset cancel flag
     ServerState.send_cancel_started_at = nil
     power.acquire("send")
+    ServerState.send_port = options.port or constants.DEFAULT_PORT
+    local opened = firewall.acquire("send", ServerState.send_port, device.type ~= "lan")
+    if not opened.ok then
+        ServerState.send_in_progress = false
+        power.release("send")
+        firewall.release("send", ServerState.send_port)
+        if callback then
+            callback(false, opened.detail)
+        end
+        return
+    end
     notifyActivityChanged()
     local send_started_at = os.time()
     local send_size = fileSize(filepath)
@@ -234,6 +247,7 @@ function M.sendFile(device, filepath, pin, callback, options)
     if launched ~= true and launched ~= 0 then
         ServerState.send_in_progress = false
         power.release("send")
+        firewall.release("send", ServerState.send_port or constants.DEFAULT_PORT)
         notifyActivityChanged()
         cleanupSendFiles()
         if callback then
@@ -341,6 +355,7 @@ function M.sendFile(device, filepath, pin, callback, options)
             ServerState.send_in_progress = false
             ServerState.send_cancel_started_at = nil
             power.release("send")
+            firewall.release("send", ServerState.send_port or constants.DEFAULT_PORT)
             notifyActivityChanged()
             deps.UIManager:show(deps.Notification:new({
                 text = deps._("Send cancelled"),
@@ -362,6 +377,7 @@ function M.sendFile(device, filepath, pin, callback, options)
         closeSendDialog()
         ServerState.send_in_progress = false
         power.release("send")
+        firewall.release("send", ServerState.send_port or constants.DEFAULT_PORT)
         notifyActivityChanged()
 
         -- Check exit code
@@ -489,8 +505,10 @@ local function getSendFlowConfig(instance)
     local scan_options = {
         use_webrtc = instance and instance.use_webrtc,
         device_name = device_name, -- Pass to scan so we show correct name to peers
+        port = instance and instance.port,
+        use_https = instance and instance.use_https,
     }
-    local send_options = { device_name = device_name }
+    local send_options = { device_name = device_name, port = instance and instance.port }
     local start_path = instance:getPickerStartPath(instance.save_dir)
     return scan_options, send_options, start_path
 end
@@ -507,11 +525,18 @@ local function scanAndSelectDevice(instance, onDeviceSelected)
     end)
 
     -- Define scan completion handler (used for initial scan and retries)
-    local function onScanComplete(devices)
+    local function onScanComplete(devices, err)
         -- Close scanning dialog
         if scanning_dialog then
             deps.UIManager:close(scanning_dialog)
             scanning_dialog = nil
+        end
+        if err then
+            deps.UIManager:show(deps.InfoMessage:new({
+                icon = "notice-warning",
+                text = deps.T(deps._("Device discovery failed: %1"), err),
+            }))
+            return
         end
 
         -- Retry callback for "Scan again" button
@@ -673,15 +698,16 @@ function M.cancelSend()
     signalSendProcess("TERM", true)
 end
 
--- Synchronous teardown for PluginLoader/KOReader exit. No UIManager callback is
--- allowed to be required after this returns.
+-- Synchronous teardown for suspend, network loss, and PluginLoader/KOReader exit.
+-- If termination times out, completion polling must finish cancellation cleanup.
 function M.stopActiveOperationsSync()
     local ServerState = state.ServerState
 
     discovery.stopActiveScanSync(deps.usleep)
-    ServerState.send_op_id = (ServerState.send_op_id or 0) + 1 -- invalidate poll callback
 
     if ServerState.send_in_progress or isSendProcessRunning() or isSendSupervisorRunning() then
+        ServerState.send_cancelled = true
+        ServerState.send_cancel_started_at = ServerState.send_cancel_started_at or os.time()
         signalSendProcess("TERM", true)
         for _ = 1, 20 do
             if not isSendProcessRunning() then
@@ -715,11 +741,18 @@ function M.stopActiveOperationsSync()
         end
     end
 
+    if isSendProcessRunning() or isSendSupervisorRunning() then
+        deps.logger.err("[LocalSend] Sender did not exit; retaining firewall ownership")
+        return false
+    end
+
+    ServerState.send_op_id = (ServerState.send_op_id or 0) + 1 -- invalidate poll only after termination
     cleanupSendFiles()
     ServerState.send_in_progress = false
     ServerState.send_cancelled = false
     ServerState.send_cancel_started_at = nil
     power.release("send")
+    firewall.release("send", ServerState.send_port or constants.DEFAULT_PORT)
     notifyActivityChanged()
 end
 

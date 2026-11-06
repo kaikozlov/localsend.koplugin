@@ -316,6 +316,47 @@ describe("Server Control", function()
         end)
     end)
 
+    describe("discovery mode transitions", function()
+        it("does not restart a receiver underneath an attached scan", function()
+            local instance, LocalSend = helper.create_instance()
+            local s = LocalSend._ServerState
+            s.scan_in_progress = true
+            s.user_stopped = false
+            s.server_intended_running = true
+            instance.isRunning = function()
+                return true
+            end
+            local stopped = false
+            instance.stopServer = function()
+                stopped = true
+            end
+            instance:restart()
+            assert.is_false(stopped)
+            assert.is_true(s.scan_in_progress)
+            assert.is_true(s.server_intended_running)
+        end)
+
+        it("does not clear the receiving-off preference when starting is busy", function()
+            local instance, LocalSend = helper.create_instance()
+            local s = LocalSend._ServerState
+            s.scan_in_progress = true
+            s.user_stopped = true
+            s.server_intended_running = false
+            instance.isRunning = function()
+                return false
+            end
+            local started = false
+            instance._startWhenConnected = function()
+                started = true
+            end
+            instance:onToggleLocalSend()
+            assert.is_false(started)
+            assert.is_true(s.user_stopped)
+            assert.is_false(s.server_intended_running)
+            assert.is_true(s.scan_in_progress)
+        end)
+    end)
+
     describe("stop_in_progress flag", function()
         it("should block start() while stop is in progress", function()
             local instance, LocalSend = helper.create_instance()

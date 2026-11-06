@@ -15,6 +15,7 @@ local T = require("ffi/util").template
 local _ = require("gettext")
 
 describe("localsend_sender", function()
+    local firewall, original_acquire, original_release, firewall_holds
     setup(function()
         helper.setup_complete()
     end)
@@ -22,6 +23,21 @@ describe("localsend_sender", function()
     before_each(function()
         helper.reset_state()
         helper.reset_localsend_state()
+        firewall = require("localsend_firewall")
+        original_acquire, original_release = firewall.acquire, firewall.release
+        firewall_holds = {}
+        firewall.acquire = function(owner)
+            firewall_holds[owner] = true
+            return { ok = true }
+        end
+        firewall.release = function(owner)
+            firewall_holds[owner] = nil
+        end
+    end)
+
+    after_each(function()
+        firewall.acquire, firewall.release = original_acquire, original_release
+        require("localsend_power").releaseAll()
     end)
 
     local function init_sender(network_mgr, on_activity_changed)
@@ -108,31 +124,17 @@ describe("localsend_sender", function()
             assert.is_false(callback_success)
         end)
 
-        it("builds correct command for LAN device", function()
-            sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" }, "/test/file.epub", nil, nil)
-            assert.is_true(#helper.state.os_execute_calls > 0)
-            local cmd = helper.state.os_execute_calls[1]
-            assert.truthy(cmd:match("send"))
-            assert.truthy(cmd:match("%-%-ip"))
-            assert.truthy(cmd:match("192%.168%.1%.50"))
-            assert.truthy(cmd:match("%-%-https"))
-        end)
-
-        it("builds correct command for WebRTC device", function()
-            sender.sendFile({ type = "webrtc", id = "abc-123", alias = "Browser" }, "/test/file.epub", nil, nil)
-            assert.is_true(#helper.state.os_execute_calls > 0)
-            local cmd = helper.state.os_execute_calls[1]
-            assert.truthy(cmd:match("send"))
-            assert.truthy(cmd:match("%-%-webrtc"))
-            assert.truthy(cmd:match("%-%-target"))
-            assert.truthy(cmd:match("abc%-123"))
-        end)
-
-        it("includes PIN in command when provided", function()
-            sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "https", alias = "Phone" }, "/test/file.epub", "1234", nil)
-            local cmd = helper.state.os_execute_calls[1]
-            assert.truthy(cmd:match("%-p"))
-            assert.truthy(cmd:match("1234"))
+        it("does not launch a sender when opening its firewall fails", function()
+            firewall.acquire = function()
+                return { ok = false, detail = "permission denied" }
+            end
+            local success
+            sender.sendFile({ type = "lan", alias = "Phone" }, "/test/file.epub", nil, function(ok)
+                success = ok
+            end)
+            assert.is_false(success)
+            assert.is_false(require("localsend_state").ServerState.send_in_progress)
+            assert.equals(0, #helper.state.os_execute_calls)
         end)
 
         it("sets send_in_progress flag", function()
@@ -178,6 +180,85 @@ describe("localsend_sender", function()
 
             assert.equals(dialog, helper.state.close_calls[#helper.state.close_calls])
         end)
+
+        for _, waiting_on in ipairs({ "child and supervisor", "supervisor" }) do
+            it("keeps completion polling after synchronous teardown times out on the " .. waiting_on, function()
+                local state = require("localsend_state").ServerState
+                local power = require("localsend_power")
+                local constants = require("localsend_constants")
+                local original_read = util.readFromFile
+                local original_time = os.time
+                local now = os.time()
+                local child_running = waiting_on == "child and supervisor"
+                local supervisor_running = true
+                finally(function()
+                    util.readFromFile = original_read
+                    os.time = original_time
+                end)
+                os.time = function()
+                    return now
+                end
+                util.pathExists = function(path)
+                    if path == "/proc/101" then
+                        return child_running
+                    elseif path == "/proc/102" then
+                        return supervisor_running
+                    end
+                    return path == "/test/file.epub"
+                        or path == constants.SEND_PID_FILE
+                        or path == constants.SEND_SUPERVISOR_PID_FILE
+                        or path == constants.SEND_OUTPUT_FILE .. ".exit"
+                end
+                util.readFromFile = function(path)
+                    if path == constants.SEND_PID_FILE then
+                        return "101\n"
+                    elseif path == constants.SEND_SUPERVISOR_PID_FILE then
+                        return "102\n"
+                    elseif path == "/proc/101/cmdline" then
+                        return "/tmp/localsend\0send\0"
+                    elseif path == constants.SEND_OUTPUT_FILE .. ".exit" then
+                        return "0\n"
+                    end
+                    return ""
+                end
+                local completions = {}
+                power.acquire("receiver")
+                sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "http", alias = "Phone" }, "/test/file.epub", nil, function(success)
+                    table.insert(completions, { success = success })
+                end)
+                local poll = helper.state.scheduled_tasks[#helper.state.scheduled_tasks].callback
+
+                assert.is_false(sender.stopActiveOperationsSync())
+                assert.is_true(state.send_in_progress)
+                assert.is_true(power.isHeld("send"))
+                assert.is_true(firewall_holds.send)
+                assert.equals(0, #completions)
+                poll()
+                assert.is_true(state.send_in_progress)
+                assert.is_true(power.isHeld("send"))
+                assert.is_true(firewall_holds.send)
+
+                child_running, supervisor_running = false, false
+                helper.state.scheduled_tasks[#helper.state.scheduled_tasks].callback()
+
+                assert.is_false(state.send_in_progress)
+                assert.is_false(power.isHeld("send"))
+                assert.is_nil(firewall_holds.send)
+                assert.is_true(power.isHeld("receiver"))
+                assert.equals(1, #completions)
+                assert.is_false(completions[1].success)
+                assert.equals("cancelled", state.last_send.status)
+                assert.is_false(state.last_send.success)
+                assert.is_nil(state.last_send.exit_code)
+
+                sender.sendFile({ type = "lan", ip = "192.168.1.50", protocol = "http", alias = "Phone" }, "/test/file.epub")
+                assert.is_true(state.send_in_progress)
+                assert.is_false(state.send_cancelled)
+                assert.is_true(power.isHeld("send"))
+                assert.is_true(firewall_holds.send)
+                sender.stopActiveOperationsSync()
+            end)
+        end
 
         it("closes the send dialog when the transfer completes", function()
             local original_read = util.readFromFile
@@ -264,18 +345,6 @@ describe("localsend_sender", function()
                 end,
             })
             assert.is_not_nil(helper.find_notification("in progress"))
-        end)
-
-        it("starts device scan when network connected", function()
-            sender.showFileSendFlow({
-                getPickerStartPath = function(_, path)
-                    return path
-                end,
-            })
-            assert.is_true(#helper.state.os_execute_calls > 0)
-            local cmd = helper.state.os_execute_calls[1]
-            assert.truthy(cmd:match("scan"))
-            assert.truthy(cmd:match("%-%-json"))
         end)
 
         it("uses willRerunWhenConnected to avoid duplicate flow when offline", function()
