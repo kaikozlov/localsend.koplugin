@@ -1,0 +1,1432 @@
+# 简体中文翻译 for localsend.koplugin
+# 遵循插件自身的 MIT 许可。
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: localsend v1.4.3\n"
+"Report-Msgid-Bugs-To: https://github.com/kaikozlov/localsend.koplugin/"
+"issues\n"
+"POT-Creation-Date: 2026-11-24 01:51+0000\n"
+"Language-Team: Chinese (Simplified)\n"
+"Language: zh_CN\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: lua/_meta.lua lua/main.lua
+msgid "LocalSend"
+msgstr "LocalSend"
+
+#: lua/_meta.lua lua/main.lua
+msgid "Send and receive files using LocalSend protocol."
+msgstr "使用 LocalSend 协议发送和接收文件。"
+
+#: lua/localsend_diagnostics.lua
+msgid "LAN connected"
+msgstr "已连接局域网"
+
+#: lua/localsend_diagnostics.lua
+msgid "Enable Wi-Fi and connect to the same network as your other devices."
+msgstr "请开启 Wi-Fi 并连接到与其他设备相同的网络。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Receiver program present"
+msgstr "接收程序已就位"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"The LocalSend receiver program is missing. Reinstall the plugin from Updates."
+msgstr "找不到 LocalSend 接收程序，请通过「更新」重新安装插件。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Receiver program runs"
+msgstr "接收程序可运行"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"The receiver is installed but cannot run. Reinstall the package matching "
+"this device and preserve executable permissions."
+msgstr ""
+"接收程序已安装但无法运行。请安装与本机匹配的软件包，解压时注意保留可执行权"
+"限。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Receiver package matches this device"
+msgstr "接收程序与机型匹配"
+
+#: lua/localsend_diagnostics.lua
+msgid "package %1, device %2"
+msgstr "软件包 %1，设备 %2"
+
+#: lua/localsend_diagnostics.lua
+msgid "Install the LocalSend package matching this device."
+msgstr "请安装与本机匹配的 LocalSend 软件包。"
+
+#: lua/localsend_diagnostics.lua
+msgid "not configured"
+msgstr "未配置"
+
+#: lua/localsend_diagnostics.lua
+msgid "Receive folder writable"
+msgstr "接收目录可写入"
+
+#: lua/localsend_diagnostics.lua
+msgid "Choose an existing folder that KOReader can write to."
+msgstr "请选择一个 KOReader 有写入权限的现有目录。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Receiver self-test"
+msgstr "接收程序自检"
+
+#: lua/localsend_diagnostics.lua lua/main.lua
+msgid "unknown"
+msgstr "未知"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"The receiver did not start and answer on this device. Check the backend log "
+"below."
+msgstr "接收程序未在本机启动或未响应，请查看下方后台日志。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Firewall"
+msgstr "防火墙"
+
+#: lua/localsend_diagnostics.lua
+msgid "Firewall rules"
+msgstr "防火墙规则"
+
+#: lua/localsend_diagnostics.lua
+msgid "The plugin could not open its firewall rules for port %1."
+msgstr "插件无法为端口 %1 添加防火墙规则。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Internet reachable (WebRTC)"
+msgstr "可访问互联网（WebRTC）"
+
+#: lua/localsend_diagnostics.lua
+msgid "online"
+msgstr "在线"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"WebRTC needs Internet access. Connect to the Internet or disable WebRTC for "
+"LAN-only transfers."
+msgstr "WebRTC 需要访问互联网。请连接互联网，或关闭 WebRTC 只做局域网传输。"
+
+#: lua/localsend_diagnostics.lua
+msgid "just now"
+msgstr "刚刚"
+
+#: lua/localsend_diagnostics.lua
+msgid "%1 min ago"
+msgstr "%1 分钟前"
+
+#: lua/localsend_diagnostics.lua
+msgid "Last send"
+msgstr "上次发送"
+
+#: lua/localsend_diagnostics.lua lua/localsend_sender.lua
+msgid "OK"
+msgstr "正常"
+
+#: lua/localsend_diagnostics.lua
+msgid "failed"
+msgstr "失败"
+
+#: lua/localsend_diagnostics.lua
+msgid "A recent send failed. Use Transfer failed? for a focused explanation."
+msgstr "最近一次发送失败。请用「传输失败？」查看具体原因。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Result: all %1 check passed"
+msgid_plural "Result: all %1 checks passed"
+msgstr[0] "结果：全部 %1 项检查通过"
+
+#: lua/localsend_diagnostics.lua
+msgid "Result: %1 passed, %2 to fix"
+msgstr "结果：%1 项通过，%2 项待修复"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"If another device still cannot find this one, choose “Can't find a device?”."
+msgstr "如果其他设备仍找不到本机，请试试「找不到设备？」。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Wi-Fi is not connected"
+msgstr "Wi-Fi 未连接"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"Connect this device to the same Wi-Fi network as the phone or computer you "
+"want to use."
+msgstr "请将本机连接到与手机或电脑相同的 Wi-Fi 网络。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Connect Wi-Fi"
+msgstr "连接 Wi-Fi"
+
+#: lua/localsend_diagnostics.lua
+msgid "LocalSend needs to be reinstalled"
+msgstr "需要重新安装 LocalSend"
+
+#: lua/localsend_diagnostics.lua
+msgid "The receiver program is missing from the plugin installation."
+msgstr "插件安装中缺少接收程序。"
+
+#: lua/localsend_diagnostics.lua lua/localsend_update.lua
+msgid "Reinstall"
+msgstr "重新安装"
+
+#: lua/localsend_diagnostics.lua
+msgid "The installed package does not work on this device"
+msgstr "已安装的软件包无法在本机运行"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"Reinstall the LocalSend package that matches this device. Also preserve "
+"executable permissions when extracting it."
+msgstr "请重新安装与本机匹配的 LocalSend 软件包，解压时注意保留可执行权限。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Files cannot be saved to the selected folder"
+msgstr "无法保存到所选目录"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"Choose an existing folder that KOReader can write to, then try the transfer "
+"again."
+msgstr "请选择一个 KOReader 有写入权限的现有目录后重试传输。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Choose folder"
+msgstr "选择目录"
+
+#: lua/localsend_diagnostics.lua
+msgid "The LocalSend receiver could not start"
+msgstr "LocalSend 接收程序无法启动"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"The receiver did not answer on this device. The backend log may explain why."
+msgstr "接收程序未在本机响应，后台日志可能说明了原因。"
+
+#: lua/localsend_diagnostics.lua
+msgid "View log"
+msgstr "查看日志"
+
+#: lua/localsend_diagnostics.lua
+msgid "LocalSend could not open its network port"
+msgstr "LocalSend 无法打开网络端口"
+
+#: lua/localsend_diagnostics.lua
+msgid "This device could not allow LocalSend through its firewall on port %1."
+msgstr "本机无法在端口 %1 上为 LocalSend 放行防火墙规则。"
+
+#: lua/localsend_diagnostics.lua
+msgid "View details"
+msgstr "查看详情"
+
+#: lua/localsend_diagnostics.lua
+msgid "LocalSend is ready on this device"
+msgstr "本机 LocalSend 已就绪"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"The receiver starts correctly and the save folder is writable. If another "
+"device still cannot find this one, test device discovery next."
+msgstr ""
+"接收程序启动正常，保存目录可写入。如果其他设备仍找不到本机，请接着做设备发现"
+"测试。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Test discovery"
+msgstr "测试设备发现"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"This disables encrypted LocalSend transfers until you turn HTTPS back on in "
+"Settings. The receiver will restart."
+msgstr ""
+"关闭后将不再加密 LocalSend 传输，直到你在设置里重新开启 HTTPS。接收程序会重"
+"启。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Disable HTTPS"
+msgstr "关闭 HTTPS"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"Open LocalSend Settings and review Allowed extensions and File type routing."
+msgstr "请打开 LocalSend 设置，检查「允许的扩展名」和「按文件类型分目录」。"
+
+#: lua/localsend_diagnostics.lua lua/main.lua
+msgid "Technical details"
+msgstr "技术详情"
+
+#: lua/localsend_diagnostics.lua lua/main.lua
+msgid "Close"
+msgstr "关闭"
+
+#: lua/localsend_diagnostics.lua
+msgid "LocalSend check"
+msgstr "LocalSend 检查"
+
+#: lua/localsend_diagnostics.lua
+msgid "Checking LocalSend…"
+msgstr "正在检查 LocalSend…"
+
+#: lua/localsend_diagnostics.lua
+msgid "LocalSend diagnostics"
+msgstr "LocalSend 诊断"
+
+#: lua/localsend_diagnostics.lua
+msgid "Collecting technical details…"
+msgstr "正在收集技术信息…"
+
+#: lua/localsend_diagnostics.lua
+msgid "Could not retrieve network info."
+msgstr "无法获取网络信息。"
+
+#: lua/localsend_diagnostics.lua
+msgid "LocalSend backend log"
+msgstr "LocalSend 后台日志"
+
+#: lua/localsend_diagnostics.lua
+msgid "No backend log found."
+msgstr "未找到后台日志。"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"When reporting a LocalSend issue, please include:\n"
+"\n"
+"• Device model and firmware\n"
+"• KOReader version\n"
+"• LocalSend plugin version\n"
+"• Sender app/version\n"
+"• Steps to reproduce\n"
+"• KOReader crash.log\n"
+"• The diagnostics report below\n"
+"\n"
+"Review the report before posting publicly — it can include device names, "
+"file names, and network addresses.\n"
+"\n"
+"%1"
+msgstr ""
+"反馈 LocalSend 问题时，请附上：\n"
+"\n"
+"• 设备型号与固件\n"
+"• KOReader 版本\n"
+"• LocalSend 插件版本\n"
+"• 发送端应用/版本\n"
+"• 复现步骤\n"
+"• KOReader 的 crash.log\n"
+"• 下方的诊断报告\n"
+"\n"
+"公开发布前请先检查报告——其中可能包含设备名、文件名和网络地址。\n"
+"\n"
+"%1"
+
+#: lua/localsend_diagnostics.lua
+msgid "Copy report"
+msgstr "复制报告"
+
+#: lua/localsend_diagnostics.lua
+msgid "Support report copied"
+msgstr "支持报告已复制"
+
+#: lua/localsend_diagnostics.lua
+msgid "LocalSend support report"
+msgstr "LocalSend 支持报告"
+
+#: lua/localsend_diagnostics.lua
+msgid "Creating support report…"
+msgstr "正在生成支持报告…"
+
+#: lua/localsend_diagnostics.lua
+msgid "The receiving device could not save the file"
+msgstr "接收设备无法保存该文件"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"Its storage may be full, unavailable, or read-only. Check free space or "
+"choose another receive folder."
+msgstr "对方存储可能已满、不可用或只读。请检查剩余空间，或换一个接收目录。"
+
+#: lua/localsend_diagnostics.lua
+msgid "The receiving device rejected this file"
+msgstr "接收设备拒绝了该文件"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"Review Allowed extensions and File type routing on the receiving device."
+msgstr "请在接收设备上检查「允许的扩展名」和「按文件类型分目录」。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Review settings"
+msgstr "查看设置"
+
+#: lua/localsend_diagnostics.lua
+msgid "The PIN was not accepted"
+msgstr "PIN 未通过验证"
+
+#: lua/localsend_diagnostics.lua
+msgid "Enter the PIN shown by the receiving device and try again."
+msgstr "请输入接收设备上显示的 PIN 后重试。"
+
+#: lua/localsend_diagnostics.lua
+msgid "The secure connection failed"
+msgstr "加密连接失败"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"The devices could not establish an HTTPS connection. You can temporarily "
+"test without HTTPS."
+msgstr "两台设备无法建立 HTTPS 连接。可以先临时关闭 HTTPS 试一次。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Try without HTTPS"
+msgstr "不用 HTTPS 试一次"
+
+#: lua/localsend_diagnostics.lua
+msgid "The other device is not reachable"
+msgstr "无法连接到对方设备"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"Make sure LocalSend is open on the other device and both devices are "
+"connected to the same Wi-Fi network."
+msgstr "请确认对方设备已打开 LocalSend，并且两台设备在同一 Wi-Fi 网络。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Find devices"
+msgstr "查找设备"
+
+#: lua/localsend_diagnostics.lua
+msgid "The connection ended during the transfer"
+msgstr "传输过程中连接中断"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"Keep both devices awake and connected to Wi-Fi, then retry. If it happens "
+"again, create a support report immediately afterward."
+msgstr ""
+"请让两台设备保持唤醒并连着 Wi-Fi 后重试。若再次发生，请立即生成支持报告。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Create report"
+msgstr "生成报告"
+
+#: lua/localsend_diagnostics.lua
+msgid "The received file did not pass verification"
+msgstr "接收的文件未通过校验"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"The transfer was incomplete or corrupted. Retry it while both devices have a "
+"stable Wi-Fi connection."
+msgstr "传输不完整或已损坏。请在两台设备 Wi-Fi 稳定时重试。"
+
+#: lua/localsend_diagnostics.lua
+msgid "The receiving device rejected the transfer"
+msgstr "接收设备拒绝了本次传输"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"The available logs do not identify a safe automatic fix. Create a support "
+"report immediately after reproducing the failure."
+msgstr ""
+"现有日志无法判断出安全可行的自动修复方式。请在复现失败后立即生成支持报告。"
+
+#: lua/localsend_diagnostics.lua
+msgid "No recent transfer error was recognized"
+msgstr "未识别到最近的传输错误"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"Try the transfer once more, then return here immediately. A support report "
+"will include the newest LocalSend logs."
+msgstr "请再传一次，之后立刻回到这里。支持报告会包含最新的 LocalSend 日志。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Testing the LocalSend receiver…"
+msgstr "正在测试 LocalSend 接收程序…"
+
+#: lua/localsend_diagnostics.lua
+msgid "Transfer failed"
+msgstr "传输失败"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"Open LocalSend on your phone or computer and keep it visible during the "
+"test. Both devices should be connected to the same Wi-Fi network. The "
+"receiver will keep running if it is enabled."
+msgstr ""
+"请在你的手机或电脑上打开 LocalSend 并保持在前台，两台设备需在同一 Wi-Fi 网"
+"络。若接收程序已启用，测试后仍会继续运行。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Start test"
+msgstr "开始测试"
+
+#: lua/localsend_diagnostics.lua
+msgid "Device discovery failed"
+msgstr "设备发现失败"
+
+#: lua/localsend_diagnostics.lua
+msgid "Another LocalSend device was found"
+msgstr "找到了另一台 LocalSend 设备"
+
+#: lua/localsend_diagnostics.lua
+msgid "Device discovery is working. Found: %1"
+msgstr "设备发现正常。找到：%1"
+
+#: lua/localsend_diagnostics.lua
+msgid "No other LocalSend device answered"
+msgstr "没有其他 LocalSend 设备响应"
+
+#: lua/localsend_diagnostics.lua
+msgid ""
+"No devices responded during this scan. Keep LocalSend open on the other "
+"device and check its firewall or Local Network permission. This result alone "
+"does not show a network failure."
+msgstr ""
+"本次扫描没有设备响应。请让对端保持 LocalSend 打开，并检查其防火墙或「本地网"
+"络」权限。仅凭这一结果不能断定网络故障。"
+
+#: lua/localsend_diagnostics.lua
+msgid "Device discovery"
+msgstr "设备发现"
+
+#: lua/localsend_diagnostics.lua lua/main.lua
+msgid "Discovery details"
+msgstr "发现详情"
+
+#: lua/localsend_diagnostics.lua
+msgid "No discovery details are available."
+msgstr "没有可用的发现详情。"
+
+#: lua/localsend_diagnostics.lua
+msgid "The localsend binary is missing. Reinstall the plugin first."
+msgstr "缺少 localsend 程序，请先重新安装插件。"
+
+#: lua/localsend_dialogs.lua
+msgid "All files"
+msgstr "所有文件"
+
+#: lua/localsend_dialogs.lua
+msgid "eBooks (epub, pdf, mobi, azw3)"
+msgstr "电子书（epub、pdf、mobi、azw3）"
+
+#: lua/localsend_dialogs.lua
+msgid "eBooks + CBZ (comics)"
+msgstr "电子书 + CBZ（漫画）"
+
+#: lua/localsend_dialogs.lua
+msgid "PDF only"
+msgstr "仅 PDF"
+
+#: lua/localsend_dialogs.lua
+msgid "EPUB only"
+msgstr "仅 EPUB"
+
+#: lua/localsend_dialogs.lua lua/localsend_routing.lua
+msgid "Custom..."
+msgstr "自定义…"
+
+#: lua/localsend_dialogs.lua lua/localsend_routing.lua
+msgid "Cannot use this directory: %1"
+msgstr "无法使用该目录：%1"
+
+#: lua/localsend_dialogs.lua
+msgid "Device name"
+msgstr "设备名"
+
+#: lua/localsend_dialogs.lua
+msgid "Leave empty for default ('KOReader')"
+msgstr "留空则使用默认（「KOReader」）"
+
+#: lua/localsend_dialogs.lua lua/localsend_discovery.lua
+#: lua/localsend_routing.lua lua/localsend_sender.lua lua/localsend_update.lua
+#: lua/main.lua
+msgid "Cancel"
+msgstr "取消"
+
+#: lua/localsend_dialogs.lua
+msgid "Save"
+msgstr "保存"
+
+#: lua/localsend_dialogs.lua lua/localsend_sender.lua
+msgid "PIN code"
+msgstr "PIN 码"
+
+#: lua/localsend_dialogs.lua
+msgid "Leave empty to disable PIN protection"
+msgstr "留空则不启用 PIN 保护"
+
+#: lua/localsend_dialogs.lua
+msgid "Custom extensions"
+msgstr "自定义扩展名"
+
+#: lua/localsend_dialogs.lua
+msgid "Comma-separated list (e.g., 'epub,pdf,mobi')"
+msgstr "用英文逗号分隔（例如「epub,pdf,mobi」）"
+
+#: lua/localsend_discovery.lua
+msgid "Another discovery scan is in progress."
+msgstr "另一个设备发现扫描正在进行。"
+
+#: lua/localsend_discovery.lua
+msgid "Failed to launch device discovery."
+msgstr "启动设备发现失败。"
+
+#: lua/localsend_discovery.lua
+msgid "Device discovery timed out."
+msgstr "设备发现超时。"
+
+#: lua/localsend_discovery.lua
+msgid "Device discovery failed."
+msgstr "设备发现失败。"
+
+#: lua/localsend_discovery.lua
+msgid "No devices found"
+msgstr "未找到设备"
+
+#: lua/localsend_discovery.lua
+msgid "Make sure LocalSend is running on the target device."
+msgstr "请确认目标设备上的 LocalSend 正在运行。"
+
+#: lua/localsend_discovery.lua lua/localsend_sender.lua
+msgid "Scan again"
+msgstr "重新扫描"
+
+#: lua/localsend_discovery.lua
+msgid "No devices found. Make sure LocalSend is running on the target device."
+msgstr "未找到设备。请确认目标设备上的 LocalSend 正在运行。"
+
+#: lua/localsend_discovery.lua
+msgid "Select target device"
+msgstr "选择目标设备"
+
+#: lua/localsend_discovery.lua
+msgid "Scanning for devices..."
+msgstr "正在扫描设备…"
+
+#: lua/localsend_routing.lua
+msgid "Select extension to route"
+msgstr "选择要分目录的扩展名"
+
+#: lua/localsend_routing.lua
+msgid "Extension to route"
+msgstr "要分目录的扩展名"
+
+#: lua/localsend_routing.lua
+msgid "Enter file extension (without dot)"
+msgstr "输入文件扩展名（不含点）"
+
+#: lua/localsend_routing.lua
+msgid "Next"
+msgstr "下一步"
+
+#: lua/localsend_routing.lua
+msgid "Select directory for .%1 files"
+msgstr "选择 .%1 文件的目录"
+
+#: lua/localsend_routing.lua
+msgid ""
+".%1 files will be saved to:\n"
+"%2"
+msgstr ""
+".%1 文件将保存到：\n"
+"%2"
+
+#: lua/localsend_routing.lua
+msgid "Enable file type routing"
+msgstr "启用按文件类型分目录"
+
+#: lua/localsend_routing.lua
+msgid ""
+"When enabled, files are routed to directories based on extension. When "
+"disabled, all files go to the main save directory."
+msgstr "启用后按扩展名把文件分到不同目录；关闭则全部存到主保存目录。"
+
+#: lua/localsend_routing.lua
+msgid ".%1 → %2"
+msgstr ".%1 → %2"
+
+#: lua/localsend_routing.lua
+msgid "Route for .%1"
+msgstr ".%1 的目录"
+
+#: lua/localsend_routing.lua
+msgid "Change directory"
+msgstr "更换目录"
+
+#: lua/localsend_routing.lua
+msgid "Remove route"
+msgstr "删除规则"
+
+#: lua/localsend_routing.lua
+msgid "Route for .%1 removed"
+msgstr "已删除 .%1 的规则"
+
+#: lua/localsend_routing.lua
+msgid "Add extension route..."
+msgstr "添加扩展名规则…"
+
+#: lua/localsend_routing.lua
+msgid "Accept other files → main directory"
+msgstr "接受其他文件 → 主目录"
+
+#: lua/localsend_routing.lua
+msgid ""
+"When enabled, files without a specific route are saved to the main save "
+"directory. When disabled, only routed file types are accepted."
+msgstr ""
+"启用后，没有单独规则的文件会存到主保存目录；关闭则只接受已配置规则的文件类"
+"型。"
+
+#: lua/localsend_sender.lua
+msgid "Another send operation is in progress"
+msgstr "另一个发送任务正在进行"
+
+#: lua/localsend_sender.lua
+msgid "File does not exist"
+msgstr "文件不存在"
+
+#: lua/localsend_sender.lua
+msgid "Failed to start send process"
+msgstr "启动发送进程失败"
+
+#: lua/localsend_sender.lua
+msgid "Send in progress"
+msgstr "正在发送"
+
+#: lua/localsend_sender.lua
+msgid "Sending %1 to %2..."
+msgstr "正在发送 %1 到 %2…"
+
+#: lua/localsend_sender.lua
+msgid "Cancelling send..."
+msgstr "正在取消发送…"
+
+#: lua/localsend_sender.lua
+msgid "Cancelled"
+msgstr "已取消"
+
+#: lua/localsend_sender.lua
+msgid "Send cancelled"
+msgstr "发送已取消"
+
+#: lua/localsend_sender.lua
+msgid "Sent %1 to %2"
+msgstr "已将 %1 发送到 %2"
+
+#: lua/localsend_sender.lua
+msgid "Transfer was rejected by the recipient"
+msgstr "传输被接收方拒绝"
+
+#: lua/localsend_sender.lua
+msgid "PIN required"
+msgstr "需要 PIN"
+
+#: lua/localsend_sender.lua
+msgid "Device is not running LocalSend"
+msgstr "对方设备未运行 LocalSend"
+
+#: lua/localsend_sender.lua
+msgid "Too many failed attempts - try again later"
+msgstr "失败次数过多，请稍后再试"
+
+#: lua/localsend_sender.lua
+msgid "Connection failed"
+msgstr "连接失败"
+
+#: lua/localsend_sender.lua
+msgid "Connection timed out"
+msgstr "连接超时"
+
+#: lua/localsend_sender.lua
+msgid "Send failed"
+msgstr "发送失败"
+
+#: lua/localsend_sender.lua
+msgid "Device discovery failed: %1"
+msgstr "设备发现失败：%1"
+
+#: lua/localsend_sender.lua
+msgid "Send more files?"
+msgstr "还要继续发送吗？"
+
+#: lua/localsend_sender.lua
+msgid "Yes"
+msgstr "是"
+
+#: lua/localsend_sender.lua
+msgid "No"
+msgstr "否"
+
+#: lua/localsend_sender.lua
+msgid "A send operation is already in progress"
+msgstr "已有发送任务正在进行"
+
+#: lua/localsend_sender.lua
+msgid "Enter PIN for %1"
+msgstr "输入 %1 的 PIN"
+
+#: lua/localsend_server.lua
+msgid ""
+"Device discovery is still running. Wait for it to finish, then start "
+"receiving."
+msgstr "设备发现仍在进行，请等它结束后再开始接收。"
+
+#: lua/localsend_server.lua
+msgid "PIN"
+msgstr "PIN"
+
+#: lua/localsend_server.lua
+msgid "LocalSend Ready"
+msgstr "LocalSend 已就绪"
+
+#: lua/localsend_server.lua
+msgid ""
+"LocalSend process failed to start within 5 seconds. Check if the binary "
+"works."
+msgstr "LocalSend 进程 5 秒内没有启动，请检查程序是否可运行。"
+
+#: lua/localsend_server.lua
+msgid "LocalSend is stopping. Please wait a moment and try again."
+msgstr "LocalSend 正在停止，请稍候再试。"
+
+#: lua/localsend_server.lua
+msgid "Invalid save directory: %1"
+msgstr "保存目录无效：%1"
+
+#: lua/localsend_server.lua
+msgid "Failed to start LocalSend server."
+msgstr "启动 LocalSend 服务失败。"
+
+#: lua/localsend_server.lua
+msgid "Failed to stop LocalSend process."
+msgstr "停止 LocalSend 进程失败。"
+
+#: lua/localsend_server.lua
+msgid "LocalSend stopped"
+msgstr "LocalSend 已停止"
+
+#: lua/localsend_server.lua
+msgid "LocalSend is stopping. Please wait."
+msgstr "LocalSend 正在停止，请稍候。"
+
+#: lua/localsend_transfers.lua
+msgid "File received: %1"
+msgstr "已接收文件：%1"
+
+#: lua/localsend_transfers.lua
+msgid "%1 files received. Latest: %2"
+msgstr "已接收 %1 个文件，最新：%2"
+
+#: lua/localsend_transfers.lua
+msgid "No recent transfers."
+msgstr "暂无最近传输。"
+
+#: lua/localsend_transfers.lua
+msgid ""
+"Recent transfers (%1 total):\n"
+"\n"
+"%2"
+msgstr ""
+"最近传输（共 %1 项）：\n"
+"\n"
+"%2"
+
+#: lua/localsend_update.lua
+msgid "Failed to execute download command."
+msgstr "执行下载命令失败。"
+
+#: lua/localsend_update.lua
+msgid "Download failed: read error."
+msgstr "下载失败：读取错误。"
+
+#: lua/localsend_update.lua
+msgid ""
+"Download failed.\n"
+"HTTP status: %1"
+msgstr ""
+"下载失败。\n"
+"HTTP 状态：%1"
+
+#: lua/localsend_update.lua
+msgid "Details: %1"
+msgstr "详情：%1"
+
+#: lua/localsend_update.lua
+msgid "Download failed: file not saved."
+msgstr "下载失败：文件未保存。"
+
+#: lua/localsend_update.lua
+msgid "Invalid update package structure."
+msgstr "更新包结构无效。"
+
+#: lua/localsend_update.lua
+msgid ""
+"Update partially failed. Some files could not be copied. Please reinstall "
+"the plugin."
+msgstr "更新部分失败，部分文件未能复制。请重新安装插件。"
+
+#: lua/localsend_update.lua
+msgid ""
+"Update to %1 installed successfully!\n"
+"\n"
+"Please restart KOReader for changes to take effect."
+msgstr ""
+"已成功更新到 %1！\n"
+"\n"
+"请重启 KOReader 使改动生效。"
+
+#: lua/localsend_update.lua
+msgid "Downloading update..."
+msgstr "正在下载更新…"
+
+#: lua/localsend_update.lua
+msgid "Failed to stop LocalSend before update."
+msgstr "更新前停止 LocalSend 失败。"
+
+#: lua/localsend_update.lua
+msgid "LocalSend update available: %1"
+msgstr "LocalSend 有可用更新：%1"
+
+#: lua/localsend_update.lua
+msgid "Checking for updates..."
+msgstr "正在检查更新…"
+
+#: lua/localsend_update.lua
+msgid "Failed to execute update check command."
+msgstr "执行更新检查命令失败。"
+
+#: lua/localsend_update.lua
+msgid "Failed to read update check response."
+msgstr "读取更新检查响应失败。"
+
+#: lua/localsend_update.lua
+msgid ""
+"Failed to check for updates.\n"
+"HTTP status: %1\n"
+"\n"
+"Please check your internet connection."
+msgstr ""
+"检查更新失败。\n"
+"HTTP 状态：%1\n"
+"\n"
+"请检查网络连接。"
+
+#: lua/localsend_update.lua
+msgid "Failed to read update information."
+msgstr "读取更新信息失败。"
+
+#: lua/localsend_update.lua
+msgid "Failed to parse update information."
+msgstr "解析更新信息失败。"
+
+#: lua/localsend_update.lua
+msgid ""
+"You're up to date!\n"
+"\n"
+"Current version: %1\n"
+"Latest version: %2\n"
+"\n"
+"Reinstall anyway?"
+msgstr ""
+"已是最新版本！\n"
+"\n"
+"当前版本：%1\n"
+"最新版本：%2\n"
+"\n"
+"仍然重新安装吗？"
+
+#: lua/localsend_update.lua
+msgid ""
+"You're up to date!\n"
+"\n"
+"Current version: %1\n"
+"Latest version: %2"
+msgstr ""
+"已是最新版本！\n"
+"\n"
+"当前版本：%1\n"
+"最新版本：%2"
+
+#: lua/localsend_update.lua
+msgid "No release notes available."
+msgstr "没有可用的更新说明。"
+
+#: lua/localsend_update.lua
+msgid "Update available!"
+msgstr "有可用更新！"
+
+#: lua/localsend_update.lua
+msgid ""
+"Current: %1\n"
+"Latest: %2\n"
+"\n"
+"%3"
+msgstr ""
+"当前：%1\n"
+"最新：%2\n"
+"\n"
+"%3"
+
+#: lua/localsend_update.lua
+msgid "Later"
+msgstr "以后"
+
+#: lua/localsend_update.lua
+msgid "Install"
+msgstr "安装"
+
+#: lua/localsend_update.lua
+msgid ""
+"\n"
+"\n"
+"Auto-update not available: unknown device architecture."
+msgstr ""
+"\n"
+"\n"
+"无法自动更新：未知的设备架构。"
+
+#: lua/localsend_update.lua
+msgid ""
+"\n"
+"\n"
+"Auto-update not available: no package for %1 architecture."
+msgstr ""
+"\n"
+"\n"
+"无法自动更新：没有 %1 架构的软件包。"
+
+#: lua/localsend_update.lua
+msgid ""
+"Update available!\n"
+"\n"
+"Current: %1\n"
+"Latest: %2\n"
+"\n"
+"%3%4\n"
+"\n"
+"Visit GitHub to download manually."
+msgstr ""
+"有可用更新！\n"
+"\n"
+"当前：%1\n"
+"最新：%2\n"
+"\n"
+"%3%4\n"
+"\n"
+"请到 GitHub 手动下载。"
+
+#: lua/localsend_update.lua
+msgid "Update check timed out."
+msgstr "检查更新超时。"
+
+#: lua/main.lua
+msgid "Device name is too long (max 64 characters)."
+msgstr "设备名过长（最多 64 个字符）。"
+
+#: lua/main.lua
+msgid ""
+"Device name can only contain letters, numbers, spaces, hyphens, underscores, "
+"and apostrophes."
+msgstr "设备名只能包含字母、数字、空格、连字符、下划线和撇号。"
+
+#: lua/main.lua
+msgid "Invalid path: must be an absolute path without special characters."
+msgstr "路径无效：必须是绝对路径，且不能包含特殊字符。"
+
+#: lua/main.lua
+msgid "Directory does not exist and could not be created."
+msgstr "目录不存在且无法创建。"
+
+#: lua/main.lua
+msgid "Directory is not writable."
+msgstr "目录不可写入。"
+
+#: lua/main.lua
+msgid ""
+"Cannot start LocalSend: plugin reinstall required.\n"
+"\n"
+"Please use 'Check for updates' to reinstall."
+msgstr ""
+"无法启动 LocalSend：需要重装插件。\n"
+"\n"
+"请用「检查更新」重新安装。"
+
+#: lua/main.lua
+msgid "No book is currently open."
+msgstr "当前没有打开的书籍。"
+
+#: lua/main.lua
+msgid ""
+"This will delete the current TLS certificates.\n"
+"\n"
+"Trusted devices may need to re-verify the connection.\n"
+"\n"
+"Continue?"
+msgstr ""
+"这会删除当前的 TLS 证书。\n"
+"\n"
+"已信任的设备可能需要重新验证连接。\n"
+"\n"
+"继续？"
+
+#: lua/main.lua
+msgid "Delete"
+msgstr "删除"
+
+#: lua/main.lua
+msgid "Certificates cleared. New certificates will be generated on next start."
+msgstr "证书已清除，下次启动时会生成新证书。"
+
+#: lua/main.lua
+msgid "GitHub link copied to clipboard"
+msgstr "GitHub 链接已复制"
+
+#: lua/main.lua
+msgid ""
+"Project page:\n"
+"%1"
+msgstr ""
+"项目主页：\n"
+"%1"
+
+#: lua/main.lua
+msgid ""
+"LocalSend for KOReader\n"
+"\n"
+"Version: %1\n"
+"Architecture: %2\n"
+"\n"
+"%3\n"
+"\n"
+"%4"
+msgstr ""
+"KOReader 版 LocalSend\n"
+"\n"
+"版本：%1\n"
+"架构：%2\n"
+"\n"
+"%3\n"
+"\n"
+"%4"
+
+#: lua/main.lua
+msgid "GitHub"
+msgstr "GitHub"
+
+#: lua/main.lua
+msgid "LocalSend (Recovery Mode)"
+msgstr "LocalSend（恢复模式）"
+
+#: lua/main.lua
+msgid "Plugin Error - Reinstall Required"
+msgstr "插件错误 - 需要重新安装"
+
+#: lua/main.lua
+msgid "Missing modules:"
+msgstr "缺少模块："
+
+#: lua/main.lua
+msgid "Reinstall plugin (%1)"
+msgstr "重新安装插件（%1）"
+
+#: lua/main.lua
+msgid "LocalSend (⚠ Reinstall Required)"
+msgstr "LocalSend（⚠ 需要重新安装）"
+
+#: lua/main.lua
+msgid "LocalSend (stopping...)"
+msgstr "LocalSend（停止中…）"
+
+#: lua/main.lua
+msgid "LocalSend (%1 received)"
+msgstr "LocalSend（已接收 %1）"
+
+#: lua/main.lua
+msgid "LocalSend (running)"
+msgstr "LocalSend（运行中）"
+
+#: lua/main.lua
+msgid "LocalSend (update available)"
+msgstr "LocalSend（有更新）"
+
+#: lua/main.lua
+msgid "⚠ Previous update failed - Reinstall required"
+msgstr "⚠ 上次更新失败 - 需要重新安装"
+
+#: lua/main.lua
+msgid "⬆ Update available: %1"
+msgstr "⬆ 有可用更新：%1"
+
+#: lua/main.lua
+msgid "Stopping server..."
+msgstr "正在停止服务…"
+
+#: lua/main.lua
+msgid "Stop server"
+msgstr "停止服务"
+
+#: lua/main.lua
+msgid "Start server"
+msgstr "启动服务"
+
+#: lua/main.lua
+msgid "Recent transfers (%1)"
+msgstr "最近传输（%1）"
+
+#: lua/main.lua
+msgid "Recent transfers"
+msgstr "最近传输"
+
+#: lua/main.lua
+msgid "Save directory (%1)"
+msgstr "保存目录（%1）"
+
+#: lua/main.lua
+msgid "Settings"
+msgstr "设置"
+
+#: lua/main.lua
+msgid "Device name (%1)"
+msgstr "设备名（%1）"
+
+#: lua/main.lua
+msgid "Device name (KOReader)"
+msgstr "设备名（KOReader）"
+
+#: lua/main.lua
+msgid "Allowed extensions (using routing)"
+msgstr "允许的扩展名（按规则）"
+
+#: lua/main.lua
+msgid "Allowed extensions (%1)"
+msgstr "允许的扩展名（%1）"
+
+#: lua/main.lua
+msgid "Allowed extensions (all)"
+msgstr "允许的扩展名（全部）"
+
+#: lua/main.lua
+msgid ""
+"When file type routing is enabled, allowed extensions are determined by the "
+"routing rules."
+msgstr "启用按文件类型分目录后，允许的扩展名由分目录规则决定。"
+
+#: lua/main.lua
+msgid "File type routing (%1 rule)"
+msgid_plural "File type routing (%1 rules)"
+msgstr[0] "按文件类型分目录（%1 条规则）"
+
+#: lua/main.lua
+msgid "File type routing (disabled, %1 rule)"
+msgid_plural "File type routing (disabled, %1 rules)"
+msgstr[0] "按文件类型分目录（已关闭，%1 条规则）"
+
+#: lua/main.lua
+msgid "File type routing"
+msgstr "按文件类型分目录"
+
+#: lua/main.lua
+msgid ""
+"Route different file types to different directories (e.g., EPUBs to Books "
+"folder, PDFs to Documents)."
+msgstr ""
+"把不同文件类型分到不同目录（例如 EPUB 存到 Books，PDF 存到 Documents）。"
+
+#: lua/main.lua
+msgid "PIN code (enabled)"
+msgstr "PIN 码（已启用）"
+
+#: lua/main.lua
+msgid "PIN code (disabled)"
+msgstr "PIN 码（未启用）"
+
+#: lua/main.lua
+msgid "Use HTTPS"
+msgstr "使用 HTTPS"
+
+#: lua/main.lua
+msgid ""
+"HTTPS encrypts transfers for security. Disable only if you experience "
+"compatibility issues."
+msgstr "HTTPS 会加密传输以提升安全性，仅在遇到兼容性问题时关闭。"
+
+#: lua/main.lua
+msgid "Start with KOReader"
+msgstr "随 KOReader 启动"
+
+#: lua/main.lua
+msgid "Automatically start the LocalSend server when KOReader launches."
+msgstr "KOReader 启动时自动开启 LocalSend 服务。"
+
+#: lua/main.lua
+msgid "Enable WebRTC Support (Experimental)"
+msgstr "启用 WebRTC 支持（实验性）"
+
+#: lua/main.lua
+msgid ""
+"Connect to public signaling server for WebRTC transfers. Requires internet "
+"access."
+msgstr "为 WebRTC 传输连接公共信令服务器，需要访问互联网。"
+
+#: lua/main.lua
+msgid "Show 'Send with LocalSend' in file menu"
+msgstr "在文件菜单中显示「用 LocalSend 发送」"
+
+#: lua/main.lua
+msgid ""
+"Add a 'Send with LocalSend' action to the long-press menu for files and "
+"folders in the file browser, History, and Collections."
+msgstr "在文件浏览器、历史记录和收藏夹的长按菜单里加入「用 LocalSend 发送」。"
+
+#: lua/main.lua
+msgid "Rotate certificates"
+msgstr "重置证书"
+
+#: lua/main.lua
+msgid ""
+"Generate new TLS certificates. Use if you experience connection issues or "
+"want to reset trusted device pairings."
+msgstr "生成新的 TLS 证书。遇到连接问题，或想重置已信任设备的配对时使用。"
+
+#: lua/main.lua
+msgid "Troubleshooting"
+msgstr "故障排查"
+
+#: lua/main.lua
+msgid "Send file..."
+msgstr "发送文件…"
+
+#: lua/main.lua
+msgid "Send a file or folder to another LocalSend device on the network."
+msgstr "把文件或目录发送到网络上的另一台 LocalSend 设备。"
+
+#: lua/main.lua
+msgid "Send current book"
+msgstr "发送当前书籍"
+
+#: lua/main.lua
+msgid "Send the currently open book to another LocalSend device."
+msgstr "把当前打开的书发送到另一台 LocalSend 设备。"
+
+#: lua/main.lua
+msgid "Updates"
+msgstr "更新"
+
+#: lua/main.lua
+msgid "About LocalSend"
+msgstr "关于 LocalSend"
+
+#: lua/main.lua
+msgid "Check LocalSend"
+msgstr "检查 LocalSend"
+
+#: lua/main.lua
+msgid ""
+"Check Wi-Fi, the receiver, the save folder, and network access, then "
+"recommend the next step."
+msgstr "检查 Wi-Fi、接收程序、保存目录和网络访问，并给出下一步建议。"
+
+#: lua/main.lua
+msgid "Can't find a device?"
+msgstr "找不到设备？"
+
+#: lua/main.lua
+msgid ""
+"Use this when a phone, computer, or e-reader does not appear in LocalSend."
+msgstr "当手机、电脑或阅读器没有出现在 LocalSend 里时用它。"
+
+#: lua/main.lua
+msgid "Transfer failed?"
+msgstr "传输失败？"
+
+#: lua/main.lua
+msgid ""
+"Explain the most recent send or receive failure and suggest a relevant "
+"action."
+msgstr "解释最近一次发送或接收失败的原因，并给出对应处理建议。"
+
+#: lua/main.lua
+msgid "Create support report"
+msgstr "生成支持报告"
+
+#: lua/main.lua
+msgid "Advanced"
+msgstr "高级"
+
+#: lua/main.lua
+msgid "Network details"
+msgstr "网络详情"
+
+#: lua/main.lua
+msgid "Backend log"
+msgstr "后台日志"
+
+#: lua/main.lua
+msgid "Restart LocalSend server"
+msgstr "重启 LocalSend 服务"
+
+#: lua/main.lua
+msgid "Auto-check for updates (%1)"
+msgstr "自动检查更新（%1）"
+
+#: lua/main.lua
+msgid "Auto-check for updates"
+msgstr "自动检查更新"
+
+#: lua/main.lua
+msgid "Every 12 hours"
+msgstr "每 12 小时"
+
+#: lua/main.lua
+msgid "Every 24 hours"
+msgstr "每 24 小时"
+
+#: lua/main.lua
+msgid "Every 3 days"
+msgstr "每 3 天"
+
+#: lua/main.lua
+msgid "Weekly (default)"
+msgstr "每周（默认）"
+
+#: lua/main.lua
+msgid "Enable auto-check"
+msgstr "启用自动检查"
+
+#: lua/main.lua
+msgid "Update available: %1 → %2"
+msgstr "有可用更新：%1 → %2"
+
+#: lua/main.lua
+msgid "Installed version: %1"
+msgstr "已安装版本：%1"
+
+#: lua/main.lua
+msgid "Check for updates"
+msgstr "检查更新"
+
+#: lua/main.lua
+msgid "Toggle LocalSend server"
+msgstr "开关 LocalSend 服务"
+
+#: lua/main.lua
+msgid "LocalSend: send file"
+msgstr "LocalSend：发送文件"
+
+#: lua/main.lua
+msgid "LocalSend: send current book"
+msgstr "LocalSend：发送当前书"
+
+#: lua/main.lua
+msgid "Send with LocalSend"
+msgstr "用 LocalSend 发送"
